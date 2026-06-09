@@ -101,12 +101,12 @@ msgid "(selected: {selectedIconKey})"
 msgstr "(المحدد: {selectedIconKey})"
 
 #. js-lingui-id: ZBGbuw
-#: src/pages/settings/security/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepOutputDetail.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepInputDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsToolCallRow.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
+#: src/modules/settings/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJsonDataIndicatorHealthStatus.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
@@ -189,6 +189,13 @@ msgstr ""
 #. placeholder {0}: recordPageLayoutObject.labelPlural
 #: src/modules/layout-customization/components/LayoutCustomizationBar.tsx
 msgid "{0} layout edition"
+msgstr ""
+
+#. js-lingui-id: FGOUAP
+#. placeholder {0}: displayedRecords.length
+#. placeholder {1}: totalCount + liveRecords.length
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
+msgid "{0} of {1}"
 msgstr ""
 
 #. js-lingui-id: peiknr
@@ -300,11 +307,6 @@ msgstr ""
 #: src/modules/settings/billing/components/internal/ResourceCreditPriceSelector.tsx
 msgid "{credits} Credits - ${priceDisplay}"
 msgstr ""
-
-#. js-lingui-id: jsKQu8
-#: src/modules/object-record/record-show/hooks/useRecordShowPagePagination.ts
-msgid "{currentRank} of {totalCount} in {objectLabelPlural}"
-msgstr "{currentRank} من {totalCount} في {objectLabelPlural}"
 
 #. js-lingui-id: 0aO0VO
 #: src/pages/settings/admin-panel/SettingsAdminQueueDetail.tsx
@@ -446,11 +448,6 @@ msgstr ""
 msgid "{numberOfSelectedItems} workspace members"
 msgstr "{numberOfSelectedItems} من أعضاء مساحة العمل"
 
-#. js-lingui-id: 7kYa/u
-#: src/modules/object-record/record-show/hooks/useRecordShowPagePagination.ts
-msgid "{objectLabelPlural} ({totalCount})"
-msgstr "{objectLabelPlural} ({totalCount})"
-
 #. js-lingui-id: FaQB54
 #: src/modules/workflow/workflow-steps/workflow-actions/ai-agent-action/hooks/useWorkflowAiAgentPermissionActions.ts
 msgid "{permissionLabel} permission removed"
@@ -465,11 +462,6 @@ msgstr ""
 #: src/modules/object-record/record-merge/components/MergeSettingsTab.tsx
 msgid "{positionLabel} record holds priority"
 msgstr "سجل {positionLabel} له أولوية"
-
-#. js-lingui-id: Sxx5Hr
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "{recordCount} of {totalCount} records"
-msgstr "{recordCount} من {totalCount} سجلات"
 
 #. js-lingui-id: 5d0hY6
 #: src/modules/settings/admin-panel/health-status/hooks/useRetryJobs.ts
@@ -839,11 +831,6 @@ msgstr "معرّف مفتاح الوصول"
 #. js-lingui-id: CrjDqe
 #: src/pages/auth/Authorize.tsx
 msgid "Access your workspace data"
-msgstr ""
-
-#. js-lingui-id: c2UA7k
-#: src/pages/settings/ai/components/SettingsAiMCP.tsx
-msgid "Access your workspace data from your favorite MCP client like Claude Desktop, Windsurf or Cursor."
 msgstr ""
 
 #. js-lingui-id: AeXO77
@@ -1735,7 +1722,7 @@ msgid "All lines"
 msgstr "جميع الخطوط"
 
 #. js-lingui-id: c3lkKf
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 msgid "All Members"
 msgstr "جميع الأعضاء"
 
@@ -1750,8 +1737,8 @@ msgid "All objects"
 msgstr ""
 
 #. js-lingui-id: aFE/OW
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
 #: src/modules/settings/roles/role-permissions/objects-permissions/components/SettingsRolePermissionsObjectsTableHeader.tsx
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 #: src/modules/settings/developers/components/WebhookEntitySelect.tsx
 #: src/modules/settings/developers/components/WebhookEntitySelect.tsx
 msgid "All Objects"
@@ -1984,11 +1971,6 @@ msgstr "حدث خطأ داخلي أثناء التحقق من صحة التغي�
 msgid "An object with this name already exists"
 msgstr "يوجد بالفعل كائن يحمل هذا الاسم"
 
-#. js-lingui-id: byKna+
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "An unexpected error occurred. Please try again."
-msgstr "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى."
-
 #. js-lingui-id: HZFm5R
 #: src/utils/date-utils.ts
 #: src/modules/settings/roles/role-settings/components/SettingsRoleSettingsDeleteRoleConfirmationModalSubtitle.tsx
@@ -2042,7 +2024,6 @@ msgstr "واجهة برمجة التطبيقات والويب هوك"
 #. js-lingui-id: yRnk5W
 #: src/pages/settings/developers/api-keys/SettingsDevelopersApiKeyDetail.tsx
 #: src/pages/settings/developers/api-keys/SettingsDevelopersApiKeyDetail.tsx
-#: src/pages/settings/ai/components/SettingsAiMCP.tsx
 #: src/pages/settings/admin-panel/SettingsAdminNewAiProvider.tsx
 #: src/pages/settings/admin-panel/SettingsAdminAiProviderDetail.tsx
 #: src/pages/settings/admin-panel/SettingsAdminAiProviderDetail.tsx
@@ -2185,12 +2166,12 @@ msgid "Application installed successfully."
 msgstr "تم تثبيت التطبيق بنجاح."
 
 #. js-lingui-id: LllWIc
-#: src/pages/settings/security/event-logs/components/EventLogTableSelector.tsx
+#: src/modules/settings/event-logs/components/EventLogTableSelector.tsx
 msgid "Application Logs"
 msgstr ""
 
 #. js-lingui-id: l/T809
-#: src/pages/settings/applications/components/SettingsApplicationDetailTitle.tsx
+#: src/pages/settings/applications/SettingsAvailableApplicationDetails.tsx
 msgid "Application not listed on the marketplace. It was shared via a direct link"
 msgstr ""
 
@@ -2544,20 +2525,10 @@ msgid "Audit logs"
 msgstr "سجلات التدقيق"
 
 #. js-lingui-id: EPEFrH
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
+#: src/modules/settings/security/components/SettingsSecuritySettings.tsx
 #: src/modules/settings/security/components/SettingsSecuritySettings.tsx
 msgid "Audit Logs"
 msgstr "سجلات التدقيق"
-
-#. js-lingui-id: X0+U3u
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "Audit logs are available with an Enterprise subscription. Please upgrade to access this feature."
-msgstr "سجلات التدقيق متاحة مع اشتراك Enterprise. يرجى الترقية للوصول إلى هذه الميزة."
-
-#. js-lingui-id: rNQ4RB
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "Audit logs require ClickHouse to be configured. Please contact your administrator to set up ClickHouse."
-msgstr "تتطلب سجلات التدقيق تهيئة ClickHouse. يرجى الاتصال بالمسؤول لإعداد ClickHouse."
 
 #. js-lingui-id: kIuOL4
 #: src/modules/workflow/workflow-trigger/components/WorkflowEditTriggerWebhookForm.tsx
@@ -3507,7 +3478,6 @@ msgid "ClickHouse is required for audit logs. Contact your administrator."
 msgstr "ClickHouse مطلوب لسجلات التدقيق. تواصل مع مسؤولك."
 
 #. js-lingui-id: CTdw8/
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
 #: src/pages/settings/ai/components/SettingsAiUsageTab.tsx
 #: src/modules/settings/usage/components/SettingsUsageAnalyticsSection.tsx
 msgid "ClickHouse Not Configured"
@@ -3588,12 +3558,12 @@ msgid "Code your function"
 msgstr "برمج الوظيفة الخاصة بك"
 
 #. js-lingui-id: H86f9p
-#: src/pages/settings/security/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepOutputDetail.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepInputDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsToolCallRow.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
+#: src/modules/settings/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJsonDataIndicatorHealthStatus.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
@@ -3835,6 +3805,11 @@ msgstr "إعداد التاريخ والوقت والرقم والمنطقة ا�
 #: src/modules/settings/security/components/SettingsSecuritySettings.tsx
 msgid "Configure fallback login methods for users with SSO bypass permissions"
 msgstr "تكوين طرق تسجيل دخول احتياطية للمستخدمين الذين لديهم صلاحيات تجاوز SSO"
+
+#. js-lingui-id: zXzR4W
+#: src/modules/settings/security/components/SettingsSecuritySettings.tsx
+msgid "Configure how long audit logs are retained"
+msgstr ""
 
 #. js-lingui-id: OLqG0t
 #: src/modules/settings/data-model/object-details/components/tabs/ObjectSettings.tsx
@@ -5573,11 +5548,11 @@ msgid "Detail per workspace"
 msgstr ""
 
 #. js-lingui-id: URmyfc
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
 #: src/pages/settings/layout/components/SettingsLayoutDetailScaffold.tsx
 #: src/pages/settings/applications/SettingsApplicationConnectionDetail.tsx
 #: src/pages/settings/applications/tabs/SettingsApplicationFrontComponentSettingsTab.tsx
 #: src/pages/settings/applications/tabs/SettingsApplicationCommandMenuItemSettingsTab.tsx
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 #: src/modules/ai/components/RoutingDebugDisplay.tsx
 msgid "Details"
 msgstr "تفاصيل"
@@ -6262,12 +6237,12 @@ msgid "Empty"
 msgstr "فارغ"
 
 #. js-lingui-id: OMbipf
-#: src/pages/settings/security/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepOutputDetail.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepInputDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsToolCallRow.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
+#: src/modules/settings/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJsonDataIndicatorHealthStatus.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
@@ -6286,12 +6261,12 @@ msgid "Empty Inbox"
 msgstr "صندوق الوارد فارغ"
 
 #. js-lingui-id: 3hSGoJ
-#: src/pages/settings/security/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepOutputDetail.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepInputDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsToolCallRow.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
+#: src/modules/settings/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJsonDataIndicatorHealthStatus.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
@@ -6321,14 +6296,10 @@ msgid "Enable model-specific features"
 msgstr "تمكين الميزات الخاصة بالنموذج"
 
 #. js-lingui-id: IrI9pg
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 #: src/modules/settings/admin-panel/health-status/maintenance-mode/components/SettingsAdminMaintenanceMode.tsx
 msgid "End date"
 msgstr ""
-
-#. js-lingui-id: VFv2ZC
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
-msgid "End Date"
-msgstr "تاريخ الانتهاء"
 
 #. js-lingui-id: Fqu/aC
 #: src/modules/settings/admin-panel/health-status/maintenance-mode/components/SettingsAdminMaintenanceMode.tsx
@@ -6596,11 +6567,6 @@ msgstr "مؤسسة"
 msgid "Enterprise feature"
 msgstr ""
 
-#. js-lingui-id: Kjjkt3
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "Enterprise Feature"
-msgstr "ميزة Enterprise"
-
 #. js-lingui-id: S5c4pl
 #: src/pages/settings/enterprise/SettingsEnterprise.tsx
 #: src/pages/settings/enterprise/SettingsEnterprise.tsx
@@ -6697,11 +6663,6 @@ msgstr "خطأ في تحرير موفر هوية الدخول الأحادي SSO
 #: src/modules/error-handler/components/AppRootErrorFallback.tsx
 msgid "Error illustration"
 msgstr "رسم توضيحي للخطأ"
-
-#. js-lingui-id: UJr0dl
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "Error Loading Audit Logs"
-msgstr "خطأ في تحميل سجلات التدقيق"
 
 #. js-lingui-id: 9e/9KK
 #: src/modules/activities/timeline-activities/rows/calendar/components/EventCardCalendarEvent.tsx
@@ -6845,16 +6806,15 @@ msgid "Evaluations"
 msgstr ""
 
 #. js-lingui-id: 0pC/y6
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 #: src/modules/activities/calendar/components/CalendarEventDetails.tsx
 msgid "Event"
 msgstr "حدث"
 
-#. js-lingui-id: ailPEn
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
-msgid "Event Type"
-msgstr "نوع الحدث"
+#. js-lingui-id: cW8SdW
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
+msgid "Event type"
+msgstr ""
 
 #. js-lingui-id: poC90w
 #: src/modules/settings/accounts/components/SettingsAccountsCalendarChannelDetails.tsx
@@ -6971,7 +6931,7 @@ msgid "Exclude the following people and domains from my email sync. Internal con
 msgstr "استبعاد الأشخاص والمجالات التالية من مزامنة البريد الإلكتروني الخاص بي. لن يتم استيراد المحادثات الداخلية"
 
 #. js-lingui-id: B0clc7
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 msgid "Execution ID"
 msgstr ""
 
@@ -7001,12 +6961,12 @@ msgid "Exit Settings"
 msgstr "خروج من الإعدادات"
 
 #. js-lingui-id: 1A3EXy
-#: src/pages/settings/security/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepOutputDetail.tsx
 #: src/modules/workflow/workflow-steps/components/WorkflowRunStepInputDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsToolCallRow.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
 #: src/modules/workflow/workflow-run/observability/WorkflowRunStepLogsDetail.tsx
+#: src/modules/settings/event-logs/components/EventLogJsonCell.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJsonDataIndicatorHealthStatus.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
@@ -7620,7 +7580,7 @@ msgid "Filter"
 msgstr "تصفية"
 
 #. js-lingui-id: LjNPDA
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 msgid "Filter by event"
 msgstr "تصفية حسب الحدث"
 
@@ -7630,7 +7590,7 @@ msgid "Filter by object type"
 msgstr ""
 
 #. js-lingui-id: gVEHcL
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 msgid "Filter by record ID"
 msgstr "تصفية حسب معرّف السجل"
 
@@ -7877,7 +7837,7 @@ msgid "Full tab widget"
 msgstr ""
 
 #. js-lingui-id: YMZBxa
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 msgid "Function"
 msgstr ""
 
@@ -7972,11 +7932,6 @@ msgstr ""
 #: src/modules/settings/data-model/object-details/components/tabs/SettingsObjectSearchSection.tsx
 msgid "Global search"
 msgstr ""
-
-#. js-lingui-id: sr0UJD
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "Go Back"
-msgstr "العودة"
 
 #. js-lingui-id: Hb4Cgz
 #: src/pages/settings/enterprise/SettingsEnterprise.tsx
@@ -9526,7 +9481,7 @@ msgid "Less than or equal"
 msgstr "أقل من أو يساوي"
 
 #. js-lingui-id: oCHfGC
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 msgid "Level"
 msgstr ""
 
@@ -9701,8 +9656,8 @@ msgid "Loading metrics data..."
 msgstr "جارٍ تحميل بيانات القياسات..."
 
 #. js-lingui-id: tVSmFT
-#: src/pages/settings/security/event-logs/components/EventLogResultsTable.tsx
 #: src/modules/ui/input/components/IconPicker.tsx
+#: src/modules/settings/event-logs/components/EventLogResultsTable.tsx
 #: src/modules/object-record/record-picker/multiple-record-picker/components/MultipleRecordPickerFetchMoreLoader.tsx
 #: src/modules/activities/components/CustomResolverFetchMoreLoader.tsx
 msgid "Loading more..."
@@ -9795,12 +9750,18 @@ msgid "Logout"
 msgstr "تسجيل الخروج"
 
 #. js-lingui-id: w/bY7R
+#: src/pages/settings/general/SettingsGeneral.tsx
 #: src/pages/settings/ai/SettingsAgentForm.tsx
 #: src/modules/side-panel/pages/workflow/step/view-run/components/SidePanelWorkflowRunViewStepContent.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminJobDetailsExpandable.tsx
 #: src/modules/logic-functions/components/LogicFunctionLogs.tsx
 msgid "Logs"
 msgstr "السجلات"
+
+#. js-lingui-id: MspNoT
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
+msgid "Logs require ClickHouse to be configured. Please contact your administrator."
+msgstr ""
 
 #. js-lingui-id: FJBbw5
 #: src/modules/object-metadata/hooks/useSortSubFieldChoicesForField.ts
@@ -10011,14 +9972,8 @@ msgstr ""
 msgid "MCP config copied to clipboard"
 msgstr ""
 
-#. js-lingui-id: NvQoNb
-#: src/pages/settings/ai/components/SettingsAiMCP.tsx
-msgid "MCP Configuration copied to clipboard"
-msgstr "تم نسخ إعدادات MCP إلى الحافظة"
-
 #. js-lingui-id: 8CWirf
 #: src/pages/settings/ai/components/SettingsAiOverviewTab.tsx
-#: src/pages/settings/ai/components/SettingsAiMCP.tsx
 msgid "MCP Server"
 msgstr "خادم MCP"
 
@@ -10092,7 +10047,7 @@ msgid "Merging..."
 msgstr "جارٍ الدمج..."
 
 #. js-lingui-id: xDAtGP
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 msgid "Message"
 msgstr ""
 
@@ -11016,7 +10971,7 @@ msgid "No evaluations yet for this turn"
 msgstr ""
 
 #. js-lingui-id: SIR5Ix
-#: src/pages/settings/security/event-logs/components/EventLogResultsTable.tsx
+#: src/modules/settings/event-logs/components/EventLogResultsTable.tsx
 msgid "No event logs found"
 msgstr "لم يتم العثور على سجلات الأحداث"
 
@@ -11555,7 +11510,6 @@ msgstr ""
 #. js-lingui-id: b/j06W
 #: src/pages/settings/applications/SettingsApplicationRegistrationDetails.tsx
 #: src/pages/settings/applications/tabs/SettingsApplicationRegistrationOAuthTab.tsx
-#: src/pages/settings/ai/components/SettingsAiMCP.tsx
 #: src/pages/settings/admin-panel/SettingsAdminApplicationRegistrationDetail.tsx
 msgid "OAuth"
 msgstr "OAuth"
@@ -11607,12 +11561,12 @@ msgid "Object destination"
 msgstr "وجهة الكائن"
 
 #. js-lingui-id: /clmEa
-#: src/pages/settings/security/event-logs/components/EventLogTableSelector.tsx
+#: src/modules/settings/event-logs/components/EventLogTableSelector.tsx
 msgid "Object Events"
 msgstr "أحداث الكائنات"
 
 #. js-lingui-id: 79D4Az
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 msgid "Object ID"
 msgstr "معرّف الكائن"
 
@@ -11631,10 +11585,10 @@ msgstr "إذن الكائن"
 msgid "Object permission options"
 msgstr "خيارات أذونات الكائن"
 
-#. js-lingui-id: UGhVPl
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
-msgid "Object Type"
-msgstr "نوع الكائن"
+#. js-lingui-id: gaqIMK
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
+msgid "Object type"
+msgstr ""
 
 #. js-lingui-id: rDycBw
 #: src/modules/workflow/workflow-steps/workflow-actions/components/WorkflowEditActionUpsertRecord.tsx
@@ -11767,6 +11721,11 @@ msgstr "على أي كائن/كائنات ينبغي أن يكون هذا الم
 #: src/modules/settings/accounts/components/SettingsAccountsCalendarChannelsGeneral.tsx
 msgid "Onboarding call"
 msgstr "مكالمة انضمام"
+
+#. js-lingui-id: oFTo3P
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
+msgid "Only application logs are available on your current plan. Other log types require an Enterprise subscription."
+msgstr ""
 
 #. js-lingui-id: zii2Qj
 #: src/modules/settings/accounts/components/SettingsAccountsCalendarVisibilitySettingsCard.tsx
@@ -12107,10 +12066,10 @@ msgstr "أداة تخطيط الصفحة"
 msgid "Page layouts"
 msgstr ""
 
-#. js-lingui-id: IVBjIH
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
-msgid "Page Name"
-msgstr "اسم الصفحة"
+#. js-lingui-id: zQF6Kb
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
+msgid "Page name"
+msgstr ""
 
 #. js-lingui-id: NRvxzv
 #: src/pages/not-found/NotFound.tsx
@@ -12118,7 +12077,7 @@ msgid "Page Not Found | Twenty"
 msgstr "الصفحة غير موجودة | Twenty"
 
 #. js-lingui-id: sF+Xp9
-#: src/pages/settings/security/event-logs/components/EventLogTableSelector.tsx
+#: src/modules/settings/event-logs/components/EventLogTableSelector.tsx
 msgid "Page Views"
 msgstr "مشاهدات الصفحات"
 
@@ -12196,6 +12155,11 @@ msgstr "ألصِق مفتاح Enterprise هنا"
 msgid "Path"
 msgstr "مسار"
 
+#. js-lingui-id: IgrLD/
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
+msgid "Pause"
+msgstr ""
+
 #. js-lingui-id: QmXBEc
 #: src/pages/settings/enterprise/SettingsEnterprise.tsx
 msgid "Payment issue"
@@ -12260,6 +12224,11 @@ msgstr "النسبة المئوية"
 #. js-lingui-id: /YAKmj
 #: src/modules/settings/members/components/MemberInfosTab.tsx
 msgid "Perform administrative actions or permanently delete this user"
+msgstr ""
+
+#. js-lingui-id: NtQvjo
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
+msgid "Period"
 msgstr ""
 
 #. js-lingui-id: wSpwGR
@@ -12658,8 +12627,7 @@ msgid "Prompt"
 msgstr ""
 
 #. js-lingui-id: l/UFPv
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 msgid "Properties"
 msgstr "الخصائص"
 
@@ -12974,8 +12942,8 @@ msgid "Record filter rule options"
 msgstr "خيارات قواعد تصفية السجل"
 
 #. js-lingui-id: xSAYIn
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 msgid "Record ID"
 msgstr "معرّف السجل"
 
@@ -13053,11 +13021,6 @@ msgstr "تم نسخ رابط إعادة التوجيه إلى الحافظة"
 #: src/modules/settings/security/components/SSO/SettingsSSOOIDCForm.tsx
 msgid "Redirection URI"
 msgstr "عنوان وموقع إعادة التوجيه"
-
-#. js-lingui-id: lCF0wC
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
-msgid "Refresh"
-msgstr "تحديث"
 
 #. js-lingui-id: pTGa/J
 #: src/pages/settings/admin-panel/SettingsAdminWorkspacesStatus.tsx
@@ -13417,7 +13380,7 @@ msgid "Resource credits updated."
 msgstr ""
 
 #. js-lingui-id: esl+Tv
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 msgid "Resource Type"
 msgstr "نوع المورد"
 
@@ -13489,6 +13452,7 @@ msgstr "\\\\"
 
 #. js-lingui-id: v39wLo
 #: src/modules/workflow/workflow-steps/workflow-actions/delay-actions/components/WorkflowEditActionDelay.tsx
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
 msgid "Resume"
 msgstr "استئناف"
 
@@ -14092,7 +14056,6 @@ msgstr "مفتاح الوصول السري"
 
 #. js-lingui-id: a3LDKx
 #: src/pages/settings/security/SettingsSecuritySSOIdentifyProvider.tsx
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
 #: src/pages/settings/general/SettingsGeneral.tsx
 #: src/modules/settings/roles/role-permissions/permission-flags/hooks/useSettingsRolePermissionFlagConfig.ts
 msgid "Security"
@@ -14897,6 +14860,11 @@ msgstr ""
 msgid "Something went wrong"
 msgstr "حدث خطأ ما"
 
+#. js-lingui-id: teokEm
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
+msgid "Something went wrong while loading logs. Please try again."
+msgstr ""
+
 #. js-lingui-id: yHwG3y
 #: src/modules/ui/navigation/navigation-drawer/components/NavigationDrawerItem.tsx
 #: src/modules/settings/components/SettingsCard.tsx
@@ -15052,14 +15020,10 @@ msgid "Start a new enterprise subscription."
 msgstr "ابدأ اشتراك Enterprise جديدًا."
 
 #. js-lingui-id: WAjFYI
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 #: src/modules/settings/admin-panel/health-status/maintenance-mode/components/SettingsAdminMaintenanceMode.tsx
 msgid "Start date"
 msgstr ""
-
-#. js-lingui-id: D3iCkb
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
-msgid "Start Date"
-msgstr "تاريخ البداية"
 
 #. js-lingui-id: s+K73L
 #: src/modules/settings/billing/components/SettingsBillingSubscriptionInfo.tsx
@@ -15494,12 +15458,12 @@ msgid "Tab Settings"
 msgstr "إعدادات علامة التبويب"
 
 #. js-lingui-id: 4hJhzz
-#: src/pages/settings/security/event-logs/components/EventLogTableSelector.tsx
 #: src/pages/settings/layout/SettingsLayoutViewDetail.tsx
 #: src/modules/views/view-picker/constants/ViewPickerTypeSelectOptions.ts
 #: src/modules/side-panel/pages/page-layout/components/record-page/SidePanelRecordPageFieldSettings.tsx
 #: src/modules/side-panel/pages/page-layout/components/dropdown-content/FieldWidgetLayoutDropdownContent.tsx
 #: src/modules/side-panel/pages/page-layout/components/dashboard/SidePanelDashboardRecordTableSettings.tsx
+#: src/modules/settings/event-logs/components/EventLogTableSelector.tsx
 #: src/modules/object-record/object-options-dropdown/components/ObjectOptionsDropdownLayoutContent.tsx
 #: src/modules/keyboard-shortcut-menu/components/KeyboardShortcutMenuOpenContent.tsx
 msgid "Table"
@@ -16105,10 +16069,7 @@ msgid "Timeout"
 msgstr "المهلة"
 
 #. js-lingui-id: 8TMaZI
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 #: src/modules/settings/admin-panel/health-status/components/SettingsAdminQueueJobsTable.tsx
 msgid "Timestamp"
 msgstr "الطابع الزمني"
@@ -16864,6 +16825,7 @@ msgstr "تم التحديث (في حقول محددة)"
 
 #. js-lingui-id: kwkhPe
 #: src/modules/settings/roles/role-permissions/object-level-permissions/record-level-permissions/components/SettingsRolePermissionsObjectLevelRecordLevelSection.tsx
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
 #: src/modules/settings/billing/components/internal/ResourceCreditPriceSelector.tsx
 #: src/modules/settings/billing/components/internal/ResourceCreditPriceSelector.tsx
 #: src/modules/ai/components/AIChatNoMoreBillingCreditsBanner.tsx
@@ -16919,6 +16881,11 @@ msgstr ""
 #: src/modules/settings/roles/role-permissions/object-level-permissions/record-level-permissions/components/SettingsRolePermissionsObjectLevelRecordLevelSection.tsx
 msgid "Upgrade to access"
 msgstr "الترقية للوصول"
+
+#. js-lingui-id: bihQKI
+#: src/modules/settings/event-logs/components/SettingsLogs.tsx
+msgid "Upgrade to access audit logs"
+msgstr ""
 
 #. js-lingui-id: Wurpq2
 #: src/modules/settings/security/components/SettingsSecuritySettings.tsx
@@ -17054,7 +17021,7 @@ msgid "Usage by User"
 msgstr "الاستخدام حسب المستخدم"
 
 #. js-lingui-id: CedRjP
-#: src/pages/settings/security/event-logs/components/EventLogTableSelector.tsx
+#: src/modules/settings/event-logs/components/EventLogTableSelector.tsx
 msgid "Usage Events"
 msgstr "أحداث الاستخدام"
 
@@ -17109,9 +17076,6 @@ msgid "Useful for pivot/junction tables"
 msgstr "مفيد لجداول الربط/المحورية"
 
 #. js-lingui-id: 7PzzBU
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
-#: src/pages/settings/security/event-logs/utils/getColumnsForEventLogTable.ts
 #: src/pages/settings/profile/SettingsTwoFactorAuthenticationMethod.tsx
 #: src/pages/settings/profile/SettingsProfile.tsx
 #: src/pages/settings/profile/appearance/components/SettingsExperience.tsx
@@ -17124,6 +17088,7 @@ msgstr "مفيد لجداول الربط/المحورية"
 #: src/pages/settings/accounts/SettingsAccountsCalendars.tsx
 #: src/pages/settings/accounts/SettingsAccounts.tsx
 #: src/modules/settings/hooks/useSettingsNavigationItems.tsx
+#: src/modules/settings/event-logs/utils/getColumnsForEventLogTable.tsx
 #: src/modules/settings/accounts/components/SettingsAccountsNewImapSmtpCaldavConnection.tsx
 #: src/modules/settings/accounts/components/SettingsAccountsEditImapSmtpCaldavConnection.tsx
 msgid "User"
@@ -17327,11 +17292,6 @@ msgstr ""
 msgid "View all evaluations"
 msgstr ""
 
-#. js-lingui-id: XVf/G7
-#: src/modules/settings/security/components/SettingsSecuritySettings.tsx
-msgid "View and filter events, page views, object changes"
-msgstr "عرض وتصفية الأحداث، مشاهدات الصفحات، تغييرات الكائنات"
-
 #. js-lingui-id: KANz0G
 #: src/pages/settings/enterprise/SettingsEnterprise.tsx
 #: src/pages/settings/enterprise/SettingsEnterprise.tsx
@@ -17389,11 +17349,6 @@ msgstr "عرض الفواتير"
 msgid "View Jobs"
 msgstr "عرض الوظائف"
 
-#. js-lingui-id: 923YyC
-#: src/modules/settings/security/components/SettingsSecuritySettings.tsx
-msgid "View Logs"
-msgstr "عرض السجلات"
-
 #. js-lingui-id: sAPirx
 #: src/modules/object-record/record-index/components/RecordIndexEmptyStateNotShared.tsx
 msgid "View not shared"
@@ -17428,11 +17383,6 @@ msgstr "نوع العرض"
 #: src/modules/settings/billing/components/SettingsBillingCreditsSection.tsx
 msgid "View usage"
 msgstr "عرض الاستخدام"
-
-#. js-lingui-id: rWiqJF
-#: src/modules/settings/security/components/SettingsSecuritySettings.tsx
-msgid "View workspace activity logs"
-msgstr "عرض سجلات نشاط مساحة العمل"
 
 #. js-lingui-id: 1I6UoR
 #: src/pages/settings/layout/SettingsLayoutViewDetail.tsx
@@ -17839,7 +17789,6 @@ msgstr "سير العمل"
 #. js-lingui-id: pmUArF
 #: src/pages/settings/security/SettingsSecuritySSOIdentifyProvider.tsx
 #: src/pages/settings/security/SettingsSecurityApprovedAccessDomain.tsx
-#: src/pages/settings/security/event-logs/SettingsEventLogs.tsx
 #: src/pages/settings/members/SettingsWorkspaceMembers.tsx
 #: src/pages/settings/members/SettingsWorkspaceMember.tsx
 #: src/pages/settings/members/roles/SettingsRoleAddObjectLevel.tsx
@@ -17931,8 +17880,7 @@ msgid "Workspace Domain"
 msgstr "نطاق مساحة العمل"
 
 #. js-lingui-id: J2q6WC
-#: src/pages/settings/security/event-logs/components/EventLogTableSelector.tsx
-#: src/modules/settings/security/components/SettingsSecuritySettings.tsx
+#: src/modules/settings/event-logs/components/EventLogTableSelector.tsx
 msgid "Workspace Events"
 msgstr "أحداث مساحة العمل"
 
@@ -17957,13 +17905,9 @@ msgstr ""
 msgid "Workspace logo"
 msgstr "شعار مساحة العمل"
 
-#. js-lingui-id: qc38qR
-#: src/pages/settings/security/event-logs/components/EventLogFilters.tsx
-msgid "Workspace Member"
-msgstr "عضو في مساحة العمل"
-
 #. js-lingui-id: wtxjAY
 #: src/pages/settings/admin-panel/SettingsAdminWorkspaceDetail.tsx
+#: src/modules/settings/event-logs/components/EventLogFilters.tsx
 msgid "Workspace members"
 msgstr ""
 
