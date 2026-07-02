@@ -159,32 +159,26 @@ export type RecomputeArgs = {
   overriddenRecordIds?: Set<string>;
 };
 
-// Recomputes a single formula for a single target record. Idempotent and
-// write-avoidant: skips the mutation when the value is unchanged (this is the
-// recursion guard — our own write re-fires the trigger and converges here).
-export const recomputeForRecord = async ({
+// Evaluates a formula for a record WITHOUT writing. Returns the computed value
+// (and the record it read, so callers can compare against the stored value).
+// Shared by recomputeForRecord and by the manual-override detection, which needs
+// to know "what would the formula say?" to tell an app recompute apart from a
+// genuine human edit.
+export type ComputeResult = {
+  value: number | null;
+  error: string | null;
+  sameRecord: Record<string, unknown> | null;
+};
+
+export const computeFormulaValueForRecord = async ({
   client,
   formula,
   targetRecordId,
   prefetchedRecord,
-  overriddenRecordIds,
-}: RecomputeArgs): Promise<RecomputeOutcome> => {
+}: Omit<RecomputeArgs, 'overriddenRecordIds'>): Promise<ComputeResult> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
   const expression = formula.expression ?? '';
-
-  const base: RecomputeOutcome = {
-    formulaId: formula.id,
-    targetRecordId,
-    changed: false,
-    value: null,
-    error: null,
-  };
-
-  // Manual override: this record is pinned by the user — do not recompute it.
-  if (overriddenRecordIds?.has(targetRecordId)) {
-    return { ...base, overridden: true };
-  }
 
   let dependencies: FormulaDependencies;
   let compiled: ReturnType<typeof compileFormula>;
@@ -193,14 +187,12 @@ export const recomputeForRecord = async ({
     dependencies = compiled.dependencies;
   } catch (error) {
     return {
-      ...base,
+      value: null,
+      sameRecord: null,
       error: isFormulaError(error) ? error.message : String(error),
     };
   }
 
-  // Ensure we have the same-record fields and the current value. If the caller
-  // pre-fetched the record (event payload), use it; otherwise fetch exactly the
-  // dependency fields plus the target field.
   let sameRecord = prefetchedRecord ?? null;
   const needsFetch =
     sameRecord === null ||
@@ -215,7 +207,8 @@ export const recomputeForRecord = async ({
       ]);
     } catch (error) {
       return {
-        ...base,
+        value: null,
+        sameRecord: null,
         error: `Failed to load ${targetObject} ${targetRecordId}: ${
           (error as Error).message
         }`,
@@ -224,7 +217,11 @@ export const recomputeForRecord = async ({
   }
 
   if (sameRecord === null) {
-    return { ...base, error: `Record ${targetRecordId} not found` };
+    return {
+      value: null,
+      sameRecord: null,
+      error: `Record ${targetRecordId} not found`,
+    };
   }
 
   let crossRecords: Map<string, Record<string, unknown> | null>;
@@ -232,26 +229,69 @@ export const recomputeForRecord = async ({
     crossRecords = await fetchCrossRecords(client, dependencies);
   } catch (error) {
     return {
-      ...base,
+      value: null,
+      sameRecord,
       error: `Failed to load cross-record references: ${
         (error as Error).message
       }`,
     };
   }
 
-  let result: number | null;
   try {
-    result = evaluate(compiled.ast, buildResolver(sameRecord, crossRecords), {
-      maxDepth: MAX_EVAL_DEPTH,
-    });
+    const value = evaluate(
+      compiled.ast,
+      buildResolver(sameRecord, crossRecords),
+      { maxDepth: MAX_EVAL_DEPTH },
+    );
+    return { value, sameRecord, error: null };
   } catch (error) {
     return {
-      ...base,
+      value: null,
+      sameRecord,
       error: isFormulaError(error)
         ? `${error.code}: ${error.message}`
         : String(error),
     };
   }
+};
+
+// Recomputes a single formula for a single target record. Idempotent and
+// write-avoidant: skips the mutation when the value is unchanged (this is the
+// recursion guard — our own write re-fires the trigger and converges here).
+export const recomputeForRecord = async ({
+  client,
+  formula,
+  targetRecordId,
+  prefetchedRecord,
+  overriddenRecordIds,
+}: RecomputeArgs): Promise<RecomputeOutcome> => {
+  const targetObject = formula.targetObject ?? '';
+  const targetField = formula.targetField ?? '';
+
+  const base: RecomputeOutcome = {
+    formulaId: formula.id,
+    targetRecordId,
+    changed: false,
+    value: null,
+    error: null,
+  };
+
+  // Manual override: this record is pinned by the user — do not recompute it.
+  if (overriddenRecordIds?.has(targetRecordId)) {
+    return { ...base, overridden: true };
+  }
+
+  const computed = await computeFormulaValueForRecord({
+    client,
+    formula,
+    targetRecordId,
+    prefetchedRecord,
+  });
+  if (computed.error !== null || computed.sameRecord === null) {
+    return { ...base, error: computed.error ?? 'Record not found' };
+  }
+  const result = computed.value;
+  const sameRecord = computed.sameRecord;
 
   const currentRaw = navigatePath(sameRecord, targetField);
   const currentValue =

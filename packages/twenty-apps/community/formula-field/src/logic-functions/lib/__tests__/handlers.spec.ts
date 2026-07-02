@@ -230,6 +230,27 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(override!.overrideValue).toBe(3);
   });
 
+  it('does NOT create an override when a recompute write matches the formula (even with a human actor)', async () => {
+    // Reproduces the bug: editing an input triggers a recompute whose write
+    // event carries the user's identity. The written value equals the formula,
+    // so it must be treated as a recompute, not a manual override.
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 25 },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 25 },
+      updatedFields: ['formulaScore'],
+      actorWorkspaceMemberId: 'wm-1', // propagated user identity on the recompute
+    });
+
+    // 5 + 10*2 = 25 == written value -> no override.
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+  });
+
   it('does NOT create an override when the APP writes the value (no actor)', async () => {
     client.seed('opportunity', [
       { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 25 },

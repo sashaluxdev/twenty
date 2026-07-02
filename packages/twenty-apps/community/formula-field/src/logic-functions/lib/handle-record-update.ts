@@ -1,6 +1,7 @@
 import { compileFormula } from 'src/engine';
 import { loadAllEnabledFormulas } from 'src/logic-functions/lib/formula-repository';
 import {
+  computeFormulaValueForRecord,
   recomputeAllRecords,
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
@@ -28,6 +29,13 @@ import {
 // Consulting the dependency index means unrelated formulas are skipped, and a
 // formula whose only changed field is its own value output (our previous write)
 // is a no-op — the trigger-level half of the recursion guard.
+
+// Float-tolerant equality with null handling — used to compare a written value
+// against the formula's computed value.
+const numbersEqual = (a: number | null, b: number | null): boolean => {
+  if (a === null || b === null) return a === b;
+  return Math.abs(a - b) < 1e-9;
+};
 
 const safeDependencies = (expression: string) => {
   try {
@@ -75,32 +83,44 @@ export const handleRecordUpdate = async ({
   const cyclic = findCyclicTargets(formulas);
   const outcomes: RecomputeOutcome[] = [];
 
-  // Magic override (#2): a human directly edited a value field on this object.
-  // Record it as an override so the formula stops touching this record. Detected
-  // by a real actor (workspaceMemberId) — the app's own recompute writes have no
-  // workspaceMemberId, so they never self-trigger this.
+  // Manual override detection (#2). A value field changed on this record. We
+  // must tell a genuine human edit apart from the app's OWN recompute write —
+  // and the actor alone is not enough, because a recompute triggered by a user's
+  // input edit inherits that user's identity on its event. So we compare the
+  // written value to what the formula actually computes: if they match, it's the
+  // app's recompute (ignore); if they differ, a human pinned a manual value.
   if (actorWorkspaceMemberId && updatedFields && updatedFields.length > 0) {
-    const valueFields = new Set(
-      formulas
-        .filter((formula) => formula.targetObject === objectName)
-        .map((formula) => formula.targetField ?? ''),
-    );
     for (const field of updatedFields) {
-      if (!valueFields.has(field)) continue;
+      const formula = formulas.find(
+        (candidate) =>
+          candidate.targetObject === objectName &&
+          candidate.targetField === field,
+      );
+      if (!formula) continue; // not a formula value field
+
       const rawValue = after?.[field];
-      const value =
+      const writtenValue =
         typeof rawValue === 'number'
           ? rawValue
           : rawValue == null
             ? null
             : Number(rawValue);
-      await upsertOverride(
+      const normalized = Number.isFinite(writtenValue as number)
+        ? (writtenValue as number)
+        : null;
+
+      const computed = await computeFormulaValueForRecord({
         client,
-        objectName,
-        field,
-        recordId,
-        Number.isFinite(value as number) ? (value as number) : null,
-      );
+        formula,
+        targetRecordId: recordId,
+        prefetchedRecord: after ?? undefined,
+      });
+
+      // Matches the formula -> app recompute -> not an override.
+      if (computed.error === null && numbersEqual(computed.value, normalized)) {
+        continue;
+      }
+      await upsertOverride(client, objectName, field, recordId, normalized);
     }
   }
 
