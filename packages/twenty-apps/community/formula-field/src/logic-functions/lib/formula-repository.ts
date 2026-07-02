@@ -1,0 +1,102 @@
+import {
+  type FormulaClient,
+  type FormulaDefinitionRecord,
+} from 'src/logic-functions/lib/types';
+import { withRetry } from 'src/logic-functions/lib/with-retry';
+
+// Data-access for FormulaDefinition records. Kept separate from the recompute
+// engine so both can be tested against a fake client.
+
+const FORMULA_FIELDS = {
+  id: true,
+  name: true,
+  targetObject: true,
+  targetField: true,
+  expression: true,
+  enabled: true,
+  lastValue: true,
+  lastError: true,
+} as const;
+
+// Loads all enabled formula definitions (optionally filtered by target object),
+// paginating fully so large workspaces are handled.
+export const loadEnabledFormulas = async (
+  client: FormulaClient,
+  targetObject?: string,
+  pageSize = 200,
+): Promise<FormulaDefinitionRecord[]> => {
+  const filter: Record<string, unknown> = { enabled: { eq: true } };
+  if (targetObject) {
+    filter.targetObject = { eq: targetObject };
+  }
+
+  const formulas: FormulaDefinitionRecord[] = [];
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        formulaDefinitions: {
+          __args: {
+            first: pageSize,
+            filter,
+            ...(after ? { after } : {}),
+          },
+          edges: { node: FORMULA_FIELDS },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+
+    const connection = response?.formulaDefinitions;
+    const edges: Array<{ node?: FormulaDefinitionRecord }> =
+      connection?.edges ?? [];
+
+    for (const edge of edges) {
+      if (edge?.node) {
+        formulas.push(edge.node);
+      }
+    }
+
+    if (!connection?.pageInfo?.hasNextPage) {
+      break;
+    }
+    after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  return formulas;
+};
+
+// Loads all enabled formula definitions across every target object — used by the
+// cron sweep and by save-time cycle detection (which needs the whole graph).
+export const loadAllEnabledFormulas = (
+  client: FormulaClient,
+): Promise<FormulaDefinitionRecord[]> => loadEnabledFormulas(client);
+
+export type BookkeepingUpdate = {
+  lastValue?: number | null;
+  lastError?: string | null;
+  lastEvaluatedAt?: string | null;
+  // Set to persist the parsed dependency index (JSON).
+  dependencies?: unknown;
+  // Set to disable a formula that failed validation (e.g. cycle).
+  enabled?: boolean;
+};
+
+// Writes bookkeeping fields on a FormulaDefinition. Write-avoidant callers
+// should only invoke this when something actually changed, to avoid churning
+// formulaDefinition.updated events.
+export const updateFormulaBookkeeping = async (
+  client: FormulaClient,
+  formulaId: string,
+  update: BookkeepingUpdate,
+): Promise<void> => {
+  await withRetry(() =>
+    client.mutation({
+      updateFormulaDefinition: {
+        __args: { id: formulaId, data: update },
+        id: true,
+      },
+    }),
+  );
+};
