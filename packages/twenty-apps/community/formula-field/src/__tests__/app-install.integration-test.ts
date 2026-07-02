@@ -9,7 +9,7 @@ import { APPLICATION_UNIVERSAL_IDENTIFIER } from 'src/application-config';
 // End-to-end integration test: install the app on the live local workspace, then
 // exercise the acceptance criteria (provisioning, recompute on edit, cross-object
 // recompute, cycle rejection), then uninstall cleanly. Requires a running server
-// and a configured local remote (see setup-test.ts / README runbook).
+// and a configured local remote (see setup-test.ts / context.md runbook).
 //
 // Record CRUD goes through raw fetch rather than CoreApiClient: the typed core
 // client is generated from the app's schema and is bound to its un-generated

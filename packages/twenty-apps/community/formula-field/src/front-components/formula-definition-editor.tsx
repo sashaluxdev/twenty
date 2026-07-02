@@ -14,7 +14,7 @@ import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input'
 
 // Formula editor for the FormulaDefinition record page (a custom object, so the
 // page-layout renderer IS used here — unlike standard-object record pages in this
-// build; see README limitations). Shows the last computed value + last error and
+// build; see ADR 0007). Shows the last computed value + last error and
 // lets the expression be edited with live client-side validation (parse + cycle),
 // then saved. The recompute triggers re-evaluate across records on save.
 

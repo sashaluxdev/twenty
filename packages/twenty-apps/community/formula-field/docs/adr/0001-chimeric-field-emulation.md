@@ -21,8 +21,10 @@ Emulate the chimeric field with two real objects:
 1. A **value field** — a genuine `NUMBER` field attached to the target object via
    `defineField`. This is what the UI shows and every API read returns. Native
    read/copy/export semantics come for free because it is an ordinary field.
-   It is marked `isUIEditable: false` so the generic UI will not let a human
-   overwrite the computed value.
+   It was originally `isUIEditable: false` (locked); it is now **editable**
+   because manual overrides (ADR 0006) let a human edit the value directly to
+   pin a record. `isUIEditable` is column-level, so per-record locking is not
+   possible anyway.
 2. A **FormulaDefinition** object (one record per formula) holding the target
    object/field, the expression string, the parsed dependency list, an enabled
    flag, and the last-evaluated timestamp / value / error.
@@ -44,6 +46,9 @@ index view as a fallback editor).
   SDK hook for it), so in-place table-cell formula editing is **not achievable**;
   the record-page front component + FormulaDefinition view are the edit surfaces.
   Documented as a known limitation.
-- **Write-protection is best-effort**: `isUIEditable: false` hides the generic UI
-  editor, but a direct API write to the value field is still possible and will be
-  overwritten on the next evaluation. Documented.
+- **No write-protection; direct edits are overrides**: the value field is
+  editable. A human editing it directly is intentionally treated as a manual
+  override (ADR 0006), not overwritten — the formula stops touching that record
+  until the override is cleared. The app's own recompute writes are distinguished
+  from human edits by comparing the written value to the computed value, not by
+  actor (ADR 0006).

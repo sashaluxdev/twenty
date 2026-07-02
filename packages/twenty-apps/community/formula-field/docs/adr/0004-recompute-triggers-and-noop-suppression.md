@@ -43,3 +43,7 @@ Three cooperating mechanisms:
   app ships triggers for the demo objects (opportunity, company); adding another
   target object means adding a trigger file or relying on the cron sweep.
   Documented as a limitation.
+- All recompute paths (event, cron, cross-object) skip records with an ACTIVE
+  manual override (ADR 0006), and record a lastValue/lastEvaluatedAt/lastError
+  heartbeat on the FormulaDefinition after evaluating (bookkeeping writes, so they
+  are excluded from the self-trigger guard).

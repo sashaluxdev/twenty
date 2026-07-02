@@ -1,12 +1,13 @@
 import { defineObject, FieldType } from 'twenty-sdk/define';
 
-// FormulaOverride — a per-record manual override of a computed value (feature #2).
-// Formulas are column-level, but an override applies to ONE record, so it can't
-// live on FormulaDefinition; it lives here, one row per (targetObject, recordId,
-// targetField). This is a TECHNICAL object: no navigation item and no index view,
-// so it stays invisible to end users (their business objects are untouched). The
-// recompute engine skips any record that has an override row, and the Formulas
-// widget reads it to show the override state / pill.
+// FormulaOverride — a per-record manual override of a computed value (feature #2,
+// ADR 0006). Formulas are column-level, but an override applies to ONE record, so
+// it can't live on FormulaDefinition; it lives here, one row per
+// (targetObject, targetField, recordId). This is a TECHNICAL object: no navigation
+// item and no index view, so it stays invisible to end users (their business
+// objects are untouched). The recompute engine skips any record that has an ACTIVE
+// override row, and the Formulas widget reads it to drive the red/green override
+// toggle (inline field-cell pills are not supported by the platform — ADR 0007).
 
 export const FORMULA_OVERRIDE_OBJECT_UNIVERSAL_IDENTIFIER =
   '05f96d3d-713e-42be-965c-9100db3e2180';

@@ -11,3 +11,5 @@ is maintainable without re-deriving the reasoning.
 | [0003](0003-null-and-error-policy.md) | Null propagation, div-by-zero errors, coercion rules | Accepted |
 | [0004](0004-recompute-triggers-and-noop-suppression.md) | Event triggers + cron sweep + no-op write suppression | Accepted |
 | [0005](0005-cycle-detection-field-granularity.md) | Field-granular cycle detection ignoring record ids | Accepted |
+| [0006](0006-manual-per-record-override.md) | Manual per-record override (FormulaOverride, value-based detection, restore) | Accepted |
+| [0007](0007-editor-ux-autocomplete-and-ui-constraints.md) | Editor UX: field autocomplete + front-component UI constraints | Accepted |

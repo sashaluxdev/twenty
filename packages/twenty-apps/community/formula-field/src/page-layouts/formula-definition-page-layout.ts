@@ -4,7 +4,7 @@ import { FORMULA_DEFINITION_OBJECT_UNIVERSAL_IDENTIFIER } from 'src/objects/form
 
 // Record page for the app's own FormulaDefinition object. Custom objects use the
 // page-layout renderer, so the editor front component surfaces here (unlike
-// standard-object record pages in this build — see README limitations). This is
+// standard-object record pages in this build — see ADR 0007). This is
 // the working in-UI formula editor; the FormulaDefinition index view is the
 // list/admin fallback.
 export default definePageLayout({

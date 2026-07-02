@@ -5,7 +5,7 @@ import { beforeAll } from 'vitest';
 
 // Integration-test setup. Reads the configured local remote from
 // ~/.twenty/config.json (written by `twenty remote:add` or manually — see the
-// README runbook), verifies the server is reachable, and exposes the URL + API
+// context.md runbook), verifies the server is reachable, and exposes the URL + API
 // key to the SDK clients via env vars. It also writes config.test.json so the
 // CLI operations (appBuild/appDeploy/appInstall) can run in test mode without
 // disturbing the developer's default config.
@@ -29,7 +29,7 @@ beforeAll(async () => {
   if (!apiUrl || !apiKey) {
     throw new Error(
       'TWENTY_API_URL and TWENTY_API_KEY must be set (or a local remote must ' +
-        'exist in ~/.twenty/config.json). See the README runbook.',
+        'exist in ~/.twenty/config.json). See the context.md runbook.',
     );
   }
 
