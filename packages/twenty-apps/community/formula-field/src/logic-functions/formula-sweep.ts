@@ -6,6 +6,10 @@ import {
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
+import {
+  findCyclicTargets,
+  isCyclicTarget,
+} from 'src/logic-functions/lib/save-validation';
 
 // The convergence backstop (ADR 0004). Hourly, re-evaluate every enabled formula
 // across all its target records. Event triggers give latency; this sweep gives
@@ -15,12 +19,27 @@ import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 const handler = async (): Promise<Record<string, unknown>> => {
   const client = new CoreApiClient();
   const formulas = await loadAllEnabledFormulas(client);
+  const cyclic = findCyclicTargets(formulas);
 
   let evaluated = 0;
   let written = 0;
   let errored = 0;
+  let skippedCyclic = 0;
 
   for (const formula of formulas) {
+    // A cyclic formula never converges — record the problem and skip it rather
+    // than spin (mirrors the runtime guard in handleRecordUpdate).
+    if (isCyclicTarget(cyclic, formula)) {
+      skippedCyclic += 1;
+      const cycleError = 'Skipped: formula participates in a dependency cycle';
+      if ((formula.lastError ?? '') !== cycleError) {
+        await updateFormulaBookkeeping(client, formula.id, {
+          lastError: cycleError,
+        });
+      }
+      continue;
+    }
+
     const outcomes = await recomputeAllRecords(client, formula);
     evaluated += outcomes.length;
     written += outcomes.filter((outcome) => outcome.changed).length;
@@ -38,7 +57,13 @@ const handler = async (): Promise<Record<string, unknown>> => {
     }
   }
 
-  return { formulas: formulas.length, evaluated, written, errored };
+  return {
+    formulas: formulas.length,
+    evaluated,
+    written,
+    errored,
+    skippedCyclic,
+  };
 };
 
 export default defineLogicFunction({

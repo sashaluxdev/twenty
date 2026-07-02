@@ -52,6 +52,24 @@ export const handleFormulaChange = async ({
     return { handled: false, reason: 'bookkeeping-only' };
   }
 
+  // Second recursion guard: our own "disable on cycle" write sets
+  // { enabled: false, lastError }. That update must NOT re-trigger validation —
+  // otherwise, with the sibling cyclic formula now excluded (disabled), the
+  // cycle appears to vanish and we would wrongly clear the error. So: if the
+  // formula is already disabled and the update only touched bookkeeping/enabled
+  // fields, leave it alone. A human re-enabling (enabled: true) or editing the
+  // expression still flows through.
+  if (
+    after.enabled === false &&
+    updatedFields &&
+    updatedFields.length > 0 &&
+    updatedFields.every(
+      (field) => BOOKKEEPING_FIELDS.has(field) || field === 'enabled',
+    )
+  ) {
+    return { handled: false, reason: 'disabled-bookkeeping' };
+  }
+
   const existing = await loadAllEnabledFormulas(client);
   const result = validateFormula({ candidate: after, existingFormulas: existing });
 

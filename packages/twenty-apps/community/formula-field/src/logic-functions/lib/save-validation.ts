@@ -59,6 +59,43 @@ export type ValidateArgs = {
   existingFormulas: FormulaDefinitionRecord[];
 };
 
+// Runtime safety net (ADR 0004/0005): given the current set of enabled
+// formulas, return the set of "object.field" targets that participate in a
+// dependency cycle. The recompute paths skip these so a cyclic pair that slipped
+// past save-time validation (e.g. created directly via the API) can never drive
+// an infinite value ping-pong. Repeatedly removes formulas found in a cycle
+// until the remaining graph is acyclic, collecting every implicated target.
+export const findCyclicTargets = (
+  formulas: FormulaDefinitionRecord[],
+): Set<string> => {
+  const cyclic = new Set<string>();
+  let targets = formulas
+    .map(toTarget)
+    .filter((target): target is FormulaTarget => target !== null);
+
+  for (;;) {
+    const result = detectCycle(targets);
+    if (!result.hasCycle) {
+      break;
+    }
+    for (const node of result.cycle) {
+      cyclic.add(node);
+    }
+    // Drop the implicated nodes and re-check for further disjoint cycles.
+    targets = targets.filter(
+      (target) => !cyclic.has(`${target.object}.${target.field}`),
+    );
+  }
+
+  return cyclic;
+};
+
+export const isCyclicTarget = (
+  cyclic: Set<string>,
+  formula: FormulaDefinitionRecord,
+): boolean =>
+  cyclic.has(`${formula.targetObject ?? ''}.${formula.targetField ?? ''}`);
+
 export const validateFormula = ({
   candidate,
   existingFormulas,

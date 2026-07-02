@@ -5,8 +5,11 @@ import {
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
 import {
+  findCyclicTargets,
+  isCyclicTarget,
+} from 'src/logic-functions/lib/save-validation';
+import {
   type FormulaClient,
-  type FormulaDefinitionRecord,
   type RecomputeOutcome,
 } from 'src/logic-functions/lib/types';
 
@@ -58,9 +61,17 @@ export const handleRecordUpdate = async ({
   updatedFields,
 }: HandleRecordUpdateArgs): Promise<RecomputeOutcome[]> => {
   const formulas = await loadAllEnabledFormulas(client);
+  // Never recompute a formula caught in a dependency cycle — that is what would
+  // ping-pong forever. Save-time validation disables these, but this is the
+  // runtime backstop for cyclic formulas created directly via the API.
+  const cyclic = findCyclicTargets(formulas);
   const outcomes: RecomputeOutcome[] = [];
 
   for (const formula of formulas) {
+    if (isCyclicTarget(cyclic, formula)) {
+      continue;
+    }
+
     const dependencies = safeDependencies(formula.expression ?? '');
     if (!dependencies) {
       continue;
