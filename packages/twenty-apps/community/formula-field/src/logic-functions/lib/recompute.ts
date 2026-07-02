@@ -3,6 +3,7 @@ import { type FormulaDependencies } from 'src/engine/dependencies';
 import { FormulaError, isFormulaError } from 'src/engine/errors';
 import { evaluate, type VariableResolver } from 'src/engine/evaluator';
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
+import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
 import {
   type FormulaClient,
   type FormulaDefinitionRecord,
@@ -153,6 +154,9 @@ export type RecomputeArgs = {
   // Optional pre-fetched record (e.g. the event payload's `after`) to avoid a
   // round-trip for same-record dependencies and the current value.
   prefetchedRecord?: Record<string, unknown> | null;
+  // Record ids the user has manually overridden for this formula's field —
+  // recompute leaves those records alone (feature #2).
+  overriddenRecordIds?: Set<string>;
 };
 
 // Recomputes a single formula for a single target record. Idempotent and
@@ -163,6 +167,7 @@ export const recomputeForRecord = async ({
   formula,
   targetRecordId,
   prefetchedRecord,
+  overriddenRecordIds,
 }: RecomputeArgs): Promise<RecomputeOutcome> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -175,6 +180,11 @@ export const recomputeForRecord = async ({
     value: null,
     error: null,
   };
+
+  // Manual override: this record is pinned by the user — do not recompute it.
+  if (overriddenRecordIds?.has(targetRecordId)) {
+    return { ...base, overridden: true };
+  }
 
   let dependencies: FormulaDependencies;
   let compiled: ReturnType<typeof compileFormula>;
@@ -284,8 +294,16 @@ export const recomputeAllRecords = async (
   pageSize = 100,
 ): Promise<RecomputeOutcome[]> => {
   const targetObject = formula.targetObject ?? '';
+  const targetField = formula.targetField ?? '';
   const pluralName = pluralize(targetObject);
   const outcomes: RecomputeOutcome[] = [];
+
+  // Load the overridden record ids once so pinned records are skipped (#2).
+  const overriddenRecordIds = await loadOverriddenRecordIds(
+    client,
+    targetObject,
+    targetField,
+  );
 
   let after: string | undefined;
 
@@ -312,7 +330,12 @@ export const recomputeAllRecords = async (
         continue;
       }
       outcomes.push(
-        await recomputeForRecord({ client, formula, targetRecordId: id }),
+        await recomputeForRecord({
+          client,
+          formula,
+          targetRecordId: id,
+          overriddenRecordIds,
+        }),
       );
     }
 

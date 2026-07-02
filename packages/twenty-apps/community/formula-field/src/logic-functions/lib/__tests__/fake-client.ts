@@ -19,6 +19,7 @@ const pluralize = (s: string): string => {
   return `${s}s`;
 };
 const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
 
 export class FakeClient implements FormulaClient {
   // object name -> id -> record
@@ -137,6 +138,24 @@ export class FakeClient implements FormulaClient {
           }
         }
       }
+      return { [key]: { id } };
+    }
+
+    // Generic create<Object> (e.g. createFormulaOverride).
+    if (key.startsWith('create')) {
+      const object = lowerFirst(key.slice('create'.length));
+      const data = node.__args.data as Record<string, unknown>;
+      const id =
+        (data.id as string) ?? `${object}-${this.store.get(object)?.size ?? 0}`;
+      this.seed(object, [{ ...data, id } as Rec]);
+      return { [key]: { id } };
+    }
+
+    // Generic delete<Object> (e.g. deleteFormulaOverride).
+    if (key.startsWith('delete')) {
+      const object = lowerFirst(key.slice('delete'.length));
+      const { id } = node.__args;
+      this.store.get(object)?.delete(id);
       return { [key]: { id } };
     }
 

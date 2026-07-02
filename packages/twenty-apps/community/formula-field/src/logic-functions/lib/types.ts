@@ -28,4 +28,6 @@ export type RecomputeOutcome = {
   value: number | null;
   // Non-null when evaluation failed; the value field is left unchanged.
   error: string | null;
+  // True when the record was skipped because the user manually overrode it.
+  overridden?: boolean;
 };

@@ -27,6 +27,7 @@ const handler = async (
     recordId,
     after: after as unknown as Record<string, unknown>,
     updatedFields,
+    actorWorkspaceMemberId: payload.workspaceMemberId,
   });
 
   const written = outcomes.filter((outcome) => outcome.changed).length;

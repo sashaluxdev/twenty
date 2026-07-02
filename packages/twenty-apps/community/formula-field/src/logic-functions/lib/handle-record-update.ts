@@ -5,6 +5,10 @@ import {
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
 import {
+  findOverride,
+  upsertOverride,
+} from 'src/logic-functions/lib/override-repository';
+import {
   findCyclicTargets,
   isCyclicTarget,
 } from 'src/logic-functions/lib/save-validation';
@@ -51,6 +55,9 @@ export type HandleRecordUpdateArgs = {
   recordId: string;
   after: Record<string, unknown> | null | undefined;
   updatedFields: string[] | undefined;
+  // Set when the write came from a real person (not the app). Used to detect a
+  // manual, direct edit of a value field and turn it into an override (#2).
+  actorWorkspaceMemberId?: string | null;
 };
 
 export const handleRecordUpdate = async ({
@@ -59,6 +66,7 @@ export const handleRecordUpdate = async ({
   recordId,
   after,
   updatedFields,
+  actorWorkspaceMemberId,
 }: HandleRecordUpdateArgs): Promise<RecomputeOutcome[]> => {
   const formulas = await loadAllEnabledFormulas(client);
   // Never recompute a formula caught in a dependency cycle — that is what would
@@ -66,6 +74,35 @@ export const handleRecordUpdate = async ({
   // runtime backstop for cyclic formulas created directly via the API.
   const cyclic = findCyclicTargets(formulas);
   const outcomes: RecomputeOutcome[] = [];
+
+  // Magic override (#2): a human directly edited a value field on this object.
+  // Record it as an override so the formula stops touching this record. Detected
+  // by a real actor (workspaceMemberId) — the app's own recompute writes have no
+  // workspaceMemberId, so they never self-trigger this.
+  if (actorWorkspaceMemberId && updatedFields && updatedFields.length > 0) {
+    const valueFields = new Set(
+      formulas
+        .filter((formula) => formula.targetObject === objectName)
+        .map((formula) => formula.targetField ?? ''),
+    );
+    for (const field of updatedFields) {
+      if (!valueFields.has(field)) continue;
+      const rawValue = after?.[field];
+      const value =
+        typeof rawValue === 'number'
+          ? rawValue
+          : rawValue == null
+            ? null
+            : Number(rawValue);
+      await upsertOverride(
+        client,
+        objectName,
+        field,
+        recordId,
+        Number.isFinite(value as number) ? (value as number) : null,
+      );
+    }
+  }
 
   for (const formula of formulas) {
     if (isCyclicTarget(cyclic, formula)) {
@@ -82,6 +119,24 @@ export const handleRecordUpdate = async ({
       formula.targetObject === objectName &&
       sameRecordAffected(dependencies.sameRecordFields, updatedFields)
     ) {
+      // Respect a manual override on this specific record (#2).
+      const override = await findOverride(
+        client,
+        formula.targetObject ?? '',
+        formula.targetField ?? '',
+        recordId,
+      );
+      if (override) {
+        outcomes.push({
+          formulaId: formula.id,
+          targetRecordId: recordId,
+          changed: false,
+          value: override.overrideValue,
+          error: null,
+          overridden: true,
+        });
+        continue;
+      }
       outcomes.push(
         await recomputeForRecord({
           client,

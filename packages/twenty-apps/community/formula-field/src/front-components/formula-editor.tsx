@@ -11,17 +11,20 @@ import {
   parse,
 } from 'src/engine';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
+import {
+  deleteOverride,
+  upsertOverride,
+} from 'src/logic-functions/lib/override-repository';
+import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 
-// The "edit the formula, not the value" surface (ADR 0001). Rendered on the
-// Opportunity record page, it lists every formula field on this object showing:
-//   - the CURRENT VALUE for this record (read straight from the real value
-//     field — the same number the API/exports/cell return), and
-//   - the FORMULA EXPRESSION, editable in place with live validation.
-//
-// Editing here updates the shared FormulaDefinition.expression (a formula is
-// column-level), which the update trigger re-evaluates across records. Client-
-// side validation gives instant feedback; the server-side trigger is the
-// authority (defense in depth).
+// Opportunity record-page "Formulas" tab. For each formula field, for THIS
+// record, it shows the value, the editable shared expression (with autocomplete),
+// and a red/green "Override" toggle (#2):
+//   - green = the formula controls this record's value,
+//   - red   = manually overridden; the formula leaves this record alone.
+// Turning Override on pins the current value; turning it off resets the record to
+// the formula. Because the value field is editable, a human editing it directly
+// is ALSO auto-detected as an override server-side — the toggle reflects that.
 
 const TARGET_OBJECT = 'opportunity';
 
@@ -34,9 +37,6 @@ type Definition = {
   lastError: string;
 };
 
-// Validates a candidate expression for a given target field against the current
-// set of definitions (so cycles are caught before saving). Pure — uses only the
-// bundled engine, never eval.
 const validateExpression = (
   expression: string,
   targetField: string,
@@ -70,20 +70,57 @@ const validateExpression = (
     ...others,
     { object: TARGET_OBJECT, field: targetField, dependencies },
   ]);
-
-  if (cycle.hasCycle) {
-    return `Dependency cycle: ${cycle.cycle.join(' -> ')}`;
-  }
-
-  return null;
+  return cycle.hasCycle ? `Dependency cycle: ${cycle.cycle.join(' -> ')}` : null;
 };
+
+const OverrideToggle = ({
+  on,
+  busy,
+  onChange,
+}: {
+  on: boolean;
+  busy: boolean;
+  onChange: (next: boolean) => void;
+}) => (
+  <div style={styles.toggleWrap}>
+    <span style={styles.toggleLabel}>Override</span>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      disabled={busy}
+      onClick={() => onChange(!on)}
+      style={{
+        ...styles.toggleTrack,
+        background: on ? '#e0483d' : '#3ba55d',
+        opacity: busy ? 0.6 : 1,
+      }}
+      title={
+        on
+          ? 'Overridden — click to reset this record to the formula'
+          : 'Formula-controlled — click to override this record'
+      }
+    >
+      <span
+        style={{
+          ...styles.toggleKnob,
+          transform: on ? 'translateX(18px)' : 'translateX(0px)',
+        }}
+      />
+    </button>
+    <span style={{ ...styles.toggleState, color: on ? '#e0483d' : '#3ba55d' }}>
+      {on ? 'on' : 'off'}
+    </span>
+  </div>
+);
 
 const FormulaEditor = () => {
   const recordId = useRecordId();
   const [definitions, setDefinitions] = useState<Definition[]>([]);
   const [values, setValues] = useState<Record<string, number | null>>({});
+  const [overrides, setOverrides] = useState<Record<string, number | null>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -91,10 +128,7 @@ const FormulaEditor = () => {
 
     const defsResponse = await client.query({
       formulaDefinitions: {
-        __args: {
-          first: 100,
-          filter: { targetObject: { eq: TARGET_OBJECT } },
-        },
+        __args: { first: 100, filter: { targetObject: { eq: TARGET_OBJECT } } },
         edges: {
           node: {
             id: true,
@@ -108,37 +142,29 @@ const FormulaEditor = () => {
       },
     });
 
-    const defs: Definition[] = (
-      defsResponse?.formulaDefinitions?.edges ?? []
-    ).map((edge: any) => ({
-      id: edge.node.id,
-      name: edge.node.name ?? '',
-      targetField: edge.node.targetField ?? '',
-      expression: edge.node.expression ?? '',
-      enabled: edge.node.enabled ?? false,
-      lastError: edge.node.lastError ?? '',
-    }));
+    const defs: Definition[] = (defsResponse?.formulaDefinitions?.edges ?? []).map(
+      (edge: any) => ({
+        id: edge.node.id,
+        name: edge.node.name ?? '',
+        targetField: edge.node.targetField ?? '',
+        expression: edge.node.expression ?? '',
+        enabled: edge.node.enabled ?? false,
+        lastError: edge.node.lastError ?? '',
+      }),
+    );
 
     setDefinitions(defs);
-    // Initialise a draft for any formula we have not seen yet, but NEVER
-    // overwrite a draft the user is actively editing — otherwise the 4s refresh
-    // below snaps their typing back to the stored expression.
     setDrafts((previous) => {
       const next = { ...previous };
       for (const definition of defs) {
-        if (!(definition.id in next)) {
-          next[definition.id] = definition.expression;
-        }
+        if (!(definition.id in next)) next[definition.id] = definition.expression;
       }
       return next;
     });
 
-    // Read the current value of each formula field on this record.
     if (recordId && defs.length > 0) {
       const selection: Record<string, unknown> = { id: true };
-      for (const definition of defs) {
-        selection[definition.targetField] = true;
-      }
+      for (const definition of defs) selection[definition.targetField] = true;
       const recordResponse = await client.query({
         [TARGET_OBJECT]: {
           __args: { filter: { id: { eq: recordId } } },
@@ -152,6 +178,26 @@ const FormulaEditor = () => {
           (record[definition.targetField] as number | null) ?? null;
       }
       setValues(nextValues);
+
+      const overrideResponse = await client.query({
+        formulaOverrides: {
+          __args: {
+            first: 100,
+            filter: {
+              targetObject: { eq: TARGET_OBJECT },
+              recordId: { eq: recordId },
+            },
+          },
+          edges: { node: { targetField: true, overrideValue: true } },
+        },
+      });
+      const nextOverrides: Record<string, number | null> = {};
+      for (const edge of overrideResponse?.formulaOverrides?.edges ?? []) {
+        if (edge?.node?.targetField) {
+          nextOverrides[edge.node.targetField] = edge.node.overrideValue ?? null;
+        }
+      }
+      setOverrides(nextOverrides);
     }
 
     setLoading(false);
@@ -159,21 +205,15 @@ const FormulaEditor = () => {
 
   useEffect(() => {
     load();
-    // Light polling so recomputed values appear without a manual refresh.
     const interval = setInterval(load, 4000);
     return () => clearInterval(interval);
   }, [load]);
 
-  const save = useCallback(
+  const saveExpression = useCallback(
     async (definition: Definition) => {
       const expression = drafts[definition.id] ?? '';
-      const error = validateExpression(
-        expression,
-        definition.targetField,
-        definitions,
-      );
+      const error = validateExpression(expression, definition.targetField, definitions);
       if (error) {
-        // Client-side rejection: do not save an invalid formula.
         setDefinitions((prev) =>
           prev.map((entry) =>
             entry.id === definition.id ? { ...entry, lastError: error } : entry,
@@ -181,8 +221,7 @@ const FormulaEditor = () => {
         );
         return;
       }
-
-      setSaving(definition.id);
+      setBusy(definition.id);
       try {
         const client = new CoreApiClient();
         await client.mutation({
@@ -192,18 +231,65 @@ const FormulaEditor = () => {
           },
         });
       } finally {
-        setSaving(null);
-        // Give the recompute trigger a moment, then refresh.
+        setBusy(null);
         setTimeout(load, 1500);
       }
     },
     [drafts, definitions, load],
   );
 
+  const toggleOverride = useCallback(
+    async (definition: Definition, turnOn: boolean) => {
+      if (!recordId) return;
+      setBusy(definition.id);
+      // Optimistic: reflect the new state immediately so the toggle feels snappy.
+      setOverrides((prev) => {
+        const next = { ...prev };
+        if (turnOn) next[definition.targetField] = values[definition.targetField] ?? null;
+        else delete next[definition.targetField];
+        return next;
+      });
+      try {
+        const client = new CoreApiClient();
+        if (turnOn) {
+          // Pin the current value so the formula stops touching this record.
+          await upsertOverride(
+            client,
+            TARGET_OBJECT,
+            definition.targetField,
+            recordId,
+            values[definition.targetField] ?? null,
+          );
+        } else {
+          // Hand the record back to the formula and recompute it now.
+          await deleteOverride(
+            client,
+            TARGET_OBJECT,
+            definition.targetField,
+            recordId,
+          );
+          await recomputeForRecord({
+            client,
+            formula: {
+              id: definition.id,
+              targetObject: TARGET_OBJECT,
+              targetField: definition.targetField,
+              expression: definition.expression,
+              enabled: definition.enabled,
+            },
+            targetRecordId: recordId,
+          });
+        }
+      } finally {
+        setBusy(null);
+        setTimeout(load, 1000);
+      }
+    },
+    [recordId, values, load],
+  );
+
   const content = useMemo(() => {
-    if (loading) {
-      return <div style={styles.muted}>Loading formulas…</div>;
-    }
+    if (loading) return <div style={styles.muted}>Loading formulas…</div>;
     if (definitions.length === 0) {
       return (
         <div style={styles.muted}>
@@ -215,16 +301,19 @@ const FormulaEditor = () => {
     return definitions.map((definition) => {
       const draft = drafts[definition.id] ?? '';
       const dirty = draft !== definition.expression;
-      const liveError = validateExpression(
-        draft,
-        definition.targetField,
-        definitions,
-      );
-      const value = values[definition.targetField];
+      const liveError = validateExpression(draft, definition.targetField, definitions);
+      const isOverridden = definition.targetField in overrides;
+      const value = isOverridden
+        ? overrides[definition.targetField]
+        : values[definition.targetField];
+      const rowBusy = busy === definition.id;
+
       return (
         <div key={definition.id} style={styles.row}>
           <div style={styles.header}>
-            <span style={styles.name}>{definition.name || definition.targetField}</span>
+            <span style={styles.name}>
+              {definition.name || definition.targetField}
+            </span>
             <span style={styles.value}>
               {value === null || value === undefined ? '—' : value}
             </span>
@@ -232,9 +321,10 @@ const FormulaEditor = () => {
           <div style={styles.fieldLabel}>
             {definition.targetField}
             {!definition.enabled ? (
-              <span style={styles.disabled}> (disabled)</span>
+              <span style={styles.error}> (formula disabled)</span>
             ) : null}
           </div>
+
           <div style={styles.editRow}>
             <FormulaFieldInput
               value={draft}
@@ -248,12 +338,27 @@ const FormulaEditor = () => {
                 ...styles.button,
                 ...(dirty && !liveError ? {} : styles.buttonDisabled),
               }}
-              disabled={!dirty || Boolean(liveError) || saving === definition.id}
-              onClick={() => save(definition)}
+              disabled={!dirty || Boolean(liveError) || rowBusy}
+              onClick={() => saveExpression(definition)}
             >
-              {saving === definition.id ? '…' : 'Save'}
+              Save
             </button>
           </div>
+
+          <div style={styles.overrideRow}>
+            <OverrideToggle
+              on={isOverridden}
+              busy={rowBusy}
+              onChange={(next) => toggleOverride(definition, next)}
+            />
+            {isOverridden ? (
+              <span style={styles.overrideHint}>
+                Edit the “{definition.name || definition.targetField}” field
+                directly to change this record’s value.
+              </span>
+            ) : null}
+          </div>
+
           {liveError ? (
             <div style={styles.error}>{liveError}</div>
           ) : definition.lastError ? (
@@ -262,7 +367,7 @@ const FormulaEditor = () => {
         </div>
       );
     });
-  }, [loading, definitions, drafts, values, saving, save]);
+  }, [loading, definitions, drafts, values, overrides, busy, saveExpression, toggleOverride]);
 
   return (
     <div style={styles.container}>
@@ -282,38 +387,55 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
     height: '100%',
   },
-  title: {
-    fontWeight: 600,
-    fontSize: '13px',
-    marginBottom: '10px',
-    color: '#474451',
-  },
+  title: { fontWeight: 600, marginBottom: '10px', color: '#474451' },
   muted: { color: '#908e99', fontSize: '12px' },
-  row: {
-    borderTop: '1px solid #ecebf0',
-    padding: '8px 0',
-  },
+  row: { borderTop: '1px solid #ecebf0', padding: '10px 0' },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
-    alignItems: 'baseline',
+    alignItems: 'center',
   },
   name: { fontWeight: 600 },
-  value: { fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: '#1961ed' },
-  fieldLabel: { fontSize: '11px', color: '#908e99', marginBottom: '4px' },
-  disabled: { color: '#e0483d' },
-  editRow: { display: 'flex', gap: '6px' },
-  input: {
-    flex: 1,
-    padding: '5px 8px',
-    border: '1px solid #d6d5db',
-    borderRadius: '4px',
-    fontFamily: 'ui-monospace, monospace',
-    fontSize: '12px',
-    minWidth: 0,
+  value: {
+    fontVariantNumeric: 'tabular-nums',
+    fontWeight: 700,
+    color: '#1b1b1f',
   },
+  fieldLabel: { fontSize: '11px', color: '#908e99', margin: '2px 0 6px' },
+  editRow: { display: 'flex', gap: '6px', alignItems: 'flex-start' },
+  overrideRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginTop: '8px',
+    flexWrap: 'wrap',
+  },
+  toggleWrap: { display: 'flex', alignItems: 'center', gap: '8px' },
+  toggleLabel: { fontSize: '12px', fontWeight: 600, color: '#474451' },
+  toggleTrack: {
+    position: 'relative',
+    width: '38px',
+    height: '20px',
+    borderRadius: '10px',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 0,
+    transition: 'background 0.15s ease',
+  },
+  toggleKnob: {
+    position: 'absolute',
+    top: '2px',
+    left: '2px',
+    width: '16px',
+    height: '16px',
+    borderRadius: '50%',
+    background: '#fff',
+    transition: 'transform 0.15s ease',
+  },
+  toggleState: { fontSize: '11px', fontWeight: 600 },
+  overrideHint: { fontSize: '11px', color: '#908e99' },
   button: {
-    padding: '5px 12px',
+    padding: '6px 12px',
     borderRadius: '4px',
     border: 'none',
     background: '#1961ed',
@@ -331,6 +453,6 @@ export const FORMULA_EDITOR_UNIVERSAL_IDENTIFIER =
 export default defineFrontComponent({
   universalIdentifier: FORMULA_EDITOR_UNIVERSAL_IDENTIFIER,
   name: 'formula-editor',
-  description: 'Edit the formula for each formula field on this record.',
+  description: 'View values, edit formulas, and toggle per-record overrides.',
   component: FormulaEditor,
 });

@@ -110,6 +110,25 @@ describe('recomputeForRecord', () => {
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(99);
   });
 
+  it('skips a manually overridden record (leaves its value untouched)', async () => {
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 99 },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula(),
+      targetRecordId: 'o1',
+      overriddenRecordIds: new Set(['o1']),
+    });
+
+    expect(outcome.overridden).toBe(true);
+    expect(outcome.changed).toBe(false);
+    expect(client.writes).toHaveLength(0);
+    // The pinned value stands even though the formula would say 25.
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(99);
+  });
+
   it('resolves cross-record references', async () => {
     const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     client.seed('opportunity', [

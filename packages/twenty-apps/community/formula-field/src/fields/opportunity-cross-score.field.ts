@@ -19,5 +19,6 @@ export default defineField({
   label: 'Formula cross score',
   description: 'Computed value field for a cross-object formula.',
   icon: 'IconMathXy',
-  isUIEditable: false,
+  // Editable so a human edit registers as a manual override (feature #2).
+  isUIEditable: true,
 });

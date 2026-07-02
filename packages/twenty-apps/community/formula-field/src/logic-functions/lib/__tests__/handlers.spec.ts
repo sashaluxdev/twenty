@@ -209,6 +209,73 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.writes).toHaveLength(0);
   });
 
+  it('creates an override when a HUMAN edits the value field directly (magic)', async () => {
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 3 },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 3 },
+      updatedFields: ['formulaScore'],
+      actorWorkspaceMemberId: 'wm-1', // a real person made the edit
+    });
+
+    const override = client.get('formulaOverride', 'formulaOverride-0');
+    expect(override).toBeDefined();
+    expect(override!.recordId).toBe('o1');
+    expect(override!.targetField).toBe('formulaScore');
+    expect(override!.overrideValue).toBe(3);
+  });
+
+  it('does NOT create an override when the APP writes the value (no actor)', async () => {
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 25 },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 25 },
+      updatedFields: ['formulaScore'],
+      actorWorkspaceMemberId: null, // the app's own recompute write
+    });
+
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+  });
+
+  it('does not recompute a record that already has an override', async () => {
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 99 },
+    ]);
+    client.seed('formulaOverride', [
+      {
+        id: 'ov1',
+        name: 'opportunity.formulaScore#o1',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        recordId: 'o1',
+        overrideValue: 99,
+      },
+    ]);
+
+    const outcomes = await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 99 },
+      updatedFields: ['formulaInputA'],
+    });
+
+    const outcome = outcomes.find((entry) => entry.formulaId === 'f1');
+    expect(outcome?.overridden).toBe(true);
+    // The formula would say 25, but the pinned 99 is untouched.
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(99);
+  });
+
   it('recomputes cross-object formulas when a referenced record changed', async () => {
     const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     client.seed('formulaDefinition', [

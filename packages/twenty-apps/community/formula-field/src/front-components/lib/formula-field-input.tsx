@@ -146,11 +146,16 @@ export const FormulaFieldInput = ({
     const element = inputRef.current as
       | (HTMLInputElement & { setSelectionRange?: unknown; focus?: unknown })
       | null;
-    if (element && typeof element.focus === 'function') {
-      element.focus();
-    }
-    if (element && typeof element.setSelectionRange === 'function') {
-      element.setSelectionRange(pendingCaret, pendingCaret);
+    // The remote-dom sandbox may expose these as proxied members that throw when
+    // invoked, so guard AND swallow — the insert already worked; caret placement
+    // is best-effort and must never crash the widget.
+    try {
+      if (element && typeof element.focus === 'function') element.focus();
+      if (element && typeof element.setSelectionRange === 'function') {
+        element.setSelectionRange(pendingCaret, pendingCaret);
+      }
+    } catch {
+      // caret restore unsupported in this host — ignore
     }
     setCaret(pendingCaret);
     setPendingCaret(null);
