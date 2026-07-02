@@ -10,6 +10,7 @@ import {
   isFormulaError,
   parse,
 } from 'src/engine';
+import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 
 // The "edit the formula, not the value" surface (ADR 0001). Rendered on the
 // Opportunity record page, it lists every formula field on this object showing:
@@ -119,9 +120,18 @@ const FormulaEditor = () => {
     }));
 
     setDefinitions(defs);
-    setDrafts(
-      Object.fromEntries(defs.map((definition) => [definition.id, definition.expression])),
-    );
+    // Initialise a draft for any formula we have not seen yet, but NEVER
+    // overwrite a draft the user is actively editing — otherwise the 4s refresh
+    // below snaps their typing back to the stored expression.
+    setDrafts((previous) => {
+      const next = { ...previous };
+      for (const definition of defs) {
+        if (!(definition.id in next)) {
+          next[definition.id] = definition.expression;
+        }
+      }
+      return next;
+    });
 
     // Read the current value of each formula field on this record.
     if (recordId && defs.length > 0) {
@@ -226,16 +236,12 @@ const FormulaEditor = () => {
             ) : null}
           </div>
           <div style={styles.editRow}>
-            <input
-              style={styles.input}
+            <FormulaFieldInput
               value={draft}
-              onChange={(event) =>
-                setDrafts((prev) => ({
-                  ...prev,
-                  [definition.id]: event.target.value,
-                }))
+              onChange={(next) =>
+                setDrafts((prev) => ({ ...prev, [definition.id]: next }))
               }
-              spellCheck={false}
+              targetObject={TARGET_OBJECT}
             />
             <button
               style={{
