@@ -100,3 +100,21 @@ export const updateFormulaBookkeeping = async (
     }),
   );
 };
+
+// Records a "last evaluation" heartbeat on the FormulaDefinition: the most recent
+// computed value, when it ran, and the error (empty when healthy). A formula is
+// column-level so lastValue is a representative sample, not per-record. These are
+// all bookkeeping fields, so the write is ignored by the save-time trigger and
+// never loops.
+export const recordEvaluationHeartbeat = async (
+  client: FormulaClient,
+  formula: FormulaDefinitionRecord,
+  outcome: { value: number | null; error: string | null },
+): Promise<void> => {
+  const nextError = outcome.error ?? '';
+  await updateFormulaBookkeeping(client, formula.id, {
+    lastValue: outcome.value,
+    lastError: nextError,
+    lastEvaluatedAt: new Date().toISOString(),
+  });
+};

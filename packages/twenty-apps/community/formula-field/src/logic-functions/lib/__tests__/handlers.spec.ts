@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { handleFormulaChange } from 'src/logic-functions/lib/handle-formula-change';
 import { handleRecordUpdate } from 'src/logic-functions/lib/handle-record-update';
+import {
+  activateOverride,
+  deactivateOverride,
+  findOverride,
+  upsertOverride,
+} from 'src/logic-functions/lib/override-repository';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
@@ -117,6 +123,42 @@ describe('handleFormulaChange (save-time validation)', () => {
 
     expect(result.handled).toBe(false);
     expect(client.mutations).toBe(before);
+  });
+});
+
+describe('override restore (deactivate keeps value, activate restores)', () => {
+  it('retains the value when deactivated and restores it on re-activate', async () => {
+    const client = new FakeClient();
+    await upsertOverride(client, 'opportunity', 'formulaScore', 'o1', 42);
+
+    let ov = await findOverride(client, 'opportunity', 'formulaScore', 'o1');
+    expect(ov?.active).toBe(true);
+    expect(ov?.overrideValue).toBe(42);
+
+    await deactivateOverride(client, 'opportunity', 'formulaScore', 'o1');
+    ov = await findOverride(client, 'opportunity', 'formulaScore', 'o1');
+    expect(ov?.active).toBe(false);
+    expect(ov?.overrideValue).toBe(42); // value retained, not deleted
+
+    const restored = await activateOverride(
+      client,
+      'opportunity',
+      'formulaScore',
+      'o1',
+    );
+    expect(restored?.active).toBe(true);
+    expect(restored?.overrideValue).toBe(42); // restored to the last value
+  });
+
+  it('activateOverride returns null when there is nothing to restore', async () => {
+    const client = new FakeClient();
+    const restored = await activateOverride(
+      client,
+      'opportunity',
+      'formulaScore',
+      'missing',
+    );
+    expect(restored).toBeNull();
   });
 });
 
@@ -280,6 +322,7 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
         targetField: 'formulaScore',
         recordId: 'o1',
         overrideValue: 99,
+        active: true,
       },
     ]);
 

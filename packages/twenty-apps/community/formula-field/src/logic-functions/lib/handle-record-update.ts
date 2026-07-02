@@ -1,5 +1,8 @@
 import { compileFormula } from 'src/engine';
-import { loadAllEnabledFormulas } from 'src/logic-functions/lib/formula-repository';
+import {
+  loadAllEnabledFormulas,
+  recordEvaluationHeartbeat,
+} from 'src/logic-functions/lib/formula-repository';
 import {
   computeFormulaValueForRecord,
   recomputeAllRecords,
@@ -139,14 +142,14 @@ export const handleRecordUpdate = async ({
       formula.targetObject === objectName &&
       sameRecordAffected(dependencies.sameRecordFields, updatedFields)
     ) {
-      // Respect a manual override on this specific record (#2).
+      // Respect an ACTIVE manual override on this specific record (#2).
       const override = await findOverride(
         client,
         formula.targetObject ?? '',
         formula.targetField ?? '',
         recordId,
       );
-      if (override) {
+      if (override?.active) {
         outcomes.push({
           formulaId: formula.id,
           targetRecordId: recordId,
@@ -157,14 +160,17 @@ export const handleRecordUpdate = async ({
         });
         continue;
       }
-      outcomes.push(
-        await recomputeForRecord({
-          client,
-          formula,
-          targetRecordId: recordId,
-          prefetchedRecord: after ?? undefined,
-        }),
-      );
+      const outcome = await recomputeForRecord({
+        client,
+        formula,
+        targetRecordId: recordId,
+        prefetchedRecord: after ?? undefined,
+      });
+      outcomes.push(outcome);
+      await recordEvaluationHeartbeat(client, formula, {
+        value: outcome.value,
+        error: outcome.error,
+      });
       continue;
     }
 

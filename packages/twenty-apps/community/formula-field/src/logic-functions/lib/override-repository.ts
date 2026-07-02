@@ -4,6 +4,10 @@ import { withRetry } from 'src/logic-functions/lib/with-retry';
 // Data access for FormulaOverride rows (feature #2). One row per
 // (targetObject, targetField, recordId). The `name` field is a deterministic key
 // so lookups and idempotent upserts are simple.
+//
+// An override has an `active` flag: only active overrides pin a record (recompute
+// skips them). Turning an override off DEACTIVATES it (keeps the value) so it can
+// be restored later, rather than deleting it.
 
 export type OverrideRecord = {
   id: string;
@@ -11,6 +15,7 @@ export type OverrideRecord = {
   targetField: string;
   recordId: string;
   overrideValue: number | null;
+  active: boolean;
 };
 
 export const overrideKey = (
@@ -25,10 +30,11 @@ const OVERRIDE_FIELDS = {
   targetField: true,
   recordId: true,
   overrideValue: true,
+  active: true,
 } as const;
 
-// All overridden record ids for a given (object, field) — used by recompute to
-// skip pinned records in one pass.
+// Active overridden record ids for a given (object, field) — used by recompute
+// to skip pinned records in one pass. Only ACTIVE overrides count.
 export const loadOverriddenRecordIds = async (
   client: FormulaClient,
   targetObject: string,
@@ -47,6 +53,7 @@ export const loadOverriddenRecordIds = async (
             filter: {
               targetObject: { eq: targetObject },
               targetField: { eq: targetField },
+              active: { eq: true },
             },
             ...(after ? { after } : {}),
           },
@@ -66,6 +73,7 @@ export const loadOverriddenRecordIds = async (
   return ids;
 };
 
+// Returns the override row for a record (active or not), or null.
 export const findOverride = async (
   client: FormulaClient,
   targetObject: string,
@@ -91,6 +99,7 @@ export const findOverride = async (
   );
 };
 
+// Creates or updates an ACTIVE override pinning `overrideValue`.
 export const upsertOverride = async (
   client: FormulaClient,
   targetObject: string,
@@ -100,11 +109,14 @@ export const upsertOverride = async (
 ): Promise<void> => {
   const existing = await findOverride(client, targetObject, targetField, recordId);
   if (existing) {
-    if (existing.overrideValue !== overrideValue) {
+    if (existing.overrideValue !== overrideValue || existing.active !== true) {
       await withRetry(() =>
         client.mutation({
           updateFormulaOverride: {
-            __args: { id: existing.id, data: { overrideValue } },
+            __args: {
+              id: existing.id,
+              data: { overrideValue, active: true },
+            },
             id: true,
           },
         }),
@@ -122,6 +134,7 @@ export const upsertOverride = async (
             targetField,
             recordId,
             overrideValue,
+            active: true,
           },
         },
         id: true,
@@ -130,18 +143,46 @@ export const upsertOverride = async (
   );
 };
 
-export const deleteOverride = async (
+// Turns an override off but KEEPS its value, so it can be restored later.
+export const deactivateOverride = async (
   client: FormulaClient,
   targetObject: string,
   targetField: string,
   recordId: string,
 ): Promise<boolean> => {
   const existing = await findOverride(client, targetObject, targetField, recordId);
-  if (!existing) return false;
+  if (!existing || existing.active === false) return false;
   await withRetry(() =>
     client.mutation({
-      deleteFormulaOverride: { __args: { id: existing.id }, id: true },
+      updateFormulaOverride: {
+        __args: { id: existing.id, data: { active: false } },
+        id: true,
+      },
     }),
   );
   return true;
+};
+
+// Re-activates a previously-set override and returns its stored value so the
+// caller can write it back to the field. Returns null if there is no prior
+// override to restore.
+export const activateOverride = async (
+  client: FormulaClient,
+  targetObject: string,
+  targetField: string,
+  recordId: string,
+): Promise<OverrideRecord | null> => {
+  const existing = await findOverride(client, targetObject, targetField, recordId);
+  if (!existing) return null;
+  if (existing.active !== true) {
+    await withRetry(() =>
+      client.mutation({
+        updateFormulaOverride: {
+          __args: { id: existing.id, data: { active: true } },
+          id: true,
+        },
+      }),
+    );
+  }
+  return { ...existing, active: true };
 };

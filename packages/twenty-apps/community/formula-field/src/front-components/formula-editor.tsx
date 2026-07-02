@@ -12,7 +12,8 @@ import {
 } from 'src/engine';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import {
-  deleteOverride,
+  activateOverride,
+  deactivateOverride,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
@@ -118,10 +119,16 @@ const FormulaEditor = () => {
   const recordId = useRecordId();
   const [definitions, setDefinitions] = useState<Definition[]>([]);
   const [values, setValues] = useState<Record<string, number | null>>({});
-  const [overrides, setOverrides] = useState<Record<string, number | null>>({});
+  // targetField -> { value, active }. Rows may exist but be inactive (the value
+  // is retained so it can be restored when the toggle is turned back on).
+  const [overrides, setOverrides] = useState<
+    Record<string, { value: number | null; active: boolean }>
+  >({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Transient per-formula hint, e.g. "Override value restored".
+  const [restoredHint, setRestoredHint] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     const client = new CoreApiClient();
@@ -188,13 +195,21 @@ const FormulaEditor = () => {
               recordId: { eq: recordId },
             },
           },
-          edges: { node: { targetField: true, overrideValue: true } },
+          edges: {
+            node: { targetField: true, overrideValue: true, active: true },
+          },
         },
       });
-      const nextOverrides: Record<string, number | null> = {};
+      const nextOverrides: Record<
+        string,
+        { value: number | null; active: boolean }
+      > = {};
       for (const edge of overrideResponse?.formulaOverrides?.edges ?? []) {
         if (edge?.node?.targetField) {
-          nextOverrides[edge.node.targetField] = edge.node.overrideValue ?? null;
+          nextOverrides[edge.node.targetField] = {
+            value: edge.node.overrideValue ?? null,
+            active: edge.node.active ?? false,
+          };
         }
       }
       setOverrides(nextOverrides);
@@ -242,32 +257,69 @@ const FormulaEditor = () => {
     async (definition: Definition, turnOn: boolean) => {
       if (!recordId) return;
       setBusy(definition.id);
-      // Optimistic: reflect the new state immediately so the toggle feels snappy.
-      setOverrides((prev) => {
-        const next = { ...prev };
-        if (turnOn) next[definition.targetField] = values[definition.targetField] ?? null;
-        else delete next[definition.targetField];
-        return next;
-      });
+      setRestoredHint((prev) => ({ ...prev, [definition.id]: false }));
       try {
         const client = new CoreApiClient();
         if (turnOn) {
-          // Pin the current value so the formula stops touching this record.
-          await upsertOverride(
+          // Restore a previously-set override value if one exists, otherwise pin
+          // the current value.
+          const restored = await activateOverride(
             client,
             TARGET_OBJECT,
             definition.targetField,
             recordId,
-            values[definition.targetField] ?? null,
           );
+          if (restored) {
+            // Write the retained value back to the field.
+            await client.mutation({
+              [`update${capitalize(TARGET_OBJECT)}`]: {
+                __args: {
+                  id: recordId,
+                  data: { [definition.targetField]: restored.overrideValue },
+                },
+                id: true,
+              },
+            });
+            setRestoredHint((prev) => ({ ...prev, [definition.id]: true }));
+            setOverrides((prev) => ({
+              ...prev,
+              [definition.targetField]: {
+                value: restored.overrideValue,
+                active: true,
+              },
+            }));
+          } else {
+            const current = values[definition.targetField] ?? null;
+            await upsertOverride(
+              client,
+              TARGET_OBJECT,
+              definition.targetField,
+              recordId,
+              current,
+            );
+            setOverrides((prev) => ({
+              ...prev,
+              [definition.targetField]: { value: current, active: true },
+            }));
+          }
         } else {
-          // Hand the record back to the formula and recompute it now.
-          await deleteOverride(
+          // Turn off but KEEP the value; hand the record back to the formula.
+          await deactivateOverride(
             client,
             TARGET_OBJECT,
             definition.targetField,
             recordId,
           );
+          setOverrides((prev) => {
+            const entry = prev[definition.targetField];
+            return {
+              ...prev,
+              [definition.targetField]: {
+                value: entry?.value ?? null,
+                active: false,
+              },
+            };
+          });
           await recomputeForRecord({
             client,
             formula: {
@@ -302,9 +354,10 @@ const FormulaEditor = () => {
       const draft = drafts[definition.id] ?? '';
       const dirty = draft !== definition.expression;
       const liveError = validateExpression(draft, definition.targetField, definitions);
-      const isOverridden = definition.targetField in overrides;
+      const overrideEntry = overrides[definition.targetField];
+      const isOverridden = overrideEntry?.active ?? false;
       const value = isOverridden
-        ? overrides[definition.targetField]
+        ? overrideEntry.value
         : values[definition.targetField];
       const rowBusy = busy === definition.id;
 
@@ -352,10 +405,16 @@ const FormulaEditor = () => {
               onChange={(next) => toggleOverride(definition, next)}
             />
             {isOverridden ? (
-              <span style={styles.overrideHint}>
-                Edit the “{definition.name || definition.targetField}” field
-                directly to change this record’s value.
-              </span>
+              restoredHint[definition.id] ? (
+                <span style={styles.restored} title="Override value restored">
+                  Override value restored
+                </span>
+              ) : (
+                <span style={styles.overrideHint}>
+                  Edit the “{definition.name || definition.targetField}” field
+                  directly to change this record’s value.
+                </span>
+              )
             ) : null}
           </div>
 
@@ -367,7 +426,17 @@ const FormulaEditor = () => {
         </div>
       );
     });
-  }, [loading, definitions, drafts, values, overrides, busy, saveExpression, toggleOverride]);
+  }, [
+    loading,
+    definitions,
+    drafts,
+    values,
+    overrides,
+    restoredHint,
+    busy,
+    saveExpression,
+    toggleOverride,
+  ]);
 
   return (
     <div style={styles.container}>
@@ -434,6 +503,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   toggleState: { fontSize: '11px', fontWeight: 600 },
   overrideHint: { fontSize: '11px', color: '#908e99' },
+  restored: { fontSize: '11px', color: '#3ba55d', fontWeight: 600 },
   button: {
     padding: '6px 12px',
     borderRadius: '4px',

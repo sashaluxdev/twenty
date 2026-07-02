@@ -3,6 +3,7 @@ import { type FormulaDependencies } from 'src/engine/dependencies';
 import { FormulaError, isFormulaError } from 'src/engine/errors';
 import { evaluate, type VariableResolver } from 'src/engine/evaluator';
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
+import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
 import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
 import {
   type FormulaClient,
@@ -383,6 +384,20 @@ export const recomputeAllRecords = async (
       break;
     }
     after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  // Heartbeat: record a representative value + timestamp on the definition so
+  // "last value / last evaluated" is populated (an error takes precedence).
+  if (outcomes.length > 0) {
+    const firstError = outcomes.find((o) => o.error)?.error ?? null;
+    const sampleValue =
+      outcomes.find((o) => !o.error && o.value !== null)?.value ??
+      outcomes.find((o) => !o.error)?.value ??
+      null;
+    await recordEvaluationHeartbeat(client, formula, {
+      value: sampleValue,
+      error: firstError,
+    });
   }
 
   return outcomes;

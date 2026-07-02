@@ -17,6 +17,7 @@ export const FORMULA_OVERRIDE_FIELDS = {
   recordId: '3a698909-1d0a-4e27-ad60-aa4e439f3171',
   targetField: '04418455-8477-406a-ba43-b85d75cd8d3f',
   overrideValue: '49ad7e7d-14c1-4d68-ad02-047e2f7abac0',
+  active: 'f50b09d7-a643-4e2b-a93f-68b7bbaae1b6',
 } as const;
 
 export default defineObject({
@@ -69,6 +70,17 @@ export default defineObject({
       label: 'Override value',
       description: 'The manual value pinned by the user.',
       icon: 'IconPencil',
+    },
+    {
+      universalIdentifier: FORMULA_OVERRIDE_FIELDS.active,
+      type: FieldType.BOOLEAN,
+      name: 'active',
+      label: 'Active',
+      description:
+        'When true the override pins the record; when false the formula runs, ' +
+        'but the last override value is retained so it can be restored.',
+      icon: 'IconToggleRight',
+      defaultValue: true,
     },
   ],
 });
