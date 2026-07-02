@@ -70,6 +70,14 @@ export const handleFormulaChange = async ({
     return { handled: false, reason: 'disabled-bookkeeping' };
   }
 
+  // A disabled formula is inert: never auto-clear its error or re-evaluate it.
+  // Only a human re-enabling it (enabled: true) or editing its expression flows
+  // past here. This keeps a cycle rejection sticky instead of being cleared when
+  // the sibling cyclic formula later drops out of the enabled set.
+  if (after.enabled === false && !updatedFields?.includes('expression')) {
+    return { handled: false, reason: 'disabled' };
+  }
+
   const existing = await loadAllEnabledFormulas(client);
   const result = validateFormula({ candidate: after, existingFormulas: existing });
 
