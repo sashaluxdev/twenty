@@ -29,6 +29,9 @@ import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 
 const TARGET_OBJECT = 'opportunity';
 
+const capitalize = (value: string): string =>
+  value.charAt(0).toUpperCase() + value.slice(1);
+
 type Definition = {
   id: string;
   name: string;
