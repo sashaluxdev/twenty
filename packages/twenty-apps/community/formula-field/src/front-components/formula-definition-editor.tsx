@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CoreApiClient } from 'twenty-client-sdk/core';
+import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { useRecordId } from 'twenty-sdk/front-component';
 
@@ -10,6 +11,11 @@ import {
   isFormulaError,
   parse,
 } from 'src/engine';
+import {
+  type DeleteDefinitionPlan,
+  deleteDefinitionCompletely,
+  planDeleteDefinition,
+} from 'src/front-components/lib/delete-definition-completely';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
@@ -79,6 +85,154 @@ const validate = (
   return cycle.hasCycle ? `Dependency cycle: ${cycle.cycle.join(' -> ')}` : null;
 };
 
+// Danger zone: permanently destroy the definition and (when this app owns the
+// value field and no other definition shares it) hard-delete the value field +
+// its FX Status companion, including every record's stored computed value. The
+// remote-dom sandbox has no modal primitive, so the confirmation is an INLINE
+// panel; the destructive button unlocks only once the user types "Delete".
+const FormulaDangerZone = ({
+  definitionId,
+  onDeleted,
+}: {
+  definitionId: string;
+  onDeleted: () => void;
+}) => {
+  const [open, setOpen] = useState(false);
+  const [plan, setPlan] = useState<DeleteDefinitionPlan | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
+
+  const openPanel = useCallback(async () => {
+    setOpen(true);
+    setPlanning(true);
+    setError('');
+    try {
+      // Compute the warning from the record's ACTUAL state (fresh re-fetch +
+      // shared-target guard), not from stale widget props.
+      setPlan(await planDeleteDefinition(new CoreApiClient(), definitionId));
+    } catch (planError) {
+      setError((planError as Error).message ?? String(planError));
+    } finally {
+      setPlanning(false);
+    }
+  }, [definitionId]);
+
+  const cancel = useCallback(() => {
+    setOpen(false);
+    setConfirmText('');
+    setPlan(null);
+    setError('');
+  }, []);
+
+  const confirm = useCallback(async () => {
+    setDeleting(true);
+    setError('');
+    try {
+      await deleteDefinitionCompletely({
+        coreClient: new CoreApiClient(),
+        metadataClient: new MetadataApiClient(),
+        definitionId,
+      });
+      onDeleted();
+    } catch (deleteError) {
+      setError((deleteError as Error).message ?? String(deleteError));
+      setDeleting(false);
+    }
+  }, [definitionId, onDeleted]);
+
+  const canConfirm = confirmText === 'Delete' && !deleting;
+
+  return (
+    <div style={s.dangerZone}>
+      <div style={s.dangerTitle}>Danger zone</div>
+      {!open ? (
+        <button style={s.dangerButton} onClick={openPanel}>
+          Delete Completely…
+        </button>
+      ) : (
+        <div style={s.dangerPanel}>
+          {planning ? (
+            <div style={s.muted}>Checking what will be removed…</div>
+          ) : plan ? (
+            <div style={s.dangerList}>
+              <div style={s.dangerItem}>
+                • The formula definition will be{' '}
+                <span style={s.strong}>permanently destroyed</span> (not moved to
+                trash).
+              </div>
+              {plan.deleteValueField ? (
+                <>
+                  <div style={s.dangerItem}>
+                    • The value field <span style={s.mono}>{plan.targetField}</span>{' '}
+                    on <span style={s.mono}>{plan.targetObject}</span> will be{' '}
+                    <span style={s.strong}>permanently deleted</span>, including all
+                    stored computed values on every record.
+                  </div>
+                  <div style={s.dangerItem}>
+                    • The FX status field{' '}
+                    <span style={s.mono}>{plan.companionField}</span> will be
+                    permanently deleted too.
+                  </div>
+                </>
+              ) : plan.keepReason === 'shared' ? (
+                <div style={s.dangerItem}>
+                  • The value field <span style={s.mono}>{plan.targetField}</span>{' '}
+                  will be <span style={s.strong}>kept</span> — another formula
+                  definition also targets it. Only this definition and its
+                  overrides are removed.
+                </div>
+              ) : plan.keepReason === 'not-created' ? (
+                <div style={s.dangerItem}>
+                  • The value field <span style={s.mono}>{plan.targetField}</span>{' '}
+                  will be <span style={s.strong}>kept</span> — it was not created by
+                  this app. Only this definition and its overrides are removed.
+                </div>
+              ) : (
+                <div style={s.dangerItem}>
+                  • No value field is wired to this draft yet — only the definition
+                  is removed.
+                </div>
+              )}
+              <div style={s.dangerItem}>
+                • Any manual override rows for this formula will be removed.
+              </div>
+            </div>
+          ) : null}
+
+          <div style={s.label}>
+            Type <span style={s.strong}>Delete</span> to confirm
+          </div>
+          <input
+            style={s.confirmInput}
+            value={confirmText}
+            placeholder="Delete"
+            onChange={(event) => setConfirmText(event.target.value)}
+          />
+
+          <div style={s.actions}>
+            <button
+              style={{
+                ...s.dangerConfirm,
+                ...(canConfirm ? {} : s.buttonDisabled),
+              }}
+              disabled={!canConfirm}
+              onClick={confirm}
+            >
+              {deleting ? 'Deleting…' : 'Delete completely'}
+            </button>
+            <button style={s.cancelButton} onClick={cancel} disabled={deleting}>
+              Cancel
+            </button>
+          </div>
+          {error ? <div style={s.err}>{error}</div> : null}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const FormulaDefinitionEditor = () => {
   const recordId = useRecordId();
   const [definition, setDefinition] = useState<Definition | null>(null);
@@ -86,6 +240,9 @@ const FormulaDefinitionEditor = () => {
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Once the record is destroyed the page points at a dead record: stop polling
+  // and show a terminal state so the widget never crashes or retry-loops.
+  const [deleted, setDeleted] = useState(false);
   // Tracks which record's draft we have already seeded, so the 4s refresh below
   // never overwrites the expression the user is actively editing.
   const seededRecordId = useRef<string | null>(null);
@@ -157,10 +314,11 @@ const FormulaDefinitionEditor = () => {
   }, [recordId]);
 
   useEffect(() => {
+    if (deleted) return;
     load();
     const interval = setInterval(load, 4000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, deleted]);
 
   const save = useCallback(async () => {
     if (!definition) return;
@@ -195,6 +353,9 @@ const FormulaDefinitionEditor = () => {
     [definition, draft, allDefinitions],
   );
 
+  if (deleted) {
+    return <div style={s.muted}>This formula was deleted.</div>;
+  }
   if (loading) return <div style={s.muted}>Loading…</div>;
   if (!definition) return <div style={s.muted}>Formula not found.</div>;
 
@@ -212,6 +373,12 @@ const FormulaDefinitionEditor = () => {
             currencyCode: definition.currencyCode,
           }}
           onCreated={load}
+        />
+        {/* Render even for wizard drafts: an interrupted wizard may already
+            have created the value field, so it must be removable. */}
+        <FormulaDangerZone
+          definitionId={definition.id}
+          onDeleted={() => setDeleted(true)}
         />
       </div>
     );
@@ -285,6 +452,11 @@ const FormulaDefinitionEditor = () => {
       ) : (
         <div style={s.ok}>Valid</div>
       )}
+
+      <FormulaDangerZone
+        definitionId={definition.id}
+        onDeleted={() => setDeleted(true)}
+      />
     </div>
   );
 };
@@ -360,6 +532,70 @@ const s: Record<string, React.CSSProperties> = {
     padding: '8px 10px',
     fontSize: '12px',
     marginBottom: '12px',
+  },
+  dangerZone: {
+    marginTop: '20px',
+    paddingTop: '12px',
+    borderTop: '1px solid #eeedf0',
+  },
+  dangerTitle: {
+    fontSize: '11px',
+    fontWeight: 600,
+    color: '#b3271e',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    marginBottom: '8px',
+  },
+  dangerButton: {
+    padding: '6px 14px',
+    borderRadius: '4px',
+    border: '1px solid #e0483d',
+    background: '#fff',
+    color: '#b3271e',
+    cursor: 'pointer',
+    fontSize: '13px',
+  },
+  dangerPanel: {
+    border: '1px solid #e0483d',
+    background: '#fdecea',
+    borderRadius: '4px',
+    padding: '12px',
+  },
+  dangerList: {
+    marginBottom: '10px',
+    fontSize: '12px',
+    color: '#5c1a15',
+    lineHeight: 1.5,
+  },
+  dangerItem: { marginBottom: '4px' },
+  strong: { fontWeight: 700 },
+  mono: { fontFamily: 'ui-monospace, monospace' },
+  confirmInput: {
+    width: '100%',
+    padding: '6px 8px',
+    border: '1px solid #e0483d',
+    borderRadius: '4px',
+    fontSize: '13px',
+    boxSizing: 'border-box',
+    marginBottom: '8px',
+  },
+  dangerConfirm: {
+    padding: '6px 14px',
+    borderRadius: '4px',
+    border: 'none',
+    background: '#e0483d',
+    color: '#fff',
+    cursor: 'pointer',
+    fontSize: '13px',
+  },
+  cancelButton: {
+    padding: '6px 14px',
+    borderRadius: '4px',
+    border: '1px solid #d6d5db',
+    background: '#fff',
+    color: '#1b1b1f',
+    cursor: 'pointer',
+    fontSize: '13px',
   },
 };
 

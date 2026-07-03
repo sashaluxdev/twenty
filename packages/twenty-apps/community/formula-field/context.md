@@ -125,18 +125,49 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   - Recompute skips **active** overrides. Toggle OFF **deactivates** (keeps the
     value) + recomputes; toggle ON **restores** the last override value and shows
     an "Override value restored" hint.
-- **Tests**: 118 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
+- **Tests**: 123 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
   integration suite (`src/__tests__/app-install.integration-test.ts`). Lint clean.
 
 ## What is NOT done (next work)
 
-1. **Final acceptance report** demonstrating each mission criterion.
-2. **Production deploy** is explicitly out of scope (local-only). Prod would need
+**Build pipeline (user-approved order, 2026-07-03):**
+
+1. **"Delete Completely"** — danger-zone button in the definition editor:
+   destroys the definition record AND its wizard-created value/companion fields
+   (guards: `createdField` provenance + no other definition targets the field;
+   type-"Delete" confirmation). In flight.
+2. **IF/THEN conditionals** — `IF(cond, then, else)` function-call form.
+   LOCKED design (see complexity assessment, 2026-07-03): comparisons
+   (`> < >= <= = == !=`) are TRANSIENT — legal only inside IF's condition slot,
+   never a formula result, so the engine value domain stays `number | null`
+   and the write/convergence/override stack is untouched. Excel truthiness for
+   numeric conditions (0 = false, nonzero = true); null condition or null in a
+   comparison → whole IF result null (ADR 0003 consistency; deliberate
+   deviation from Excel's blank=0). Lazy branch evaluation, EAGER dependency
+   extraction (condition + both branches); cycle detection unchanged.
+3. **Date handling — Excel serial-number model** (user decision 2026-07-03,
+   supersedes the tagged-union recommendation): dates ARE numbers
+   (days since Unix epoch 1970, NOT Excel's 1900; times = day fractions,
+   UTC). Engine unchanged; coercion parses DATE `"yyyy-MM-dd"` /
+   DATE_TIME ISO → epoch-days at the resolver boundary; value-io serializes
+   back per targetFieldType (the "cell format"), FLOORING to whole UTC days
+   for DATE targets before every write AND comparison (micros lesson —
+   rewrite-forever trap, BOTH comparison sites: recompute.ts valuesEqual exact,
+   handle-record-update.ts numbersEqual epsilon). `overrideValue` NUMBER column
+   works as-is. `date + 30` = 30 days, Excel-identical; type errors are
+   silently-wrong Excel-style (documented tradeoff). Duration helpers like
+   `days(n)` are optional polish after IF's call parsing exists.
+
+Then:
+
+4. **Final acceptance report** demonstrating each mission criterion (criteria
+   list pending user confirmation — not recorded in repo).
+5. **Production deploy** is explicitly out of scope (local-only). Prod would need
    `twenty remote:add --url <cloud> && twenty app deploy --private` — do NOT run.
-3. Possible polish: surface wizard-created VALUE fields in table (index) views
+6. Possible polish: surface wizard-created VALUE fields in table (index) views
    automatically — new fields are hidden in views by default, and layout
-   convergence currently only touches record-page Fields views; currency-in-units
-   input option; unit coverage for `ensureFieldLayoutVisibility`.
+   convergence currently only touches record-page Fields views;
+   currency-in-units input option; duration helpers (`days(n)`) once IF lands.
 
 README (formula grammar, architecture diagram, limitations, runbook) is now
 written at the app root (`README.md`).

@@ -22,10 +22,22 @@ type FieldMetadataInfo = {
   isActive: boolean;
 };
 
+// Minimal metadata client surface: enough to look up / mutate fields. Lets the
+// helpers below be reused from a front component with an injected client.
+export type MetadataQueryClient = {
+  // Loose shapes mirror the genql client's runtime-built selections; the
+  // callers narrow the response fields themselves.
+  query: (selection: any) => Promise<any>;
+};
+
 // One metadata query (ObjectFilter cannot filter by name); client-side pick.
-const findFields = async (
+// The metadata client is injectable so the same lookup serves both the
+// logic-function runtime (default app-token client) and unit tests / front
+// components that hand in their own client.
+export const findFields = async (
   objectName: string,
   fieldNames: string[],
+  metadataClient: MetadataQueryClient = new MetadataApiClient(),
 ): Promise<{
   objectMetadataId: string | null;
   fields: Map<string, FieldMetadataInfo>;
@@ -33,7 +45,7 @@ const findFields = async (
   const result = new Map<string, FieldMetadataInfo>();
   let objectMetadataId: string | null = null;
   try {
-    const client = new MetadataApiClient();
+    const client = metadataClient;
     const response = await client.query({
       objects: {
         __args: { filter: {}, paging: { first: 1000 } },
@@ -82,8 +94,9 @@ const setFieldActive = async (fieldId: string, isActive: boolean) => {
 };
 
 // True when another (non-deleted) definition targets the same field — its
-// output column must not be touched.
-const anotherDefinitionTargets = async (
+// output column must not be touched. Exported so the "delete completely" flow
+// reuses the exact same shared-target guard instead of duplicating it.
+export const anotherDefinitionTargets = async (
   client: FormulaClient,
   definition: FormulaDefinitionRecord,
 ): Promise<boolean> => {
