@@ -28,11 +28,15 @@ const FUNCTION_SUGGESTIONS: FieldOption[] = [
 ];
 
 // Field types whose values the engine can coerce to a number (see coercion.ts).
+// DATE / DATE_TIME parse to epoch-days (Excel serial-date model, ADR 0011), so
+// they are usable in arithmetic (e.g. `closeDate + 30`) and IF comparisons.
 const NUMERIC_FIELD_TYPES = new Set([
   'NUMBER',
   'NUMERIC',
   'CURRENCY',
   'BOOLEAN',
+  'DATE',
+  'DATE_TIME',
 ]);
 
 // Fetches the numeric-usable fields of an object (by nameSingular) via metadata.

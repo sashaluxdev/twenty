@@ -8,13 +8,28 @@ import {
 } from 'src/front-components/lib/formula-field-formats';
 
 describe('OUTPUT_FORMATS', () => {
-  it('covers the four agreed formats', () => {
+  it('covers the agreed output formats', () => {
     expect(OUTPUT_FORMATS.map((format) => format.key)).toEqual([
       'integer',
       'decimal',
       'percent',
       'currency',
+      'date',
+      'datetime',
     ]);
+  });
+
+  it('maps date / datetime to DATE / DATE_TIME fields without settings', () => {
+    expect(getOutputFormat('date')).toMatchObject({
+      fieldType: 'DATE',
+      targetFieldType: 'DATE',
+      settings: null,
+    });
+    expect(getOutputFormat('datetime')).toMatchObject({
+      fieldType: 'DATE_TIME',
+      targetFieldType: 'DATE_TIME',
+      settings: null,
+    });
   });
 
   it('maps number formats to the server settings shape (lowercase dataType)', () => {

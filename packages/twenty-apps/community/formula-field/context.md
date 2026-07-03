@@ -125,7 +125,7 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   - Recompute skips **active** overrides. Toggle OFF **deactivates** (keeps the
     value) + recomputes; toggle ON **restores** the last override value and shows
     an "Override value restored" hint.
-- **Tests**: 162 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
+- **Tests**: 191 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
   integration suite (`src/__tests__/app-install.integration-test.ts`). Lint clean.
 
 ## What is NOT done (next work)
@@ -152,18 +152,24 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
    Excel's blank=0). Lazy branch evaluation (untaken-branch errors never
    fire), EAGER dependency extraction (condition + both branches); cycle
    detection unchanged. Editor autocomplete suggests `IF(`.
-3. **Date handling — Excel serial-number model** (user decision 2026-07-03,
-   supersedes the tagged-union recommendation): dates ARE numbers
-   (days since Unix epoch 1970, NOT Excel's 1900; times = day fractions,
-   UTC). Engine unchanged; coercion parses DATE `"yyyy-MM-dd"` /
-   DATE_TIME ISO → epoch-days at the resolver boundary; value-io serializes
-   back per targetFieldType (the "cell format"), FLOORING to whole UTC days
-   for DATE targets before every write AND comparison (micros lesson —
-   rewrite-forever trap, BOTH comparison sites: recompute.ts valuesEqual exact,
-   handle-record-update.ts numbersEqual epsilon). `overrideValue` NUMBER column
-   works as-is. `date + 30` = 30 days, Excel-identical; type errors are
-   silently-wrong Excel-style (documented tradeoff). Duration helpers like
-   `days(n)` are optional polish after IF's call parsing exists.
+3. ~~**Date handling — Excel serial-number model**~~ DONE (ADR 0011, 29 new
+   tests, verified live): dates ARE numbers (fractional days since Unix epoch
+   1970 UTC, NOT Excel's 1900). Engine untouched; `lib/date-serial.ts` is the
+   single conversion chokepoint; coercion parses DATE `"yyyy-MM-dd"` /
+   DATE_TIME ISO → epoch-days BY PATTERN (naive datetimes without a tz
+   designator are REJECTED — Date.parse would read them as local time);
+   value-io serializes per targetFieldType, FLOORING to whole UTC days for
+   DATE targets. The comparison sites needed NO edits — both already funnel
+   through normalizeStoredValue/normalizeComputedValue (the micros funnel).
+   Wizard offers Date / Date & time formats; autocomplete suggests date
+   fields; widget renders dates not serials. `overrideValue` NUMBER column
+   stores epoch-days as-is. Verified live: `closeDate + 30` correct and
+   convergence-stable on real opportunities, null propagation, human-edit
+   override on a date target (create/skip/toggle-off-recompute), and Delete
+   Completely cleanup (note: destroyed-trigger override cleanup is a
+   SOFT-delete of override rows). `date * 2` is silently-wrong Excel-style
+   (documented tradeoff). Duration helpers like `days(n)` remain optional
+   polish.
 
 Then:
 

@@ -7,6 +7,7 @@ import {
   targetFieldKind,
   selectionEntryForFieldKind,
 } from 'src/logic-functions/lib/value-io';
+import { MS_PER_DAY } from 'src/logic-functions/lib/date-serial';
 
 describe('targetFieldKind', () => {
   it('defaults to NUMBER for null/undefined/unknown', () => {
@@ -18,6 +19,11 @@ describe('targetFieldKind', () => {
 
   it('recognises CURRENCY', () => {
     expect(targetFieldKind('CURRENCY')).toBe('CURRENCY');
+  });
+
+  it('recognises DATE and DATE_TIME', () => {
+    expect(targetFieldKind('DATE')).toBe('DATE');
+    expect(targetFieldKind('DATE_TIME')).toBe('DATE_TIME');
   });
 });
 
@@ -32,6 +38,11 @@ describe('selectionEntryForFieldKind', () => {
       amountMicros: true,
       currencyCode: true,
     });
+  });
+
+  it('selects the scalar directly for DATE / DATE_TIME (not composite)', () => {
+    expect(selectionEntryForFieldKind('DATE')).toBe(true);
+    expect(selectionEntryForFieldKind('DATE_TIME')).toBe(true);
   });
 });
 
@@ -117,5 +128,74 @@ describe('buildTargetWriteData', () => {
         currencyCode: 'GBP',
       }),
     ).toEqual({ budget: { amountMicros: null, currencyCode: 'GBP' } });
+  });
+
+  it('serializes a DATE target as a "yyyy-MM-dd" UTC string, flooring days', () => {
+    const epochDays = Date.UTC(2026, 6, 3) / MS_PER_DAY;
+    expect(buildTargetWriteData('due', 'DATE', epochDays)).toEqual({
+      due: '2026-07-03',
+    });
+    // A fractional epoch-day (a time-of-day component) floors to the whole day.
+    expect(buildTargetWriteData('due', 'DATE', epochDays + 0.99)).toEqual({
+      due: '2026-07-03',
+    });
+  });
+
+  it('serializes a DATE_TIME target as an ISO UTC string, rounding to ms', () => {
+    const epochDays = Date.parse('2026-07-03T05:00:00.000Z') / MS_PER_DAY;
+    expect(buildTargetWriteData('at', 'DATE_TIME', epochDays)).toEqual({
+      at: '2026-07-03T05:00:00.000Z',
+    });
+  });
+
+  it('clears a DATE / DATE_TIME value with null', () => {
+    expect(buildTargetWriteData('due', 'DATE', null)).toEqual({ due: null });
+    expect(buildTargetWriteData('at', 'DATE_TIME', null)).toEqual({ at: null });
+  });
+});
+
+describe('DATE / DATE_TIME normalize + serialize round-trips (ADR 0011)', () => {
+  it('floors a computed DATE to whole epoch-days', () => {
+    const epochDays = Date.UTC(2026, 6, 3) / MS_PER_DAY;
+    expect(normalizeComputedValue('DATE', epochDays + 0.75)).toBe(epochDays);
+    expect(normalizeComputedValue('DATE', null)).toBeNull();
+  });
+
+  it('rounds a computed DATE_TIME to whole milliseconds', () => {
+    const base = Date.parse('2026-07-03T05:00:00.000Z') / MS_PER_DAY;
+    // Add a sub-millisecond wobble; it must round away.
+    const wobbled = base + 0.4 / MS_PER_DAY;
+    expect(normalizeComputedValue('DATE_TIME', wobbled)).toBe(base);
+  });
+
+  it('round-trips a DATE: store -> parse -> normalize is stable (no rewrite loop)', () => {
+    const computed = Date.UTC(2026, 6, 3) / MS_PER_DAY + 0.3;
+    const normalized = normalizeComputedValue('DATE', computed);
+    const written = buildTargetWriteData('due', 'DATE', normalized).due;
+    const reparsed = normalizeStoredValue(written);
+    // Exact equality — this is what recompute's valuesEqual (===) compares.
+    expect(reparsed).toBe(normalized);
+  });
+
+  it('round-trips a DATE_TIME: store -> parse -> normalize is stable', () => {
+    const computed = Date.parse('2026-07-03T23:30:00.000Z') / MS_PER_DAY + 0.123;
+    const normalized = normalizeComputedValue('DATE_TIME', computed);
+    const written = buildTargetWriteData('at', 'DATE_TIME', normalized).at;
+    const reparsed = normalizeStoredValue(written);
+    expect(reparsed).toBe(normalized);
+  });
+
+  it('treats a 23:30 UTC datetime and a +02:00 crossing-midnight datetime as the same UTC instant', () => {
+    // 2026-07-04T01:30:00+02:00 is 2026-07-03T23:30:00Z — the same instant,
+    // even though the local wall-clock date is the 4th. UTC-only math means the
+    // two strings normalize to the identical epoch-day fraction (DST-immune).
+    const utcLate = normalizeStoredValue('2026-07-03T23:30:00.000Z');
+    const offsetCrossingMidnight = normalizeStoredValue(
+      '2026-07-04T01:30:00.000+02:00',
+    );
+    expect(offsetCrossingMidnight).toBe(utcLate);
+    // And flooring that instant to a DATE yields the UTC day (the 3rd), not the
+    // local day (the 4th).
+    expect(buildTargetWriteData('due', 'DATE', utcLate).due).toBe('2026-07-03');
   });
 });

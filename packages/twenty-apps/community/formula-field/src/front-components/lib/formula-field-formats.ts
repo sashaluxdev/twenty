@@ -2,7 +2,13 @@
 // Twenty field metadata (createOneField input). Pure data + helpers so the
 // mapping is unit-testable without a client.
 
-export type OutputFormat = 'integer' | 'decimal' | 'percent' | 'currency';
+export type OutputFormat =
+  | 'integer'
+  | 'decimal'
+  | 'percent'
+  | 'currency'
+  | 'date'
+  | 'datetime';
 
 export type OutputFormatDefinition = {
   key: OutputFormat;
@@ -10,10 +16,10 @@ export type OutputFormatDefinition = {
   // Shown under the format button in the wizard.
   hint: string;
   // createOneField input pieces.
-  fieldType: 'NUMBER' | 'CURRENCY';
+  fieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME';
   settings: Record<string, unknown> | null;
   // Value stored on FormulaDefinition.targetFieldType (drives value IO).
-  targetFieldType: 'NUMBER' | 'CURRENCY';
+  targetFieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME';
 };
 
 export const OUTPUT_FORMATS: OutputFormatDefinition[] = [
@@ -48,6 +54,25 @@ export const OUTPUT_FORMATS: OutputFormatDefinition[] = [
     fieldType: 'CURRENCY',
     settings: null,
     targetFieldType: 'CURRENCY',
+  },
+  // DATE / DATE_TIME need no settings or defaultValue (server validator is
+  // DEFAULT_NO_VALIDATION, exactly like CURRENCY). Values are the Excel
+  // serial-date model — epoch-days — serialized to the scalar on write.
+  {
+    key: 'date',
+    label: 'Date',
+    hint: 'yyyy-MM-dd',
+    fieldType: 'DATE',
+    settings: null,
+    targetFieldType: 'DATE',
+  },
+  {
+    key: 'datetime',
+    label: 'Date & time',
+    hint: 'ISO UTC',
+    fieldType: 'DATE_TIME',
+    settings: null,
+    targetFieldType: 'DATE_TIME',
   },
 ];
 

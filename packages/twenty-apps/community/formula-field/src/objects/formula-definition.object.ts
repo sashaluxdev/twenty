@@ -69,8 +69,9 @@ export default defineObject({
       name: 'targetFieldType',
       label: 'Target field type',
       description:
-        'Field type of the value field: NUMBER (default) or CURRENCY. ' +
-        'Currency values are read and written as amountMicros.',
+        'Field type of the value field: NUMBER (default), CURRENCY, DATE or ' +
+        'DATE_TIME. Currency values are read and written as amountMicros; ' +
+        'DATE/DATE_TIME use the Excel serial-date model (epoch-days).',
       icon: 'IconCurrencyDollar',
     },
     {
@@ -140,7 +141,8 @@ export default defineObject({
       label: 'Output format',
       description:
         'Wizard-picked output format (integer / decimal / percent / ' +
-        'currency). Doubles as saved draft progress: the wizard persists ' +
+        'currency / date / datetime). Doubles as saved draft progress: the ' +
+        'wizard persists ' +
         'selections as they are made and resumes from them.',
       icon: 'IconForms',
     },

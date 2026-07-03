@@ -18,8 +18,8 @@ read/write renderers (`defineField` can only attach an *existing*
 `FieldMetadataType`). So a "chimeric" field is emulated with two real objects
 (ADR 0001):
 
-1. A **value field** — a genuine `NUMBER` or `CURRENCY` column on the target
-   object. This is what the UI shows and every read returns.
+1. A **value field** — a genuine `NUMBER`, `CURRENCY`, `DATE` or `DATE_TIME`
+   column on the target object. This is what the UI shows and every read returns.
 2. A **FormulaDefinition** record — one per formula — holding the target
    object/field, the expression string, the extracted dependency list, an
    `enabled` flag, operational status, and a last-evaluated heartbeat.
@@ -31,10 +31,11 @@ through a front component on the record page.
 ### Feature summary
 
 - **Guided "Add formula field" wizard** — pick object → output format (integer /
-  decimal / percent / currency) → name; the value field is created at runtime
-  via the metadata API, no redeploy (ADR 0008).
-- **Output formats** — integer, decimal, percent (all `NUMBER`), and currency
-  (`CURRENCY`, stored and computed in **micros**, ×1e6).
+  decimal / percent / currency / date / datetime) → name; the value field is
+  created at runtime via the metadata API, no redeploy (ADR 0008).
+- **Output formats** — integer, decimal, percent (all `NUMBER`), currency
+  (`CURRENCY`, stored and computed in **micros**, ×1e6), and date / datetime
+  (`DATE` / `DATE_TIME`, the Excel serial-date model — **epoch-days**, ADR 0011).
 - **Same-record and cross-record references** — read another field on the same
   record, or a field on a specific record of any object by uuid.
 - **Manual per-record overrides** — a human editing the value directly pins that
@@ -121,11 +122,48 @@ case-insensitive (`IF` / `if` / `If`). Rules:
 - **`if` is a reserved word.** A bare same-record field named `if` is no longer
   expressible (dotted paths like `if.x` still are).
 
+### Dates (Excel serial model, ADR 0011)
+
+Dates are not a separate type — a date simply **is** a number, exactly like
+Excel. The internal representation is **fractional days since the Unix epoch**
+(1970-01-01 UTC): a `DATE` is a whole epoch-day integer, a `DATE_TIME` is
+fractional (`epochMs / 86 400 000`). Everything is plain arithmetic:
+
+```
+closeDate + 30                    30 days after the close date
+renewalDate - closeDate           the number of days between two dates
+startAt + 1 / 24                  one hour after startAt (DATE_TIME target)
+IF(signedDate > closeDate,        dates compare as numbers, so ordering
+   signedDate, closeDate)         works in an IF condition — picks the later
+```
+
+- **Reading.** A `DATE` field (`"yyyy-MM-dd"`) parses to whole epoch-days; a
+  `DATE_TIME` field (ISO UTC) parses to fractional epoch-days. Parsing is by
+  pattern, so a date-shaped value is understood regardless of its declared type.
+  An impossible date (`2026-13-45`) is a `NON_NUMERIC_VALUE` error, never a
+  silent NaN.
+- **Writing.** A `DATE` **target floors to the whole UTC day** (a date has no
+  time) and serializes to `"yyyy-MM-dd"`; a `DATE_TIME` target rounds to the
+  whole millisecond and serializes to ISO UTC. So `closeDate + 0.5` on a DATE
+  target still writes the same calendar day — use a DATE_TIME target to keep the
+  half-day.
+- **UTC only.** All conversion is UTC (`Date.UTC` / `toISOString`), never
+  local-time math — this is DST-immune and timezone-independent. Near midnight
+  this can surprise: `2026-07-03T23:30:00Z` and `2026-07-04T01:30:00+02:00` are
+  the **same instant** and floor to the same DATE (the 3rd), even though one
+  local wall-clock date reads as the 4th.
+- **Silently-wrong types (the honest tradeoff).** Because a date is just a
+  number, nonsensical operations are *not* rejected: `birthDate * 2` computes a
+  meaningless serial number and, on a DATE target, writes it as some far-future
+  date. There is no type system to catch this — the identical tradeoff Excel
+  makes, and the price of keeping the engine number-only.
+
 ### Value & error semantics (ADR 0003)
 
 - **Field kinds coerce to numbers** (`coercion.ts`): numbers pass through;
   booleans → 0/1; a CURRENCY composite referenced without a sub-path → its
-  `amountMicros`; numeric strings parse.
+  `amountMicros`; numeric strings parse; DATE / DATE_TIME strings parse to
+  epoch-days (Excel serial model, ADR 0011).
 - **Null propagates.** A field that exists but is empty resolves to `null`; any
   sub-expression touching a null yields null, and the whole result is null (the
   value field is cleared). This distinguishes "empty input" from "computed 0".

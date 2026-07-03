@@ -17,6 +17,10 @@ import {
   deactivateOverride,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
+import {
+  epochDaysToDateString,
+  epochDaysToIsoDateTime,
+} from 'src/logic-functions/lib/date-serial';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
@@ -67,6 +71,14 @@ const displayValue = (
   if (value === null || value === undefined) return '—';
   if (definition.targetFieldType === 'CURRENCY') {
     return `${(value / 1_000_000).toFixed(2)}`;
+  }
+  // DATE / DATE_TIME values are epoch-days (Excel serial model, ADR 0011) —
+  // show them as their calendar/ISO scalar rather than a raw day count.
+  if (definition.targetFieldType === 'DATE') {
+    return epochDaysToDateString(value);
+  }
+  if (definition.targetFieldType === 'DATE_TIME') {
+    return epochDaysToIsoDateTime(value);
   }
   return String(value);
 };

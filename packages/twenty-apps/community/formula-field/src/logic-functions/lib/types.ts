@@ -17,8 +17,10 @@ export type FormulaDefinitionRecord = {
   name?: string | null;
   targetObject?: string | null;
   targetField?: string | null;
-  // 'NUMBER' (default when null) or 'CURRENCY'. Currency value fields are
-  // composite: the formula's numeric value is the amountMicros sub-field.
+  // 'NUMBER' (default when null), 'CURRENCY', 'DATE' or 'DATE_TIME'. Currency
+  // value fields are composite: the formula's numeric value is the amountMicros
+  // sub-field. DATE/DATE_TIME follow the Excel serial-date model (ADR 0011):
+  // the numeric value is epoch-days, serialized to the scalar on write.
   targetFieldType?: string | null;
   // Currency code written when the record has none (wizard-picked; JPY default).
   currencyCode?: string | null;

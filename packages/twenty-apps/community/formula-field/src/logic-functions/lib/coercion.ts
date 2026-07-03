@@ -1,4 +1,10 @@
 import { FormulaError } from 'src/engine/errors';
+import {
+  isDateOnlyString,
+  isIsoDateTimeString,
+  parseDateOnlyToEpochDays,
+  parseIsoDateTimeToEpochDays,
+} from 'src/logic-functions/lib/date-serial';
 
 // Turns a raw field value (as returned by the GraphQL API) into the number the
 // interpreter works with, applying the coercion rules from ADR 0003.
@@ -77,9 +83,22 @@ export const coerceToNumber = (raw: unknown): number | null => {
     }
   }
 
-  // Numeric strings (the NUMERIC field type can serialise as a string).
   if (typeof raw === 'string' && raw.trim() !== '') {
-    const parsed = Number(raw);
+    const trimmed = raw.trim();
+    // Excel serial-date model (ADR 0011): dates ARE numbers. A DATE scalar
+    // ("yyyy-MM-dd") becomes whole UTC epoch-days; an ISO 8601 datetime becomes
+    // fractional epoch-days. Matched by pattern (kind-agnostic, mirroring the
+    // existing leniency where a numeric string already parses), so a formula can
+    // do `closeDate + 30` regardless of whether the ref is typed DATE. An
+    // impossible date (2026-13-45) throws NON_NUMERIC_VALUE rather than NaN.
+    if (isDateOnlyString(trimmed)) {
+      return parseDateOnlyToEpochDays(trimmed);
+    }
+    if (isIsoDateTimeString(trimmed)) {
+      return parseIsoDateTimeToEpochDays(trimmed);
+    }
+    // Numeric strings (the NUMERIC field type can serialise as a string).
+    const parsed = Number(trimmed);
     if (Number.isFinite(parsed)) {
       return parsed;
     }

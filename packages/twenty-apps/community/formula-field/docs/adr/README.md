@@ -16,3 +16,4 @@ is maintainable without re-deriving the reasoning.
 | [0008](0008-add-formula-field-wizard-and-dynamic-client.md) | "Add formula field" wizard: runtime field creation, currency micros, wildcard triggers, dynamic client | Accepted |
 | [0009](0009-definition-lifecycle-and-operational-status.md) | Definition lifecycle: field deactivation on delete/restore, OFFLINE/UPSTREAM status, FX Status companions | Accepted |
 | [0010](0010-if-conditionals.md) | IF conditionals with condition-confined transient comparisons | Accepted |
+| [0011](0011-excel-serial-dates.md) | Dates as Excel serial numbers (epoch-days), UTC-only, engine untouched | Accepted |
