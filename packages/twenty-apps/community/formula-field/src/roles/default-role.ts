@@ -4,6 +4,10 @@ import { defineRole } from 'twenty-sdk/define';
 // and write the value fields + FormulaDefinition bookkeeping fields. We grant a
 // broad object permission for the demo; a production deploy would scope this
 // down to exactly the target objects.
+//
+// canUpdateAllSettings grants the DATA_MODEL permission that gates
+// createOneField — the "Add formula field" wizard creates value fields
+// dynamically via the metadata API.
 export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER =
   'ac4d683d-f20b-4728-9ab0-7d52938dd36b';
 
@@ -15,4 +19,5 @@ export default defineRole({
   canUpdateAllObjectRecords: true,
   canSoftDeleteAllObjectRecords: true,
   canDestroyAllObjectRecords: false,
+  canUpdateAllSettings: true,
 });

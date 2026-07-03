@@ -11,22 +11,32 @@ import {
   parse,
 } from 'src/engine';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
+import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
+import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
 
 // Formula editor for the FormulaDefinition record page (a custom object, so the
 // page-layout renderer IS used here — unlike standard-object record pages in this
-// build; see ADR 0007). Shows the last computed value + last error and
-// lets the expression be edited with live client-side validation (parse + cycle),
-// then saved. The recompute triggers re-evaluate across records on save.
+// build; see ADR 0007). A fresh definition (no target yet) shows the guided
+// "Add formula field" wizard, which creates the value field dynamically via the
+// metadata API (feature #1). A wired definition shows the last computed value +
+// last error and lets the expression be edited with live client-side validation
+// (parse + cycle), then saved. The recompute triggers re-evaluate across
+// records on save.
 
 type Definition = {
   id: string;
   name: string;
   targetObject: string;
   targetField: string;
+  targetFieldType: string;
+  currencyCode: string;
+  outputFormat: string;
   expression: string;
   enabled: boolean;
   lastValue: number | null;
   lastError: string;
+  status: string;
+  statusReason: string;
 };
 
 const validate = (
@@ -93,10 +103,15 @@ const FormulaDefinitionEditor = () => {
             name: true,
             targetObject: true,
             targetField: true,
+            targetFieldType: true,
+            currencyCode: true,
+            outputFormat: true,
             expression: true,
             enabled: true,
             lastValue: true,
             lastError: true,
+            status: true,
+            statusReason: true,
           },
         },
       },
@@ -108,16 +123,30 @@ const FormulaDefinitionEditor = () => {
         name: edge.node.name ?? '',
         targetObject: edge.node.targetObject ?? '',
         targetField: edge.node.targetField ?? '',
+        targetFieldType: edge.node.targetFieldType ?? 'NUMBER',
+        currencyCode: edge.node.currencyCode ?? '',
+        outputFormat: edge.node.outputFormat ?? '',
         expression: edge.node.expression ?? '',
         enabled: edge.node.enabled ?? false,
         lastValue: edge.node.lastValue ?? null,
         lastError: edge.node.lastError ?? '',
+        status: edge.node.status ?? '',
+        statusReason: edge.node.statusReason ?? '',
       }),
     );
 
     setAllDefinitions(list);
     const current = list.find((entry) => entry.id === recordId) ?? null;
     setDefinition(current);
+    if (current?.targetObject && current?.targetField) {
+      // Converge chip visibility/position in the target object's record-page
+      // layout (throttled; view mutations require this user-token context).
+      convergeFormulaFieldLayout({
+        objectNameSingular: current.targetObject,
+        targetField: current.targetField,
+        statusVisible: current.status !== '',
+      });
+    }
     // Seed the editable draft only once per record — subsequent refreshes update
     // the displayed value/error but leave the user's in-progress text alone.
     if (current && seededRecordId.current !== recordId) {
@@ -143,9 +172,15 @@ const FormulaDefinitionEditor = () => {
     setSaving(true);
     try {
       const client = new CoreApiClient();
+      // enabled: true — a fresh definition is auto-disabled by save-time
+      // validation until it has a target + expression; saving a valid
+      // expression (re-)activates it and triggers the full recompute.
       await client.mutation({
         updateFormulaDefinition: {
-          __args: { id: definition.id, data: { expression: draft } },
+          __args: {
+            id: definition.id,
+            data: { expression: draft, enabled: true },
+          },
           id: true,
         },
       });
@@ -163,14 +198,48 @@ const FormulaDefinitionEditor = () => {
   if (loading) return <div style={s.muted}>Loading…</div>;
   if (!definition) return <div style={s.muted}>Formula not found.</div>;
 
+  // A definition without a target FIELD is a fresh record or a resumed draft:
+  // run the guided setup, seeded from the persisted draft selections.
+  if (!definition.targetField) {
+    return (
+      <div style={s.container}>
+        <FormulaSetupWizard
+          draft={{
+            id: definition.id,
+            name: definition.name,
+            targetObject: definition.targetObject,
+            outputFormat: definition.outputFormat,
+            currencyCode: definition.currencyCode,
+          }}
+          onCreated={load}
+        />
+      </div>
+    );
+  }
+
   const dirty = draft !== definition.expression;
+  const awaitingExpression = !definition.expression && !dirty;
 
   return (
     <div style={s.container}>
+      {definition.status === 'OFFLINE' ? (
+        <div style={s.bannerOffline}>
+          OFFLINE — {definition.statusReason || 'an input field is gone'}.
+          Values are frozen; recompute is paused.
+        </div>
+      ) : definition.status === 'UPSTREAM' ? (
+        <div style={s.bannerUpstream}>
+          UPSTREAM BREAK — {definition.statusReason || 'a formula earlier in the chain is broken'}.
+          Still computing, but inputs may be stale.
+        </div>
+      ) : null}
       <div style={s.header}>
         <div>
           <div style={s.target}>
             {definition.targetObject}.{definition.targetField}
+            {definition.targetFieldType === 'CURRENCY' ? (
+              <span style={s.hint}> currency (micros)</span>
+            ) : null}
             {!definition.enabled ? <span style={s.err}> (disabled)</span> : null}
           </div>
           <div style={s.label}>Current value</div>
@@ -205,7 +274,11 @@ const FormulaDefinitionEditor = () => {
         </span>
       </div>
 
-      {liveError ? (
+      {awaitingExpression ? (
+        <div style={s.hint}>
+          Field created — write the formula expression and save to activate.
+        </div>
+      ) : liveError ? (
         <div style={s.err}>{liveError}</div>
       ) : definition.lastError ? (
         <div style={s.err}>{definition.lastError}</div>
@@ -270,6 +343,24 @@ const s: Record<string, React.CSSProperties> = {
   muted: { padding: '16px', color: '#908e99' },
   err: { color: '#e0483d', fontSize: '12px' },
   ok: { color: '#3ba55d', fontSize: '12px' },
+  bannerOffline: {
+    background: '#fdecea',
+    border: '1px solid #e0483d',
+    color: '#b3271e',
+    borderRadius: '4px',
+    padding: '8px 10px',
+    fontSize: '12px',
+    marginBottom: '12px',
+  },
+  bannerUpstream: {
+    background: '#fff4e5',
+    border: '1px solid #e58600',
+    color: '#a35c00',
+    borderRadius: '4px',
+    padding: '8px 10px',
+    fontSize: '12px',
+    marginBottom: '12px',
+  },
 };
 
 export const FORMULA_DEFINITION_EDITOR_UNIVERSAL_IDENTIFIER =

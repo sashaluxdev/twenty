@@ -1,10 +1,11 @@
-import { CoreApiClient, type CoreSchema } from 'twenty-client-sdk/core';
+import { type CoreSchema } from 'twenty-client-sdk/core';
 import {
   type DatabaseEventPayload,
   defineLogicFunction,
   type ObjectRecordCreateEvent,
 } from 'twenty-sdk/define';
 
+import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { handleFormulaChange } from 'src/logic-functions/lib/handle-formula-change';
 
 // Validate + index a formula the moment it is created.
@@ -13,7 +14,9 @@ const handler = async (
     ObjectRecordCreateEvent<CoreSchema.FormulaDefinition>
   >,
 ): Promise<Record<string, unknown>> => {
-  const client = new CoreApiClient();
+  // Dynamic client: the validation path recomputes against target objects whose
+  // value fields may have been created after deploy (wizard).
+  const client = createDynamicCoreClient();
   const after = payload.properties.after as unknown as Parameters<
     typeof handleFormulaChange
   >[0]['after'];

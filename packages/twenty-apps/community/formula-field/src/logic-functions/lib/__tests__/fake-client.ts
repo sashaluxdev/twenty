@@ -24,10 +24,14 @@ const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1)
 export class FakeClient implements FormulaClient {
   // object name -> id -> record
   private store = new Map<string, Map<string, Rec>>();
+  // object name -> field name -> FieldMetadataType (for fieldKinds)
+  private fieldKindsByObject = new Map<string, Map<string, string>>();
   public queries = 0;
   public mutations = 0;
   // Records every value-field write as "object:id:field=value" for assertions.
   public writes: string[] = [];
+  // Every query selection object, for asserting the built selections.
+  public querySelections: any[] = [];
 
   seed(object: string, records: Rec[]): void {
     const map = this.store.get(object) ?? new Map<string, Rec>();
@@ -41,12 +45,20 @@ export class FakeClient implements FormulaClient {
     return this.store.get(object)?.get(id);
   }
 
+  setFieldKinds(object: string, kinds: Record<string, string>): void {
+    this.fieldKindsByObject.set(object, new Map(Object.entries(kinds)));
+  }
+
+  fieldKinds = async (object: string): Promise<Map<string, string>> =>
+    this.fieldKindsByObject.get(object) ?? new Map();
+
   private objectKeys(): string[] {
     return Array.from(this.store.keys());
   }
 
   async query(selection: any): Promise<any> {
     this.queries += 1;
+    this.querySelections.push(selection);
     const key = Object.keys(selection)[0];
     const node = selection[key];
 

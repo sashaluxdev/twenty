@@ -2,6 +2,7 @@ import {
   loadAllEnabledFormulas,
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
+import { refreshFormulaStatuses } from 'src/logic-functions/lib/formula-status';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 import { validateFormula } from 'src/logic-functions/lib/save-validation';
 import {
@@ -16,6 +17,8 @@ const BOOKKEEPING_FIELDS = new Set([
   'lastEvaluatedAt',
   'lastValue',
   'lastError',
+  'status',
+  'statusReason',
 ]);
 
 const isPureBookkeepingUpdate = (
@@ -92,6 +95,8 @@ export const handleFormulaChange = async ({
         lastError: result.error,
       });
     }
+    // The formula dropped out of the enabled set — dependents' flags change.
+    await refreshFormulaStatuses(client);
     return { handled: true, valid: false, error: result.error };
   }
 
@@ -108,6 +113,14 @@ export const handleFormulaChange = async ({
       dependencies: result.dependencies,
       lastError: '',
     });
+  }
+
+  // A save can heal or break the dependency graph (re-pointed inputs, new
+  // chains) — refresh operational statuses BEFORE recompute so an OFFLINE
+  // formula is skipped instead of error-spamming on unfetchable inputs.
+  const statusResult = await refreshFormulaStatuses(client);
+  if (statusResult.byId.get(after.id)?.status === 'OFFLINE') {
+    return { handled: true, valid: true, skipped: 'offline' };
   }
 
   // Populate/refresh values across all target records now that the formula is

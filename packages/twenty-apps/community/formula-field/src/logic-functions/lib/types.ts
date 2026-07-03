@@ -1,10 +1,14 @@
-// Minimal client surface the recompute engine needs. CoreApiClient from
-// twenty-client-sdk/core satisfies this, but depending on the narrow shape lets
-// the engine be unit-tested with a fake client (no server, no network).
+// Minimal client surface the recompute engine needs. createDynamicCoreClient()
+// satisfies this; depending on the narrow shape lets the engine be unit-tested
+// with a fake client (no server, no network).
 
 export type FormulaClient = {
   query: (selection: any) => Promise<any>;
   mutation: (selection: any) => Promise<any>;
+  // Field name -> FieldMetadataType for an object (e.g. 'CURRENCY'). Used to
+  // build sub-selections for composite dependency fields when fetching records.
+  // Optional: absent (or failing) resolvers fall back to scalar selections.
+  fieldKinds?: (objectName: string) => Promise<Map<string, string>>;
 };
 
 // A FormulaDefinition record as the engine consumes it.
@@ -13,6 +17,19 @@ export type FormulaDefinitionRecord = {
   name?: string | null;
   targetObject?: string | null;
   targetField?: string | null;
+  // 'NUMBER' (default when null) or 'CURRENCY'. Currency value fields are
+  // composite: the formula's numeric value is the amountMicros sub-field.
+  targetFieldType?: string | null;
+  // Currency code written when the record has none (wizard-picked; JPY default).
+  currencyCode?: string | null;
+  // True when the wizard created the value field for this definition —
+  // provenance for the delete/restore field lifecycle.
+  createdField?: boolean | null;
+  // Operational status (system-managed): '' / 'OK' healthy, 'OFFLINE' when an
+  // input field is deactivated/missing, 'UPSTREAM' when a formula earlier in
+  // the dependency chain is broken.
+  status?: string | null;
+  statusReason?: string | null;
   expression?: string | null;
   enabled?: boolean | null;
   lastValue?: number | null;

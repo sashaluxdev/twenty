@@ -20,6 +20,10 @@ import {
   type FormulaClient,
   type RecomputeOutcome,
 } from 'src/logic-functions/lib/types';
+import {
+  normalizeComputedValue,
+  normalizeStoredValue,
+} from 'src/logic-functions/lib/value-io';
 
 // Shared body for every per-object database-event trigger. Given a record that
 // changed on `objectName`, it recomputes:
@@ -100,17 +104,13 @@ export const handleRecordUpdate = async ({
           candidate.targetField === field,
       );
       if (!formula) continue; // not a formula value field
+      // OFFLINE: inputs are unfetchable, so "what would the formula say?" has
+      // no answer — never turn edits into overrides while broken.
+      if (formula.status === 'OFFLINE') continue;
 
-      const rawValue = after?.[field];
-      const writtenValue =
-        typeof rawValue === 'number'
-          ? rawValue
-          : rawValue == null
-            ? null
-            : Number(rawValue);
-      const normalized = Number.isFinite(writtenValue as number)
-        ? (writtenValue as number)
-        : null;
+      // Composite-aware: a CURRENCY value field arrives as
+      // { amountMicros, currencyCode } — its numeric value is the micros.
+      const normalized = normalizeStoredValue(after?.[field]);
 
       const computed = await computeFormulaValueForRecord({
         client,
@@ -118,9 +118,13 @@ export const handleRecordUpdate = async ({
         targetRecordId: recordId,
         prefetchedRecord: after ?? undefined,
       });
+      const computedStored = normalizeComputedValue(
+        formula.targetFieldType,
+        computed.value,
+      );
 
       // Matches the formula -> app recompute -> not an override.
-      if (computed.error === null && numbersEqual(computed.value, normalized)) {
+      if (computed.error === null && numbersEqual(computedStored, normalized)) {
         continue;
       }
       await upsertOverride(client, objectName, field, recordId, normalized);
@@ -129,6 +133,12 @@ export const handleRecordUpdate = async ({
 
   for (const formula of formulas) {
     if (isCyclicTarget(cyclic, formula)) {
+      continue;
+    }
+
+    // OFFLINE: an input field is deactivated/missing — recompute would only
+    // error against unfetchable inputs. UPSTREAM formulas keep computing.
+    if (formula.status === 'OFFLINE') {
       continue;
     }
 

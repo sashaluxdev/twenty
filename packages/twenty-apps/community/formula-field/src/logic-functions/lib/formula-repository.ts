@@ -12,10 +12,15 @@ const FORMULA_FIELDS = {
   name: true,
   targetObject: true,
   targetField: true,
+  targetFieldType: true,
+  currencyCode: true,
+  createdField: true,
   expression: true,
   enabled: true,
   lastValue: true,
   lastError: true,
+  status: true,
+  statusReason: true,
 } as const;
 
 // Loads all enabled formula definitions (optionally filtered by target object),
@@ -81,6 +86,9 @@ export type BookkeepingUpdate = {
   dependencies?: unknown;
   // Set to disable a formula that failed validation (e.g. cycle).
   enabled?: boolean;
+  // Operational status (OFFLINE/UPSTREAM machinery) — system-managed.
+  status?: string;
+  statusReason?: string;
 };
 
 // Writes bookkeeping fields on a FormulaDefinition. Write-avoidant callers

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CoreApiClient } from 'twenty-client-sdk/core';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import { FORMULA_EDITOR_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { useRecordId } from 'twenty-sdk/front-component';
 
@@ -16,18 +17,29 @@ import {
   deactivateOverride,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
+import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
+import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
+import {
+  buildTargetWriteData,
+  normalizeStoredValue,
+  selectionEntryForFieldKind,
+} from 'src/logic-functions/lib/value-io';
 
-// Opportunity record-page "Formulas" tab. For each formula field, for THIS
-// record, it shows the value, the editable shared expression (with autocomplete),
-// and a red/green "Override" toggle (#2):
+// Record-page "Formulas" tab (object-agnostic — the wizard attaches it to any
+// object that gets a formula field). For each formula field, for THIS record,
+// it shows the value, the editable shared expression (with autocomplete), and
+// a red/green "Override" toggle (#2):
 //   - green = the formula controls this record's value,
 //   - red   = manually overridden; the formula leaves this record alone.
 // Turning Override on pins the current value; turning it off resets the record to
 // the formula. Because the value field is editable, a human editing it directly
 // is ALSO auto-detected as an override server-side — the toggle reflects that.
-
-const TARGET_OBJECT = 'opportunity';
+//
+// The execution context exposes only the record id, not which object's page
+// the widget is on — so the host object is resolved by probing the record id
+// against the distinct target objects of existing formulas (one cheap query
+// each, once per mount).
 
 const capitalize = (value: string): string =>
   value.charAt(0).toUpperCase() + value.slice(1);
@@ -35,14 +47,33 @@ const capitalize = (value: string): string =>
 type Definition = {
   id: string;
   name: string;
+  targetObject: string;
   targetField: string;
+  targetFieldType: string;
+  currencyCode: string;
   expression: string;
   enabled: boolean;
   lastError: string;
+  status: string;
+  statusReason: string;
+};
+
+// Values are handled in micros for CURRENCY fields (like the engine); shown to
+// the user in currency units.
+const displayValue = (
+  definition: Definition,
+  value: number | null | undefined,
+): string => {
+  if (value === null || value === undefined) return '—';
+  if (definition.targetFieldType === 'CURRENCY') {
+    return `${(value / 1_000_000).toFixed(2)}`;
+  }
+  return String(value);
 };
 
 const validateExpression = (
   expression: string,
+  hostObject: string,
   targetField: string,
   allDefinitions: Definition[],
 ): string | null => {
@@ -60,7 +91,7 @@ const validateExpression = (
     .map((definition) => {
       try {
         return {
-          object: TARGET_OBJECT,
+          object: definition.targetObject,
           field: definition.targetField,
           dependencies: extractDependenciesFromAst(parse(definition.expression)),
         };
@@ -72,7 +103,7 @@ const validateExpression = (
 
   const cycle = detectCycle([
     ...others,
-    { object: TARGET_OBJECT, field: targetField, dependencies },
+    { object: hostObject, field: targetField, dependencies },
   ]);
   return cycle.hasCycle ? `Dependency cycle: ${cycle.cycle.join(' -> ')}` : null;
 };
@@ -132,38 +163,93 @@ const FormulaEditor = () => {
   const [loading, setLoading] = useState(true);
   // Transient per-formula hint, e.g. "Override value restored".
   const [restoredHint, setRestoredHint] = useState<Record<string, boolean>>({});
+  // The record id never changes for a mounted widget — resolve its object once.
+  const resolvedHost = useRef<string | null>(null);
 
   const load = useCallback(async () => {
-    const client = new CoreApiClient();
+    // Dynamic client: wizard-created value fields are not in the genql type map.
+    const client = createDynamicCoreClient();
 
     const defsResponse = await client.query({
       formulaDefinitions: {
-        __args: { first: 100, filter: { targetObject: { eq: TARGET_OBJECT } } },
+        __args: { first: 100 },
         edges: {
           node: {
             id: true,
             name: true,
+            targetObject: true,
             targetField: true,
+            targetFieldType: true,
+            currencyCode: true,
             expression: true,
             enabled: true,
             lastError: true,
+            status: true,
+            statusReason: true,
           },
         },
       },
     });
 
-    const defs: Definition[] = (defsResponse?.formulaDefinitions?.edges ?? []).map(
+    const allDefs: Definition[] = (defsResponse?.formulaDefinitions?.edges ?? [])
+      // Wizard drafts persist targetObject before a field exists — not
+      // renderable rows yet.
+      .filter((edge: any) => (edge?.node?.targetField ?? '') !== '')
+      .map(
       (edge: any) => ({
         id: edge.node.id,
         name: edge.node.name ?? '',
+        targetObject: edge.node.targetObject ?? '',
         targetField: edge.node.targetField ?? '',
+        targetFieldType: edge.node.targetFieldType ?? 'NUMBER',
+        currencyCode: edge.node.currencyCode ?? '',
         expression: edge.node.expression ?? '',
         enabled: edge.node.enabled ?? false,
         lastError: edge.node.lastError ?? '',
+        status: edge.node.status ?? '',
+        statusReason: edge.node.statusReason ?? '',
       }),
     );
 
+    // Resolve which object's record page hosts this widget: probe the record
+    // id against each distinct target object (the context has no object name).
+    if (!resolvedHost.current && recordId) {
+      const candidates = Array.from(
+        new Set(allDefs.map((definition) => definition.targetObject)),
+      ).filter(Boolean);
+      const probes = await Promise.all(
+        candidates.map((candidate) =>
+          client
+            .query({
+              [candidate]: {
+                __args: { filter: { id: { eq: recordId } } },
+                id: true,
+              },
+            })
+            .then((response: any) => (response?.[candidate] ? candidate : null))
+            .catch(() => null),
+        ),
+      );
+      resolvedHost.current = probes.find(Boolean) ?? null;
+    }
+    const host = resolvedHost.current;
+
+    const defs = host
+      ? allDefs.filter((definition) => definition.targetObject === host)
+      : [];
+
     setDefinitions(defs);
+
+    // Converge chip visibility/position in the record-page layout (throttled;
+    // must run client-side — view mutations reject the app's server token).
+    for (const definition of defs) {
+      convergeFormulaFieldLayout({
+        objectNameSingular: definition.targetObject,
+        targetField: definition.targetField,
+        statusVisible: definition.status !== '',
+      });
+    }
+
     setDrafts((previous) => {
       const next = { ...previous };
       for (const definition of defs) {
@@ -172,20 +258,26 @@ const FormulaEditor = () => {
       return next;
     });
 
-    if (recordId && defs.length > 0) {
+    if (host && recordId && defs.length > 0) {
       const selection: Record<string, unknown> = { id: true };
-      for (const definition of defs) selection[definition.targetField] = true;
+      for (const definition of defs) {
+        // CURRENCY value fields are composite and need a sub-selection.
+        selection[definition.targetField] = selectionEntryForFieldKind(
+          definition.targetFieldType,
+        );
+      }
       const recordResponse = await client.query({
-        [TARGET_OBJECT]: {
+        [host]: {
           __args: { filter: { id: { eq: recordId } } },
           ...selection,
         },
       });
-      const record = recordResponse?.[TARGET_OBJECT] ?? {};
+      const record = recordResponse?.[host] ?? {};
       const nextValues: Record<string, number | null> = {};
       for (const definition of defs) {
-        nextValues[definition.targetField] =
-          (record[definition.targetField] as number | null) ?? null;
+        nextValues[definition.targetField] = normalizeStoredValue(
+          record[definition.targetField],
+        );
       }
       setValues(nextValues);
 
@@ -194,7 +286,7 @@ const FormulaEditor = () => {
           __args: {
             first: 100,
             filter: {
-              targetObject: { eq: TARGET_OBJECT },
+              targetObject: { eq: host },
               recordId: { eq: recordId },
             },
           },
@@ -230,7 +322,12 @@ const FormulaEditor = () => {
   const saveExpression = useCallback(
     async (definition: Definition) => {
       const expression = drafts[definition.id] ?? '';
-      const error = validateExpression(expression, definition.targetField, definitions);
+      const error = validateExpression(
+        expression,
+        definition.targetObject,
+        definition.targetField,
+        definitions,
+      );
       if (error) {
         setDefinitions((prev) =>
           prev.map((entry) =>
@@ -241,10 +338,13 @@ const FormulaEditor = () => {
       }
       setBusy(definition.id);
       try {
-        const client = new CoreApiClient();
+        // Dynamic client: wizard-created value fields are not in the genql type map.
+    const client = createDynamicCoreClient();
+        // enabled: true — saving a valid expression (re-)activates a formula
+        // that save-time validation had disabled (fresh or previously invalid).
         await client.mutation({
           updateFormulaDefinition: {
-            __args: { id: definition.id, data: { expression } },
+            __args: { id: definition.id, data: { expression, enabled: true } },
             id: true,
           },
         });
@@ -262,23 +362,31 @@ const FormulaEditor = () => {
       setBusy(definition.id);
       setRestoredHint((prev) => ({ ...prev, [definition.id]: false }));
       try {
-        const client = new CoreApiClient();
+        // Dynamic client: wizard-created value fields are not in the genql type map.
+    const client = createDynamicCoreClient();
         if (turnOn) {
           // Restore a previously-set override value if one exists, otherwise pin
           // the current value.
           const restored = await activateOverride(
             client,
-            TARGET_OBJECT,
+            definition.targetObject,
             definition.targetField,
             recordId,
           );
           if (restored) {
-            // Write the retained value back to the field.
+            // Write the retained value back to the field (composite-aware; a
+            // restored CURRENCY value defaults its code to USD).
             await client.mutation({
-              [`update${capitalize(TARGET_OBJECT)}`]: {
+              [`update${capitalize(definition.targetObject)}`]: {
                 __args: {
                   id: recordId,
-                  data: { [definition.targetField]: restored.overrideValue },
+                  data: buildTargetWriteData(
+                    definition.targetField,
+                    definition.targetFieldType,
+                    restored.overrideValue,
+                    undefined,
+                    definition.currencyCode,
+                  ),
                 },
                 id: true,
               },
@@ -295,7 +403,7 @@ const FormulaEditor = () => {
             const current = values[definition.targetField] ?? null;
             await upsertOverride(
               client,
-              TARGET_OBJECT,
+              definition.targetObject,
               definition.targetField,
               recordId,
               current,
@@ -309,7 +417,7 @@ const FormulaEditor = () => {
           // Turn off but KEEP the value; hand the record back to the formula.
           await deactivateOverride(
             client,
-            TARGET_OBJECT,
+            definition.targetObject,
             definition.targetField,
             recordId,
           );
@@ -327,8 +435,10 @@ const FormulaEditor = () => {
             client,
             formula: {
               id: definition.id,
-              targetObject: TARGET_OBJECT,
+              targetObject: definition.targetObject,
               targetField: definition.targetField,
+              targetFieldType: definition.targetFieldType,
+              currencyCode: definition.currencyCode,
               expression: definition.expression,
               enabled: definition.enabled,
             },
@@ -356,7 +466,12 @@ const FormulaEditor = () => {
     return definitions.map((definition) => {
       const draft = drafts[definition.id] ?? '';
       const dirty = draft !== definition.expression;
-      const liveError = validateExpression(draft, definition.targetField, definitions);
+      const liveError = validateExpression(
+        draft,
+        definition.targetObject,
+        definition.targetField,
+        definitions,
+      );
       const overrideEntry = overrides[definition.targetField];
       const isOverridden = overrideEntry?.active ?? false;
       const value = isOverridden
@@ -366,13 +481,21 @@ const FormulaEditor = () => {
 
       return (
         <div key={definition.id} style={styles.row}>
+          {definition.status === 'OFFLINE' ? (
+            <div style={styles.bannerOffline}>
+              OFFLINE — {definition.statusReason || 'an input field is gone'}
+            </div>
+          ) : definition.status === 'UPSTREAM' ? (
+            <div style={styles.bannerUpstream}>
+              UPSTREAM BREAK — {definition.statusReason ||
+                'a formula earlier in the chain is broken'}
+            </div>
+          ) : null}
           <div style={styles.header}>
             <span style={styles.name}>
               {definition.name || definition.targetField}
             </span>
-            <span style={styles.value}>
-              {value === null || value === undefined ? '—' : value}
-            </span>
+            <span style={styles.value}>{displayValue(definition, value)}</span>
           </div>
           <div style={styles.fieldLabel}>
             {definition.targetField}
@@ -387,7 +510,7 @@ const FormulaEditor = () => {
               onChange={(next) =>
                 setDrafts((prev) => ({ ...prev, [definition.id]: next }))
               }
-              targetObject={TARGET_OBJECT}
+              targetObject={definition.targetObject}
             />
             <button
               style={{
@@ -518,10 +641,27 @@ const styles: Record<string, React.CSSProperties> = {
   },
   buttonDisabled: { background: '#c3c2c9', cursor: 'default' },
   error: { color: '#e0483d', fontSize: '11px', marginTop: '4px' },
+  bannerOffline: {
+    background: '#fdecea',
+    border: '1px solid #e0483d',
+    color: '#b3271e',
+    borderRadius: '4px',
+    padding: '6px 8px',
+    fontSize: '11px',
+    marginBottom: '8px',
+  },
+  bannerUpstream: {
+    background: '#fff4e5',
+    border: '1px solid #e58600',
+    color: '#a35c00',
+    borderRadius: '4px',
+    padding: '6px 8px',
+    fontSize: '11px',
+    marginBottom: '8px',
+  },
 };
 
-export const FORMULA_EDITOR_UNIVERSAL_IDENTIFIER =
-  '37e2574e-615a-499d-b6e2-38241cc31cc3';
+export { FORMULA_EDITOR_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
 
 export default defineFrontComponent({
   universalIdentifier: FORMULA_EDITOR_UNIVERSAL_IDENTIFIER,

@@ -4,6 +4,12 @@ import { FormulaError, isFormulaError } from 'src/engine/errors';
 import { evaluate, type VariableResolver } from 'src/engine/evaluator';
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
+import {
+  buildTargetWriteData,
+  normalizeComputedValue,
+  normalizeStoredValue,
+  selectionEntryForFieldKind,
+} from 'src/logic-functions/lib/value-io';
 import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
 import {
   type FormulaClient,
@@ -27,7 +33,7 @@ const IRREGULAR_PLURALS: Record<string, string> = {
   person: 'people',
 };
 
-const pluralize = (singular: string): string => {
+export const pluralize = (singular: string): string => {
   if (IRREGULAR_PLURALS[singular]) {
     return IRREGULAR_PLURALS[singular];
   }
@@ -53,22 +59,51 @@ const fieldSelection = (fields: string[]): Record<string, boolean> => {
 };
 
 // Fetches a single record of `object` by id, selecting the given root fields.
-// Returns null if the record is not found.
+// `selectionOverrides` replaces entries that need a sub-selection (composite
+// fields like CURRENCY). Returns null if the record is not found.
 const fetchRecord = async (
   client: FormulaClient,
   object: string,
   recordId: string,
   fields: string[],
+  selectionOverrides?: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> => {
   const response = await withRetry(() =>
     client.query({
       [object]: {
         __args: { filter: { id: { eq: recordId } } },
         ...fieldSelection(fields),
+        ...selectionOverrides,
       },
     }),
   );
   return (response?.[object] as Record<string, unknown> | null) ?? null;
+};
+
+// Field name -> FieldMetadataType for an object, via the client's optional
+// metadata-backed resolver. Empty map (scalar selections) when unavailable.
+const resolveFieldKinds = async (
+  client: FormulaClient,
+  objectName: string,
+): Promise<Map<string, string>> =>
+  client.fieldKinds ? await client.fieldKinds(objectName) : new Map();
+
+// Sub-selection overrides for dependency fields whose kind is composite
+// (CURRENCY). Without these the server SILENTLY returns null for a scalar
+// selection on a composite field (no error!), so formulas with currency
+// inputs null-propagated to nothing on activation.
+const dependencySelectionOverrides = (
+  fields: string[] | Set<string>,
+  fieldKinds: Map<string, string>,
+): Record<string, unknown> => {
+  const overrides: Record<string, unknown> = {};
+  for (const field of fields) {
+    const entry = selectionEntryForFieldKind(fieldKinds.get(field));
+    if (entry !== true) {
+      overrides[field] = entry;
+    }
+  }
+  return overrides;
 };
 
 // Fetches every cross-referenced record once (grouped by object + id) and
@@ -104,6 +139,7 @@ const fetchCrossRecords = async (
       object,
       recordId,
       Array.from(fields),
+      dependencySelectionOverrides(fields, await resolveFieldKinds(client, object)),
     );
     results.set(crossKey(object, recordId), record);
   }
@@ -202,10 +238,20 @@ export const computeFormulaValueForRecord = async ({
 
   if (needsFetch) {
     try {
-      sameRecord = await fetchRecord(client, targetObject, targetRecordId, [
-        ...dependencies.sameRecordFields,
-        targetField,
-      ]);
+      const fieldKinds = await resolveFieldKinds(client, targetObject);
+      sameRecord = await fetchRecord(
+        client,
+        targetObject,
+        targetRecordId,
+        dependencies.sameRecordFields,
+        {
+          ...dependencySelectionOverrides(
+            dependencies.sameRecordFields,
+            fieldKinds,
+          ),
+          [targetField]: selectionEntryForFieldKind(formula.targetFieldType),
+        },
+      );
     } catch (error) {
       return {
         value: null,
@@ -291,14 +337,15 @@ export const recomputeForRecord = async ({
   if (computed.error !== null || computed.sameRecord === null) {
     return { ...base, error: computed.error ?? 'Record not found' };
   }
-  const result = computed.value;
+  // CURRENCY stores integer micros — compare and write the rounded value, or a
+  // fractional result would never match the stored value and rewrite forever.
+  const result = normalizeComputedValue(formula.targetFieldType, computed.value);
   const sameRecord = computed.sameRecord;
 
   const currentRaw = navigatePath(sameRecord, targetField);
-  const currentValue =
-    currentRaw === undefined || currentRaw === null
-      ? null
-      : (currentRaw as number);
+  // Composite-aware read: for CURRENCY value fields the stored numeric value is
+  // the amountMicros sub-field (micros end-to-end).
+  const currentValue = normalizeStoredValue(currentRaw);
 
   // No-op suppression / recursion guard: skip the write when nothing changed.
   if (valuesEqual(currentValue, result)) {
@@ -310,7 +357,16 @@ export const recomputeForRecord = async ({
     await withRetry(() =>
       client.mutation({
         [mutationName]: {
-          __args: { id: targetRecordId, data: { [targetField]: result } },
+          __args: {
+            id: targetRecordId,
+            data: buildTargetWriteData(
+              targetField,
+              formula.targetFieldType,
+              result,
+              currentRaw,
+              formula.currencyCode,
+            ),
+          },
           id: true,
         },
       }),

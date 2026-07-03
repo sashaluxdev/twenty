@@ -13,12 +13,18 @@ export const FORMULA_DEFINITION_FIELDS = {
   name: '704bbdc2-f6c1-44e2-bc38-62bf5611bf8a',
   targetObject: 'c6cd6e1c-e06c-4b7e-9337-03b139fe1358',
   targetField: '9576bd19-db1b-428f-adf9-7b1dbc78e613',
+  targetFieldType: '3a7d41e8-d055-4573-85f9-a38d5f23c258',
+  currencyCode: '73e22ce5-7b4e-48d4-9f96-00ca3973af35',
+  createdField: '9cc13837-c40a-4987-947e-a6635e94aa12',
+  outputFormat: '89f978e2-b08a-4778-98d6-fbfe52efd162',
   expression: 'd7750c25-b265-48aa-92a7-a649855449d7',
   dependencies: 'a39455b0-c789-441a-8fea-1d6c87277446',
   enabled: '64790652-18a3-47d9-a1ac-8883d0830a7a',
   lastEvaluatedAt: '2ec77311-1738-44f0-8179-ba8f11557282',
   lastValue: 'c84ad4eb-709b-4897-aec4-bfcfb9177ff4',
   lastError: 'b4d168a8-bb76-4c32-b431-be862934dcbd',
+  status: 'e3e1fcbf-c19d-4d24-a7cd-b7b1c7ad3c70',
+  statusReason: '0e500f2b-30c2-489a-aee6-0d717e1e0418',
 } as const;
 
 export default defineObject({
@@ -56,6 +62,26 @@ export default defineObject({
       label: 'Target field',
       description: 'Name of the NUMBER value field to write the result into.',
       icon: 'IconMathSymbols',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.targetFieldType,
+      type: FieldType.TEXT,
+      name: 'targetFieldType',
+      label: 'Target field type',
+      description:
+        'Field type of the value field: NUMBER (default) or CURRENCY. ' +
+        'Currency values are read and written as amountMicros.',
+      icon: 'IconCurrencyDollar',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.currencyCode,
+      type: FieldType.TEXT,
+      name: 'currencyCode',
+      label: 'Currency code',
+      description:
+        'For CURRENCY value fields: the code written when a record has none ' +
+        '(picked in the wizard; JPY when unset).',
+      icon: 'IconCurrencyYen',
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.expression,
@@ -106,6 +132,52 @@ export default defineObject({
       label: 'Last error',
       description: 'Last evaluation/validation error, empty when healthy.',
       icon: 'IconAlertTriangle',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.outputFormat,
+      type: FieldType.TEXT,
+      name: 'outputFormat',
+      label: 'Output format',
+      description:
+        'Wizard-picked output format (integer / decimal / percent / ' +
+        'currency). Doubles as saved draft progress: the wizard persists ' +
+        'selections as they are made and resumes from them.',
+      icon: 'IconForms',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.createdField,
+      type: FieldType.BOOLEAN,
+      name: 'createdField',
+      label: 'Created field',
+      description:
+        'True when the wizard created the value field (and its FX Status ' +
+        'companion) for this definition — the delete/restore lifecycle only ' +
+        'deactivates/reactivates fields it created. Fields created via ' +
+        'createOneField are stamped with the workspace custom application, ' +
+        'not this app, so explicit provenance is required.',
+      icon: 'IconWand',
+      defaultValue: false,
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.status,
+      type: FieldType.TEXT,
+      name: 'status',
+      label: 'Status',
+      description:
+        'Operational status (system-managed): empty/OK = healthy, OFFLINE = ' +
+        'an input field is deactivated or missing, UPSTREAM = a formula ' +
+        'earlier in the dependency chain is broken.',
+      icon: 'IconHeartbeat',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.statusReason,
+      type: FieldType.TEXT,
+      name: 'statusReason',
+      label: 'Status reason',
+      description:
+        'What broke: the missing input (OFFLINE) or where in the chain the ' +
+        'break is (UPSTREAM). System-managed.',
+      icon: 'IconInfoCircle',
     },
   ],
 });

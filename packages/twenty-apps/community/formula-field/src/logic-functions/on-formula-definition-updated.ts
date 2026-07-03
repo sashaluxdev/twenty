@@ -1,10 +1,11 @@
-import { CoreApiClient, type CoreSchema } from 'twenty-client-sdk/core';
+import { type CoreSchema } from 'twenty-client-sdk/core';
 import {
   type DatabaseEventPayload,
   defineLogicFunction,
   type ObjectRecordUpdateEvent,
 } from 'twenty-sdk/define';
 
+import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { handleFormulaChange } from 'src/logic-functions/lib/handle-formula-change';
 
 // Re-validate + re-index a formula whenever it is edited. Ignores the app's own
@@ -14,7 +15,9 @@ const handler = async (
     ObjectRecordUpdateEvent<CoreSchema.FormulaDefinition>
   >,
 ): Promise<Record<string, unknown>> => {
-  const client = new CoreApiClient();
+  // Dynamic client: the validation path recomputes against target objects whose
+  // value fields may have been created after deploy (wizard).
+  const client = createDynamicCoreClient();
   const { after, updatedFields } = payload.properties;
 
   return handleFormulaChange({
