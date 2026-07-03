@@ -13,3 +13,5 @@ is maintainable without re-deriving the reasoning.
 | [0005](0005-cycle-detection-field-granularity.md) | Field-granular cycle detection ignoring record ids | Accepted |
 | [0006](0006-manual-per-record-override.md) | Manual per-record override (FormulaOverride, value-based detection, restore) | Accepted |
 | [0007](0007-editor-ux-autocomplete-and-ui-constraints.md) | Editor UX: field autocomplete + front-component UI constraints | Accepted |
+| [0008](0008-add-formula-field-wizard-and-dynamic-client.md) | "Add formula field" wizard: runtime field creation, currency micros, wildcard triggers, dynamic client | Accepted |
+| [0009](0009-definition-lifecycle-and-operational-status.md) | Definition lifecycle: field deactivation on delete/restore, OFFLINE/UPSTREAM status, FX Status companions | Accepted |
