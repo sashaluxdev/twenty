@@ -16,6 +16,13 @@ export type TokenType =
   | 'PERCENT'
   | 'LPAREN'
   | 'RPAREN'
+  | 'COMMA'
+  | 'GREATER_THAN'
+  | 'GREATER_THAN_OR_EQUAL'
+  | 'LESS_THAN'
+  | 'LESS_THAN_OR_EQUAL'
+  | 'EQUAL'
+  | 'NOT_EQUAL'
   | 'FIELD'
   | 'CROSSREF'
   | 'EOF';
@@ -243,6 +250,50 @@ const SINGLE_CHAR_TOKENS: Record<string, TokenType> = {
   '%': 'PERCENT',
   '(': 'LPAREN',
   ')': 'RPAREN',
+  ',': 'COMMA',
+};
+
+// Comparison operators need one character of lookahead ('>' vs '>='), so they
+// cannot live in the single-char map. '==' is accepted as an alias of '=' at
+// tokenize time; the parser only ever sees EQUAL. A lone '!' has no meaning in
+// the grammar (there is no unary NOT) and is rejected here.
+const readComparisonOperator = (
+  source: string,
+  start: number,
+): { token: Token; next: number } | null => {
+  const char = source[start];
+  const nextChar = source[start + 1];
+
+  if (char === '>') {
+    return nextChar === '='
+      ? { token: { type: 'GREATER_THAN_OR_EQUAL', lexeme: '>=', position: start }, next: start + 2 }
+      : { token: { type: 'GREATER_THAN', lexeme: '>', position: start }, next: start + 1 };
+  }
+
+  if (char === '<') {
+    return nextChar === '='
+      ? { token: { type: 'LESS_THAN_OR_EQUAL', lexeme: '<=', position: start }, next: start + 2 }
+      : { token: { type: 'LESS_THAN', lexeme: '<', position: start }, next: start + 1 };
+  }
+
+  if (char === '=') {
+    return nextChar === '='
+      ? { token: { type: 'EQUAL', lexeme: '==', position: start }, next: start + 2 }
+      : { token: { type: 'EQUAL', lexeme: '=', position: start }, next: start + 1 };
+  }
+
+  if (char === '!') {
+    if (nextChar === '=') {
+      return { token: { type: 'NOT_EQUAL', lexeme: '!=', position: start }, next: start + 2 };
+    }
+    throw new FormulaError(
+      'TOKENIZE_ERROR',
+      'Unexpected character "!" (only valid as part of "!=")',
+      start,
+    );
+  }
+
+  return null;
 };
 
 export const tokenize = (source: string): Token[] => {
@@ -264,6 +315,14 @@ export const tokenize = (source: string): Token[] => {
     if (singleType) {
       tokens.push({ type: singleType, lexeme: char, position: index });
       index += 1;
+      continue;
+    }
+
+    const comparison = readComparisonOperator(source, index);
+
+    if (comparison) {
+      tokens.push(comparison.token);
+      index = comparison.next;
       continue;
     }
 

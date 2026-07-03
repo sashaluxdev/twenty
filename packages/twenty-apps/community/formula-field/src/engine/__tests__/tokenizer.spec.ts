@@ -65,6 +65,49 @@ describe('tokenizer', () => {
     expect(() => tokenize('[company:x')).toThrowError(/Unterminated/);
   });
 
+  describe('comparison operators and comma', () => {
+    it('should tokenize single-char comparison operators when not followed by "="', () => {
+      expect(types('a > b')).toEqual(['FIELD', 'GREATER_THAN', 'FIELD', 'EOF']);
+      expect(types('a < b')).toEqual(['FIELD', 'LESS_THAN', 'FIELD', 'EOF']);
+      expect(types('a = b')).toEqual(['FIELD', 'EQUAL', 'FIELD', 'EOF']);
+    });
+
+    it('should tokenize two-char comparison operators with lookahead', () => {
+      expect(types('a >= b')).toEqual(['FIELD', 'GREATER_THAN_OR_EQUAL', 'FIELD', 'EOF']);
+      expect(types('a <= b')).toEqual(['FIELD', 'LESS_THAN_OR_EQUAL', 'FIELD', 'EOF']);
+      expect(types('a != b')).toEqual(['FIELD', 'NOT_EQUAL', 'FIELD', 'EOF']);
+    });
+
+    it('should tokenize "==" as an alias of "=" when comparing for equality', () => {
+      const tokens = tokenize('a == b');
+      expect(tokens[1]).toMatchObject({ type: 'EQUAL', lexeme: '==' });
+    });
+
+    it('should not glue adjacent operators when "=" follows without a space', () => {
+      // ">=1" is GREATER_THAN_OR_EQUAL then NUMBER, not GREATER_THAN EQUAL.
+      expect(types('a >=1')).toEqual(['FIELD', 'GREATER_THAN_OR_EQUAL', 'NUMBER', 'EOF']);
+    });
+
+    it('should reject a lone "!" when not followed by "="', () => {
+      expect(() => tokenize('1 ! 2')).toThrowError(/only valid as part of "!="/);
+      expect(() => tokenize('!')).toThrow(FormulaError);
+    });
+
+    it('should tokenize commas when separating IF arguments', () => {
+      expect(types('IF(a, 1, 2)')).toEqual([
+        'FIELD',
+        'LPAREN',
+        'FIELD',
+        'COMMA',
+        'NUMBER',
+        'COMMA',
+        'NUMBER',
+        'RPAREN',
+        'EOF',
+      ]);
+    });
+  });
+
   describe('injection / hardening', () => {
     it('rejects a statement separator', () => {
       // Classic "escape the expression" attempt.
@@ -93,7 +136,8 @@ describe('tokenizer', () => {
     });
 
     it('rejects string/template/backtick characters', () => {
-      for (const bad of ['"', "'", '`', '$', '{', '}', '\\', '=', '!', '&', '|', '^', '<', '>']) {
+      // '=', '<', '>' are no longer here — they are comparison operators now.
+      for (const bad of ['"', "'", '`', '$', '{', '}', '\\', '&', '|', '^']) {
         expect(() => tokenize(`1 ${bad} 2`)).toThrow(FormulaError);
       }
     });

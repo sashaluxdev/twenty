@@ -58,7 +58,10 @@ offset where it appears.
 expression := term (('+' | '-') term)*
 term       := unary (('*' | '/' | '%') unary)*
 unary      := ('+' | '-') unary | primary
-primary    := NUMBER | FIELD | CROSSREF | '(' expression ')'
+primary    := NUMBER | FIELD | CROSSREF | IF | '(' expression ')'
+IF         := 'IF' '(' condition ',' expression ',' expression ')'
+condition  := expression (compareOp expression)?
+compareOp  := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 
 NUMBER   := digits ['.' digits]              // e.g. 42, 3.14, .5
 FIELD    := ident ('.' ident)*               // same-record dotted path
@@ -67,7 +70,8 @@ ident    := (letter | '_') (letter | digit | '_')*
 ```
 
 Binary operators are left-associative; `*` `/` `%` bind tighter than `+` `-`;
-unary `+`/`-` bind tighter than binary but looser than parentheses.
+unary `+`/`-` bind tighter than binary but looser than parentheses. Arithmetic
+binds tighter than comparison: `a + b > c * 2` groups as `(a + b) > (c * 2)`.
 
 ### Examples
 
@@ -78,6 +82,9 @@ amount.amountMicros * 1.1                   dotted path into a CURRENCY composit
 100 - discountPercent % 100                 modulo
 [company:6a1b…-uuid:employees] * 1000       cross-record ref by record id
 amount.amountMicros + [company:…:budget]    mixing same- and cross-record
+IF(formulaInputA > 9, formulaInputA + formulaInputB, formulaInputA)
+IF(discount, price - discount, price)       numeric condition (0 = false)
+IF(a >= 10, 1, IF(a >= 5, 0.5, 0))          nested IF (tiering)
 ```
 
 A same-record path like `amount.amountMicros` reaches into a composite field;
@@ -85,6 +92,34 @@ dependency tracking keys on the **root** segment (`amount`), because update
 events report changes at field granularity. A cross-record reference is
 `[object:recordId:fieldPath]` where `recordId` must be a UUID v4; it applies to
 that specific record.
+
+### IF conditionals (ADR 0010)
+
+`IF(condition, then, else)` — function-call form, exactly 3 arguments, keyword
+case-insensitive (`IF` / `if` / `If`). Rules:
+
+- **Comparisons are transient.** `> < >= <= = !=` (`==` is an alias of `=`) are
+  legal **only** at the top level of IF's condition slot. A comparison anywhere
+  a value is expected — top level, inside arithmetic, in a then/else branch,
+  inside a parenthesised comparison operand — is a parse error. Formulas always
+  produce `number | null`, never a boolean.
+- **Chained comparisons** (`a > b > c`) are a parse error.
+- **Truthiness (Excel-style).** A comparison yields true/false; a plain numeric
+  condition is allowed with `0` = false and any nonzero value (including
+  negatives) = true.
+- **Null rules (ADR 0003 consistency).** A null condition, or a null in either
+  comparison operand, makes the **entire IF result null**. This deliberately
+  deviates from Excel (where a blank cell compares as 0) to match the app's
+  null-propagation policy — an empty input never silently becomes a 0.
+- **Lazy evaluation.** Only the taken branch is evaluated: an error in the
+  untaken branch (e.g. division by zero) never fires. The condition is always
+  evaluated.
+- **Eager dependencies.** Dependency extraction collects references from the
+  condition AND both branches (the untaken branch's inputs can flip the
+  condition's outcome next time), so recompute triggers and cycle detection see
+  the whole conditional.
+- **`if` is a reserved word.** A bare same-record field named `if` is no longer
+  expressible (dotted paths like `if.x` still are).
 
 ### Value & error semantics (ADR 0003)
 

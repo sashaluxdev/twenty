@@ -12,7 +12,20 @@ export type FieldOption = {
   name: string;
   label: string;
   type: string;
+  // Text to insert when picked, when it differs from the API name (functions).
+  insertText?: string;
 };
+
+// Static keyword suggestions alongside the metadata-driven field options. IF is
+// engine grammar, not a metadata field, so it is offered here (ADR 0010).
+const FUNCTION_SUGGESTIONS: FieldOption[] = [
+  {
+    name: 'IF',
+    label: 'IF(condition, then, else)',
+    type: 'function',
+    insertText: 'IF(',
+  },
+];
 
 // Field types whose values the engine can coerce to a number (see coercion.ts).
 const NUMERIC_FIELD_TYPES = new Set([
@@ -169,7 +182,7 @@ export const FormulaFieldInput = ({
     const query = identifier.token.toLowerCase();
     const normalizedLabel = (label: string) =>
       label.toLowerCase().replace(/\s+/g, '');
-    return fields
+    return [...FUNCTION_SUGGESTIONS, ...fields]
       .filter(
         (field) =>
           field.name.toLowerCase().includes(query) ||
@@ -194,9 +207,10 @@ export const FormulaFieldInput = ({
       const before = value.slice(0, caret);
       const identifier = identifierBeforeCaret(before);
       const start = identifier ? identifier.start : caret;
-      const next = value.slice(0, start) + field.name + value.slice(caret);
+      const insertText = field.insertText ?? field.name;
+      const next = value.slice(0, start) + insertText + value.slice(caret);
       onChange(next);
-      setPendingCaret(start + field.name.length);
+      setPendingCaret(start + insertText.length);
       setOpen(false);
     },
     [value, caret, onChange],

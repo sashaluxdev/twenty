@@ -1,17 +1,32 @@
-import { type AstNode, type BinaryOperator } from 'src/engine/ast';
+import {
+  type AstNode,
+  type BinaryOperator,
+  type ComparisonOperator,
+} from 'src/engine/ast';
 import { FormulaError } from 'src/engine/errors';
-import { type Token, tokenize } from 'src/engine/tokenizer';
+import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 
 // Recursive-descent parser implementing standard arithmetic precedence:
 //
 //   expression := term (('+' | '-') term)*
 //   term       := unary (('*' | '/' | '%') unary)*
 //   unary      := ('+' | '-') unary | primary
-//   primary    := NUMBER | FIELD | CROSSREF | '(' expression ')'
+//   primary    := NUMBER | FIELD | CROSSREF | if | '(' expression ')'
+//   if         := IF '(' condition ',' expression ',' expression ')'
+//   condition  := expression (compareOp expression)?
+//   compareOp  := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 //
 // Left-associative binary operators; unary binds tighter than binary but looser
 // than parentheses. Any leftover tokens after a complete expression are an error
 // (rejects trailing garbage like "1 2" or "a)").
+//
+// Comparisons are TRANSIENT: `condition` is reachable ONLY as IF's first
+// argument, so a comparison can never appear where a numeric value is expected
+// (top level, arithmetic, then/else branches, or a comparison operand). That
+// keeps booleans out of the engine's public number|null value domain. Chained
+// comparisons (`a > b > c`) are rejected — comparison is not associative here.
+// `IF` is a reserved word (case-insensitive): a bare same-record field named
+// `if` is no longer expressible; dotted paths like `if.x` still are.
 
 // Guards against pathological input. The recursive-descent parser recurses once
 // per nesting level, so unbounded input could overflow the JS call stack before
@@ -19,6 +34,21 @@ import { type Token, tokenize } from 'src/engine/tokenizer';
 // and the parse recursion depth and fail with a clean PARSE_ERROR instead.
 const MAX_EXPRESSION_LENGTH = 2000;
 const MAX_PARSE_DEPTH = 200;
+
+const COMPARISON_TOKEN_TO_OPERATOR: Partial<
+  Record<TokenType, ComparisonOperator>
+> = {
+  GREATER_THAN: '>',
+  GREATER_THAN_OR_EQUAL: '>=',
+  LESS_THAN: '<',
+  LESS_THAN_OR_EQUAL: '<=',
+  // '==' is already normalized to the EQUAL token by the tokenizer.
+  EQUAL: '=',
+  NOT_EQUAL: '!=',
+};
+
+const isComparisonToken = (token: Token): boolean =>
+  COMPARISON_TOKEN_TO_OPERATOR[token.type] !== undefined;
 
 class Parser {
   private position = 0;
@@ -49,11 +79,24 @@ class Parser {
     this.depth -= 1;
   }
 
+  // Raised wherever a comparison operator shows up in a value position — the
+  // one message users will hit most while learning the condition-only rule.
+  private comparisonOutsideConditionError(token: Token): FormulaError {
+    return new FormulaError(
+      'PARSE_ERROR',
+      `Comparison "${token.lexeme}" is only allowed in the condition of IF(condition, then, else)`,
+      token.position,
+    );
+  }
+
   parse(): AstNode {
     const node = this.parseExpression();
 
     const next = this.peek();
     if (next.type !== 'EOF') {
+      if (isComparisonToken(next)) {
+        throw this.comparisonOutsideConditionError(next);
+      }
       throw new FormulaError(
         'PARSE_ERROR',
         `Unexpected token "${next.lexeme}"`,
@@ -121,9 +164,22 @@ class Parser {
         this.advance();
         return { type: 'number', value: token.numberValue! };
 
-      case 'FIELD':
+      case 'FIELD': {
+        // `if` is a reserved word (case-insensitive): followed by "(" it opens
+        // a conditional; bare, it is no longer a legal field reference.
+        if (token.fieldPath!.toLowerCase() === 'if') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseIf();
+          }
+          throw new FormulaError(
+            'PARSE_ERROR',
+            '"IF" is a reserved word — expected IF(condition, then, else)',
+            token.position,
+          );
+        }
         this.advance();
         return { type: 'field', path: token.fieldPath! };
+      }
 
       case 'CROSSREF':
         this.advance();
@@ -136,6 +192,11 @@ class Parser {
         const inner = this.parseExpression();
         const closing = this.peek();
         if (closing.type !== 'RPAREN') {
+          // Parentheses are a value context, so a comparison here (including a
+          // parenthesised comparison operand) gets the condition-only message.
+          if (isComparisonToken(closing)) {
+            throw this.comparisonOutsideConditionError(closing);
+          }
           throw new FormulaError(
             'PARSE_ERROR',
             'Missing closing parenthesis ")"',
@@ -154,12 +215,97 @@ class Parser {
         );
 
       default:
+        if (isComparisonToken(token)) {
+          throw this.comparisonOutsideConditionError(token);
+        }
         throw new FormulaError(
           'PARSE_ERROR',
           `Unexpected token "${token.lexeme}"`,
           token.position,
         );
     }
+  }
+
+  private expectIfArgumentComma(): void {
+    const token = this.peek();
+    if (token.type !== 'COMMA') {
+      if (isComparisonToken(token)) {
+        throw this.comparisonOutsideConditionError(token);
+      }
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'IF requires exactly 3 arguments: IF(condition, then, else)',
+        token.position,
+      );
+    }
+    this.advance();
+  }
+
+  private parseIf(): AstNode {
+    // IF arguments nest through parseExpression/parseCondition, but the IF
+    // frame itself must also count against parse depth so a chain of nested
+    // IFs is bounded the same way nested parentheses are.
+    this.enter();
+    this.advance(); // the IF identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    const condition = this.parseCondition();
+    this.expectIfArgumentComma();
+    const thenBranch = this.parseExpression();
+    this.expectIfArgumentComma();
+    const elseBranch = this.parseExpression();
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      // A comparison stranded in the else branch gets the condition-only
+      // message; a comma means a 4th argument (arity error).
+      if (isComparisonToken(closing)) {
+        throw this.comparisonOutsideConditionError(closing);
+      }
+      throw new FormulaError(
+        'PARSE_ERROR',
+        closing.type === 'COMMA'
+          ? 'IF requires exactly 3 arguments: IF(condition, then, else)'
+          : 'Missing closing parenthesis ")" after IF arguments',
+        closing.position,
+      );
+    }
+    this.advance();
+
+    this.leave();
+    return { type: 'if', condition, then: thenBranch, else: elseBranch };
+  }
+
+  // The ONLY place a comparison may appear: the top level of IF's first
+  // argument. Operands are plain arithmetic expressions; a second comparison
+  // operator after a complete comparison is a chained comparison, rejected.
+  private parseCondition(): AstNode {
+    this.enter();
+    const left = this.parseExpression();
+
+    const operatorToken = this.peek();
+    const operator = COMPARISON_TOKEN_TO_OPERATOR[operatorToken.type];
+
+    if (operator === undefined) {
+      // Numeric condition (Excel truthiness): 0 = false, nonzero = true.
+      this.leave();
+      return left;
+    }
+
+    this.advance();
+    const right = this.parseExpression();
+
+    const trailing = this.peek();
+    if (isComparisonToken(trailing)) {
+      throw new FormulaError(
+        'PARSE_ERROR',
+        `Chained comparisons are not supported ("... ${operatorToken.lexeme} ... ${trailing.lexeme} ...")`,
+        trailing.position,
+      );
+    }
+
+    this.leave();
+    return { type: 'comparison', operator, left, right };
   }
 }
 

@@ -56,6 +56,84 @@ describe('evaluator null policy (null propagates)', () => {
   });
 });
 
+describe('evaluator IF conditionals', () => {
+  it('should pick the then branch when the comparison is true and the else branch when false', () => {
+    expect(run('IF(inputA > 9, inputA + inputB, inputA)', { inputA: 10, inputB: 5 })).toBe(15);
+    expect(run('IF(inputA > 9, inputA + inputB, inputA)', { inputA: 3, inputB: 5 })).toBe(3);
+  });
+
+  it('should evaluate the full comparison truth table when operands are numbers', () => {
+    expect(run('IF(2 > 1, 1, 0)')).toBe(1);
+    expect(run('IF(1 > 2, 1, 0)')).toBe(0);
+    expect(run('IF(1 > 1, 1, 0)')).toBe(0);
+    expect(run('IF(1 < 2, 1, 0)')).toBe(1);
+    expect(run('IF(2 < 1, 1, 0)')).toBe(0);
+    expect(run('IF(1 >= 1, 1, 0)')).toBe(1);
+    expect(run('IF(0 >= 1, 1, 0)')).toBe(0);
+    expect(run('IF(1 <= 1, 1, 0)')).toBe(1);
+    expect(run('IF(2 <= 1, 1, 0)')).toBe(0);
+    expect(run('IF(1 = 1, 1, 0)')).toBe(1);
+    expect(run('IF(1 = 2, 1, 0)')).toBe(0);
+    expect(run('IF(1 == 1, 1, 0)')).toBe(1);
+    expect(run('IF(1 != 2, 1, 0)')).toBe(1);
+    expect(run('IF(1 != 1, 1, 0)')).toBe(0);
+  });
+
+  it('should apply Excel truthiness when the condition is numeric', () => {
+    expect(run('IF(0, 1, 2)')).toBe(2);
+    expect(run('IF(1, 1, 2)')).toBe(1);
+    expect(run('IF(42, 1, 2)')).toBe(1);
+    expect(run('IF(-1, 1, 2)')).toBe(1);
+    expect(run('IF(inputA - inputA, 1, 2)', { inputA: 7 })).toBe(2);
+  });
+
+  it('should return null when the condition itself is null', () => {
+    expect(run('IF(inputA, 1, 2)', { inputA: null })).toBeNull();
+  });
+
+  it('should return null when either comparison operand is null', () => {
+    expect(run('IF(inputA > 1, 1, 2)', { inputA: null })).toBeNull();
+    expect(run('IF(1 > inputA, 1, 2)', { inputA: null })).toBeNull();
+    expect(run('IF(inputA = inputA, 1, 2)', { inputA: null })).toBeNull();
+  });
+
+  it('should not evaluate the untaken branch when it contains a division by zero', () => {
+    expect(run('IF(1 > 0, 10, 1 / 0)')).toBe(10);
+    expect(run('IF(0 > 1, 1 / 0, 20)')).toBe(20);
+  });
+
+  it('should still throw when the taken branch contains a division by zero', () => {
+    try {
+      run('IF(1 > 0, 1 / 0, 20)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
+  });
+
+  it('should propagate null from the taken branch when its inputs are empty', () => {
+    expect(run('IF(1 > 0, inputA + 1, 2)', { inputA: null })).toBeNull();
+  });
+
+  it('should evaluate nested IFs when they appear in branches and conditions', () => {
+    const source = 'IF(IF(inputA > 5, 1, 0) = 1, IF(inputB > 5, 100, 200), 300)';
+    expect(run(source, { inputA: 10, inputB: 10 })).toBe(100);
+    expect(run(source, { inputA: 10, inputB: 1 })).toBe(200);
+    expect(run(source, { inputA: 1, inputB: 10 })).toBe(300);
+  });
+
+  it('should enforce the eval-depth guard when IFs nest past maxDepth', () => {
+    const levels = 30;
+    const deep = 'IF(1,'.repeat(levels) + '1' + ',0)'.repeat(levels);
+    try {
+      evaluate(parse(deep), resolverFor({}), { maxDepth: 16 });
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('MAX_DEPTH_EXCEEDED');
+    }
+  });
+});
+
 describe('evaluator errors', () => {
   it('throws UNKNOWN_VARIABLE for a missing field', () => {
     try {

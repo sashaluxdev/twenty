@@ -81,6 +81,110 @@ describe('parser precedence & associativity', () => {
   });
 });
 
+describe('parser IF conditionals', () => {
+  it('should parse IF(condition, then, else) into an if node when the condition is a comparison', () => {
+    const ast = parse('IF(inputA > 9, inputA + inputB, inputA)');
+    expect(ast.type).toBe('if');
+    if (ast.type === 'if') {
+      expect(ast.condition).toEqual({
+        type: 'comparison',
+        operator: '>',
+        left: { type: 'field', path: 'inputA' },
+        right: { type: 'number', value: 9 },
+      });
+      expect(ast.then.type).toBe('binary');
+      expect(ast.else).toEqual({ type: 'field', path: 'inputA' });
+    }
+  });
+
+  it('should accept the keyword case-insensitively when written as if or If', () => {
+    expect(parse('if(1, 2, 3)').type).toBe('if');
+    expect(parse('If(1, 2, 3)').type).toBe('if');
+    expect(parse('IF(1, 2, 3)').type).toBe('if');
+  });
+
+  it('should normalize == to = when building the comparison node', () => {
+    const ast = parse('IF(a == b, 1, 0)');
+    if (ast.type === 'if' && ast.condition.type === 'comparison') {
+      expect(ast.condition.operator).toBe('=');
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
+  });
+
+  it('should accept a plain numeric condition when no comparison is written', () => {
+    const ast = parse('IF(inputA, 1, 2)');
+    if (ast.type === 'if') {
+      expect(ast.condition).toEqual({ type: 'field', path: 'inputA' });
+    } else {
+      throw new Error('expected an if node');
+    }
+  });
+
+  it('should parse nested IF in branches and in the condition operands', () => {
+    const nestedInBranch = parse('IF(a > 1, IF(b > 2, 1, 2), IF(c > 3, 3, 4))');
+    expect(nestedInBranch.type).toBe('if');
+
+    // A nested IF is a primary, so it is legal INSIDE a comparison operand.
+    const nestedInCondition = parse('IF(IF(a > 1, 1, 0) = 1, 10, 20)');
+    expect(nestedInCondition.type).toBe('if');
+  });
+
+  it('should give arithmetic precedence over comparison so a + b > c * 2 groups as (a+b) > (c*2)', () => {
+    const ast = parse('IF(a + b > c * 2, 1, 0)');
+    if (ast.type === 'if' && ast.condition.type === 'comparison') {
+      expect(ast.condition.left).toMatchObject({ type: 'binary', operator: '+' });
+      expect(ast.condition.right).toMatchObject({ type: 'binary', operator: '*' });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
+  });
+
+  it('should reject IF with 2 arguments when the else branch is missing', () => {
+    expect(() => parse('IF(a > 1, 2)')).toThrowError(/exactly 3 arguments/);
+  });
+
+  it('should reject IF with 4 arguments when an extra argument is supplied', () => {
+    expect(() => parse('IF(a > 1, 2, 3, 4)')).toThrowError(/exactly 3 arguments/);
+  });
+
+  it('should reject a bare "if" when it is not followed by parentheses', () => {
+    expect(() => parse('if + 1')).toThrowError(/reserved word/);
+    expect(() => parse('if')).toThrowError(/reserved word/);
+  });
+
+  it('should reject an unterminated IF when the closing parenthesis is missing', () => {
+    expect(() => parse('IF(1, 2, 3')).toThrowError(/closing parenthesis/);
+  });
+});
+
+describe('parser comparison confinement (transient comparisons)', () => {
+  it('should reject a comparison at the top level when no IF wraps it', () => {
+    expect(() => parse('a > b')).toThrowError(/only allowed in the condition/);
+    expect(() => parse('1 = 1')).toThrowError(/only allowed in the condition/);
+  });
+
+  it('should reject a comparison inside arithmetic when a value is expected', () => {
+    expect(() => parse('1 + (a > b)')).toThrowError(/only allowed in the condition/);
+    expect(() => parse('2 * a > b + 1 - 1')).toThrowError(/only allowed in the condition/);
+  });
+
+  it('should reject a comparison in a then or else branch when it is not a condition slot', () => {
+    expect(() => parse('IF(a > 1, b > 2, 3)')).toThrowError(/only allowed in the condition/);
+    expect(() => parse('IF(a > 1, 2, b > 3)')).toThrowError(/only allowed in the condition/);
+  });
+
+  it('should reject a comparison inside a comparison operand when parenthesised', () => {
+    expect(() => parse('IF((a > b) > c, 1, 0)')).toThrowError(/only allowed in the condition/);
+    expect(() => parse('IF(a > (b > c), 1, 0)')).toThrowError(/only allowed in the condition/);
+  });
+
+  it('should reject chained comparisons when written as a > b > c', () => {
+    expect(() => parse('IF(a > b > c, 1, 0)')).toThrowError(/Chained comparisons/);
+    expect(() => parse('IF(a = b != c, 1, 0)')).toThrowError(/Chained comparisons/);
+  });
+});
+
 describe('parser errors', () => {
   it('rejects trailing tokens', () => {
     expect(() => parse('1 2')).toThrow(FormulaError);
@@ -114,6 +218,14 @@ describe('parser hardening (DoS guards)', () => {
 
   it('rejects deeply nested parentheses instead of overflowing the stack', () => {
     const deep = '('.repeat(500) + '1' + ')'.repeat(500);
+    expect(() => parse(deep)).toThrowError(/max depth/);
+  });
+
+  it('should reject deeply nested IF calls when parse depth exceeds the max', () => {
+    // 110 nested IFs stay under MAX_EXPRESSION_LENGTH (881 chars) but each
+    // level consumes parse-depth frames, so the depth guard must fire.
+    const levels = 110;
+    const deep = 'IF(0,'.repeat(levels) + '1' + ',0)'.repeat(levels);
     expect(() => parse(deep)).toThrowError(/max depth/);
   });
 });

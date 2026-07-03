@@ -66,6 +66,20 @@ const walk = (
       walk(node.left, sameRecordFields, crossRecordRefs);
       walk(node.right, sameRecordFields, crossRecordRefs);
       return;
+
+    case 'comparison':
+      walk(node.left, sameRecordFields, crossRecordRefs);
+      walk(node.right, sameRecordFields, crossRecordRefs);
+      return;
+
+    // Deliberately EAGER, unlike evaluation (lazy): the taken branch can flip
+    // when inputs change, so a formula depends on the condition AND BOTH
+    // branches. Cycle detection inherits this conservative bias unchanged.
+    case 'if':
+      walk(node.condition, sameRecordFields, crossRecordRefs);
+      walk(node.then, sameRecordFields, crossRecordRefs);
+      walk(node.else, sameRecordFields, crossRecordRefs);
+      return;
   }
 };
 

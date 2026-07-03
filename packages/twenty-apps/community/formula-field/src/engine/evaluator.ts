@@ -17,6 +17,13 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 //   - Division or modulo by zero -> DIVISION_BY_ZERO error (value left
 //     unchanged by the engine, error surfaced on lastError).
 //   - Non-finite results (Infinity/NaN) -> NON_NUMERIC_VALUE error.
+//   - IF(condition, then, else): the condition is always evaluated; only the
+//     TAKEN branch is (lazy — an error in the untaken branch cannot fire).
+//     A comparison condition yields an internal boolean that never escapes
+//     this module; a numeric condition uses Excel truthiness (0 = false,
+//     nonzero = true). A null condition — including null in either comparison
+//     operand — makes the whole IF result null, consistent with the app's
+//     null-propagation policy (a deliberate deviation from Excel's blank=0).
 
 export type VariableReference =
   | { kind: 'same'; path: string }
@@ -30,6 +37,49 @@ const DEFAULT_MAX_DEPTH = 64;
 
 export type EvaluateOptions = {
   maxDepth?: number;
+};
+
+// Comparison truth, internal only: booleans stay confined to IF's condition
+// slot; the public evaluate() signature remains number | null. Null in either
+// operand yields null (propagation), never false.
+const evaluateConditionTruth = (
+  node: AstNode,
+  resolve: VariableResolver,
+  depth: number,
+  maxDepth: number,
+): boolean | null => {
+  if (node.type === 'comparison') {
+    const left = evaluateNode(node.left, resolve, depth + 1, maxDepth);
+    const right = evaluateNode(node.right, resolve, depth + 1, maxDepth);
+
+    if (left === null || right === null) {
+      return null;
+    }
+
+    switch (node.operator) {
+      case '>':
+        return left > right;
+      case '<':
+        return left < right;
+      case '>=':
+        return left >= right;
+      case '<=':
+        return left <= right;
+      case '=':
+        return left === right;
+      case '!=':
+        return left !== right;
+    }
+  }
+
+  const value = evaluateNode(node, resolve, depth, maxDepth);
+
+  if (value === null) {
+    return null;
+  }
+
+  // Excel truthiness for numeric conditions: 0 is false, anything else true.
+  return value !== 0;
 };
 
 const evaluateNode = (
@@ -122,6 +172,37 @@ const evaluateNode = (
 
       return result;
     }
+
+    case 'if': {
+      const truth = evaluateConditionTruth(
+        node.condition,
+        resolve,
+        depth + 1,
+        maxDepth,
+      );
+
+      // Null condition (or null in a comparison operand) nulls the whole IF.
+      if (truth === null) {
+        return null;
+      }
+
+      // Lazy: only the taken branch runs, so an error (e.g. division by zero)
+      // in the untaken branch can never fire.
+      return evaluateNode(
+        truth ? node.then : node.else,
+        resolve,
+        depth + 1,
+        maxDepth,
+      );
+    }
+
+    case 'comparison':
+      // Unreachable via parse(): the parser confines comparisons to IF's
+      // condition slot, which is handled above. Guard for hand-built ASTs.
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'Comparison is only allowed in the condition of IF(condition, then, else)',
+      );
   }
 };
 

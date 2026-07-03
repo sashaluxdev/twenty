@@ -125,26 +125,33 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   - Recompute skips **active** overrides. Toggle OFF **deactivates** (keeps the
     value) + recomputes; toggle ON **restores** the last override value and shows
     an "Override value restored" hint.
-- **Tests**: 123 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
+- **Tests**: 162 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
   integration suite (`src/__tests__/app-install.integration-test.ts`). Lint clean.
 
 ## What is NOT done (next work)
 
 **Build pipeline (user-approved order, 2026-07-03):**
 
-1. **"Delete Completely"** — danger-zone button in the definition editor:
-   destroys the definition record AND its wizard-created value/companion fields
-   (guards: `createdField` provenance + no other definition targets the field;
-   type-"Delete" confirmation). In flight.
-2. **IF/THEN conditionals** — `IF(cond, then, else)` function-call form.
-   LOCKED design (see complexity assessment, 2026-07-03): comparisons
-   (`> < >= <= = == !=`) are TRANSIENT — legal only inside IF's condition slot,
-   never a formula result, so the engine value domain stays `number | null`
-   and the write/convergence/override stack is untouched. Excel truthiness for
-   numeric conditions (0 = false, nonzero = true); null condition or null in a
-   comparison → whole IF result null (ADR 0003 consistency; deliberate
-   deviation from Excel's blank=0). Lazy branch evaluation, EAGER dependency
-   extraction (condition + both branches); cycle detection unchanged.
+1. ~~**"Delete Completely"**~~ DONE (committed 0fa3051aae, verified live):
+   danger-zone button in the definition editor destroys the definition record
+   AND its wizard-created value/companion fields (guards: `createdField`
+   provenance + no other definition targets the field; type-"Delete"
+   confirmation; `lib/delete-definition-completely.ts`, injectable clients).
+   Platform facts: `deleteOneField` needs no isActive precondition; hard
+   destroy emits ONLY the `destroyed` event; destroyed-trigger tolerates
+   pre-deleted fields.
+2. ~~**IF/THEN conditionals**~~ DONE (ADR 0010, 35 new tests): `IF(cond,
+   then, else)` function-call form, keyword case-insensitive (`if` is now a
+   reserved word). Comparisons (`> < >= <= = == !=`, `==` normalized to `=`
+   at tokenize time) are TRANSIENT — legal ONLY at the condition's top level
+   (even `IF((a > b), 1, 0)` is rejected: parens are a value context), so the
+   engine value domain stays `number | null` and the write/convergence/
+   override stack is untouched. Excel truthiness for numeric conditions
+   (0 = false, nonzero = true); null condition or null comparison operand →
+   whole IF result null (ADR 0003 consistency; deliberate deviation from
+   Excel's blank=0). Lazy branch evaluation (untaken-branch errors never
+   fire), EAGER dependency extraction (condition + both branches); cycle
+   detection unchanged. Editor autocomplete suggests `IF(`.
 3. **Date handling — Excel serial-number model** (user decision 2026-07-03,
    supersedes the tagged-union recommendation): dates ARE numbers
    (days since Unix epoch 1970, NOT Excel's 1900; times = day fractions,

@@ -51,4 +51,42 @@ describe('dependency extraction', () => {
     expect(deps.sameRecordFields).toEqual([]);
     expect(deps.crossRecordRefs).toEqual([]);
   });
+
+  it('should collect refs from the condition and BOTH branches when the formula is an IF', () => {
+    // Eager extraction: the untaken branch is never evaluated, but a change to
+    // any of its inputs can flip which branch is taken next time.
+    const deps = extractDependencies('IF(condA > condB, thenField, elseField)');
+    expect(deps.sameRecordFields).toEqual([
+      'condA',
+      'condB',
+      'elseField',
+      'thenField',
+    ]);
+  });
+
+  it('should collect cross-record refs from IF branches when they reference other records', () => {
+    const deps = extractDependencies(
+      `IF(inputA > 0, [company:${UUID}:employees], [company:${UUID2}:revenue.amountMicros])`,
+    );
+    expect(deps.sameRecordFields).toEqual(['inputA']);
+    expect(deps.crossRecordRefs).toEqual([
+      {
+        object: 'company',
+        recordId: UUID,
+        field: 'employees',
+        fieldPath: 'employees',
+      },
+      {
+        object: 'company',
+        recordId: UUID2,
+        field: 'revenue',
+        fieldPath: 'revenue.amountMicros',
+      },
+    ]);
+  });
+
+  it('should collect refs from a numeric condition when no comparison is written', () => {
+    const deps = extractDependencies('IF(flagField, 1, 2)');
+    expect(deps.sameRecordFields).toEqual(['flagField']);
+  });
 });

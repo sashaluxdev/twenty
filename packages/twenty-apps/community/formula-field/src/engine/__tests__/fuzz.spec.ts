@@ -23,9 +23,10 @@ const makeRng = (seed: number) => {
 // (quotes, semicolons, unicode homoglyphs, control chars).
 const ALPHABET = [
   ...'0123456789',
-  ...'+-*/%()[]',
+  ...'+-*/%()[],',
   ...'abcABC._: ',
-  ...';{}$`"\'\\=!&|^<>~#@?',
+  ...'IF=!<>',
+  ...';{}$`"\'\\&|^~#@?',
   String.fromCharCode(0x2212), // unicode minus
   String.fromCharCode(0xff0b), // fullwidth plus
   String.fromCharCode(0x00a0), // non-breaking space
@@ -59,7 +60,9 @@ describe('tokenizer fuzzing', () => {
 
   it('never lets a forbidden character survive tokenization', () => {
     const rng = makeRng(0x1234);
-    const forbidden = ';{}$`"\'\\=!&|^<>~#@?';
+    // '=', '<', '>' left this list when comparisons landed; a lone '!' is
+    // still forbidden (it only exists as part of "!=").
+    const forbidden = ';{}$`"\'\\!&|^~#@?';
 
     for (let iteration = 0; iteration < 2000; iteration += 1) {
       const bad = forbidden[Math.floor(rng() * forbidden.length)];
@@ -73,11 +76,24 @@ describe('tokenizer fuzzing', () => {
 
     // Grammar-directed generator: only ever emits well-formed expressions, so
     // parse() must always succeed and evaluate() must return a finite number
-    // (integer literals only, no division -> no divide-by-zero, no nulls).
+    // (integer literals only, no division -> no divide-by-zero, no nulls; IF
+    // branches are themselves generated expressions, so both are finite).
     const genNumber = () => String(1 + Math.floor(rng() * 9));
+    const COMPARE_OPS = ['>', '<', '>=', '<=', '=', '==', '!='];
+    const genCondition = (depth: number): string => {
+      // Numeric condition or a single (never chained) comparison.
+      if (rng() < 0.3) {
+        return genExpr(depth - 1);
+      }
+      const op = COMPARE_OPS[Math.floor(rng() * COMPARE_OPS.length)];
+      return `${genExpr(depth - 1)} ${op} ${genExpr(depth - 1)}`;
+    };
     const genExpr = (depth: number): string => {
       if (depth <= 0 || rng() < 0.4) {
         return genNumber();
+      }
+      if (rng() < 0.2) {
+        return `IF(${genCondition(depth)}, ${genExpr(depth - 1)}, ${genExpr(depth - 1)})`;
       }
       const op = ['+', '-', '*'][Math.floor(rng() * 3)];
       const left = genExpr(depth - 1);
