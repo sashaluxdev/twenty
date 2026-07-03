@@ -422,7 +422,7 @@ const FormulaDefinitionEditor = () => {
         onChange={setDraft}
         targetObject={definition.targetObject}
         multiline
-        placeholder="e.g. formulaInputA + formulaInputB * 2"
+        placeholder="e.g. amount.amountMicros * 1.1"
       />
 
       <div style={s.actions}>

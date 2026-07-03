@@ -26,8 +26,14 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 - **FormulaDefinition object** + index view + nav item + role. One record per
   formula: targetObject, targetField (the value field), expression, dependencies
   (JSON, auto-filled), enabled, lastValue/lastEvaluatedAt/lastError heartbeat.
-- **Demo value fields on Opportunity**: `formulaInputA`, `formulaInputB` (inputs),
-  `formulaScore`, `formulaCrossScore` (value fields, **editable** — see #2).
+- **Demo value fields on Opportunity — REMOVED 2026-07-03** (production-clean
+  install for the live-workspace dry run): the static `formulaInputA`/
+  `formulaInputB` inputs and `formulaScore`/`formulaCrossScore` value fields
+  (`src/fields/opportunity-*.field.ts`) and their static "Formulas" page-layout
+  tab are gone. A fresh install now creates NO fields on any workspace object;
+  value fields are created at runtime by the wizard (#1), which also adds the
+  record-page "Formulas" tab dynamically via `ensure-formula-tab.ts`. Test
+  fixtures still use those field names as arbitrary strings.
 - **Feature #1 — guided "Add formula field" wizard** (fully working, verified
   live in the browser AND via scripted E2E; see ADR 0008):
   - Lives in `formula-definition-editor.tsx`: a fresh definition (no target
@@ -105,8 +111,11 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 - **Save-time validation triggers**: `formulaDefinition.created`/`.updated`
   parse + extract deps + reject cycles (disable + clear error). Runtime cyclic
   exclusion prevents ping-pong storms.
-- **post-install**: seeds a demo formula (`formulaScore = formulaInputA +
-  formulaInputB * 2`). Idempotent.
+- **post-install — REMOVED 2026-07-03** (production-clean install for the
+  live-workspace dry run): the hook only seeded a demo formula, so with the
+  demo fields gone it had no legitimate job. The trigger + `post-install.ts` +
+  its manifest wiring are deleted; the SDK does not require a post-install hook.
+  A fresh install now writes NO record data. First formula = the wizard.
 - **Front components**:
   - `formula-editor.tsx` — Opportunity record "Formulas" tab: per formula field,
     shows value, editable expression (with autocomplete), and a red/green
@@ -275,8 +284,8 @@ written at the app root (`README.md`).
 
 - Engine: `src/engine/{tokenizer,parser,ast,evaluator,dependencies,cycle-detection,errors,index}.ts`
 - Objects: `src/objects/{formula-definition,formula-override}.object.ts`
-- Value/input fields: `src/fields/opportunity-*.field.ts` (static demo fields;
-  wizard fields are created at runtime, not in the repo)
+- Value/input fields: created at runtime by the wizard, not in the repo (the
+  static `src/fields/opportunity-*.field.ts` demo fields were removed 2026-07-03)
 - Recompute + data access: `src/logic-functions/lib/{recompute,handle-record-update,
   handle-formula-change,handle-definition-lifecycle,formula-status,fx-status-field,
   formula-repository,override-repository,save-validation,coercion,value-io,
@@ -284,7 +293,7 @@ written at the app root (`README.md`).
 - Triggers: `src/logic-functions/{on-record-updated,on-record-created,
   on-formula-definition-created,on-formula-definition-updated,
   on-formula-definition-deleted,on-formula-definition-restored,
-  on-formula-definition-destroyed,formula-sweep,post-install}.ts`
+  on-formula-definition-destroyed,formula-sweep}.ts`
 - Front: `src/front-components/{formula-editor,formula-definition-editor}.tsx`,
   `src/front-components/lib/{formula-field-input,formula-setup-wizard}.tsx`,
   `src/front-components/lib/formula-field-formats.ts`

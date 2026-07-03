@@ -83,6 +83,109 @@ const restoreVersion = () => {
   }
 };
 
+// The value/input fields the recompute criteria exercise are NOT shipped by the
+// app (a production-clean install creates no fields on any object). In
+// production the setup wizard creates the value field at runtime via the
+// metadata API; here we do the same directly so the recompute criteria have
+// fields to read/write. The names match the historic demo fixtures purely for
+// readability.
+const FORMULA_FIELD_NAMES = [
+  'formulaInputA',
+  'formulaInputB',
+  'formulaScore',
+  'formulaCrossScore',
+];
+
+// Snapshot of the install's cleanliness, captured in beforeAll BEFORE the test
+// fields are provisioned, and asserted by criterion 1.
+let installSeededDemoFormulaCount = -1;
+let installFormulaFieldCount = -1;
+
+type OpportunityObject = {
+  id: string;
+  fields: { id: string; name: string }[];
+};
+
+const getOpportunityObject = async (): Promise<OpportunityObject> => {
+  const metadata = new MetadataApiClient();
+  const response = await metadata.query({
+    objects: {
+      __args: { filter: {}, paging: { first: 500 } },
+      edges: {
+        node: {
+          id: true,
+          nameSingular: true,
+          fields: {
+            __args: { paging: { first: 500 }, filter: {} },
+            edges: { node: { id: true, name: true } },
+          },
+        },
+      },
+    },
+  });
+  const node = (response?.objects?.edges ?? [])
+    .map((edge: { node: { nameSingular: string } }) => edge?.node)
+    .find(
+      (candidate: { nameSingular: string }) =>
+        candidate?.nameSingular === 'opportunity',
+    );
+  if (!node) throw new Error('opportunity object not found');
+  return {
+    id: node.id,
+    fields: (node.fields?.edges ?? []).map(
+      (edge: { node: { id: string; name: string } }) => edge.node,
+    ),
+  };
+};
+
+const provisionOpportunityFields = async (objectMetadataId: string) => {
+  const metadata = new MetadataApiClient();
+  const specs = [
+    { name: 'formulaInputA', label: 'Formula input A' },
+    { name: 'formulaInputB', label: 'Formula input B' },
+    { name: 'formulaScore', label: 'Formula score' },
+    { name: 'formulaCrossScore', label: 'Formula cross score' },
+  ];
+  for (const spec of specs) {
+    await metadata.mutation({
+      createOneField: {
+        __args: {
+          input: {
+            field: {
+              objectMetadataId,
+              type: 'NUMBER',
+              name: spec.name,
+              label: spec.label,
+              description: 'Integration-test field (created at runtime).',
+              icon: 'IconMathFunction',
+              isUIEditable: true,
+            },
+          },
+        },
+        id: true,
+      },
+    });
+  }
+};
+
+const cleanupOpportunityFields = async () => {
+  const metadata = new MetadataApiClient();
+  const opportunity = await getOpportunityObject();
+  for (const field of opportunity.fields) {
+    if (!FORMULA_FIELD_NAMES.includes(field.name)) continue;
+    // Deactivate before delete so the field leaves every view first.
+    await metadata.mutation({
+      updateOneField: {
+        __args: { input: { id: field.id, update: { isActive: false } } },
+        id: true,
+      },
+    });
+    await metadata.mutation({
+      deleteOneField: { __args: { input: { id: field.id } }, id: true },
+    });
+  }
+};
+
 describe('Formula Field app', () => {
   beforeAll(async () => {
     bumpVersionForDeploy();
@@ -99,11 +202,28 @@ describe('Formula Field app', () => {
     if (!install.success) {
       throw new Error(`Install failed: ${install.error?.message ?? 'unknown'}`);
     }
-    await sleep(3000); // let post-install seed the demo formula
+
+    // Capture install cleanliness BEFORE provisioning anything (criterion 1):
+    // a production-clean install seeds no demo formula and creates no formula
+    // value fields on Opportunity.
+    const seeded = await gql(
+      `query{ formulaDefinitions(first: 200, filter: { name: { eq: "Opportunity score (demo)" } }){ edges { node { id } } } }`,
+    );
+    installSeededDemoFormulaCount = seeded.formulaDefinitions.edges.length;
+    const opportunity = await getOpportunityObject();
+    installFormulaFieldCount = opportunity.fields.filter(
+      (field) => FORMULA_FIELD_NAMES.includes(field.name),
+    ).length;
+
+    // Provision the value/input fields the recompute criteria need, exactly as
+    // the wizard does at runtime (the app itself ships none).
+    await provisionOpportunityFields(opportunity.id);
+    await sleep(3000); // let the new fields propagate through metadata
   }, 180000);
 
   afterAll(async () => {
     restoreVersion();
+    await cleanupOpportunityFields();
     const uninstall = await appUninstall({ appPath: APP_PATH });
     if (!uninstall.success) {
       console.warn(`Uninstall failed: ${uninstall.error?.message ?? 'unknown'}`);
@@ -115,7 +235,7 @@ describe('Formula Field app', () => {
     await deleteAllFormulas();
   });
 
-  it('criterion 1: provisions the application on install', async () => {
+  it('criterion 1: provisions the app on install with no demo data or fields', async () => {
     const metadata = new MetadataApiClient();
     const apps = await metadata.query({
       findManyApplications: { id: true, universalIdentifier: true },
@@ -125,6 +245,13 @@ describe('Formula Field app', () => {
         application.universalIdentifier === APPLICATION_UNIVERSAL_IDENTIFIER,
     );
     expect(installed).toBeDefined();
+
+    // A production-clean install writes NO record data and creates NO fields on
+    // any workspace object: no demo formula is seeded (post-install removed),
+    // and Opportunity gets no formula value fields (the wizard creates those at
+    // runtime). Captured in beforeAll before the test fields were provisioned.
+    expect(installSeededDemoFormulaCount).toBe(0);
+    expect(installFormulaFieldCount).toBe(0);
   });
 
   it('criterion 2 & 4: recomputes a same-record formula on edit; value lives in the value field', async () => {

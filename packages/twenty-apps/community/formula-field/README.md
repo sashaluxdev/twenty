@@ -77,13 +77,13 @@ binds tighter than comparison: `a + b > c * 2` groups as `(a + b) > (c * 2)`.
 ### Examples
 
 ```
-formulaInputA + formulaInputB * 2          same-record fields, precedence
+amount.amountMicros + probability * 2      same-record fields, precedence
 (amount + tax) / 12                        parentheses
 amount.amountMicros * 1.1                   dotted path into a CURRENCY composite
 100 - discountPercent % 100                 modulo
 [company:6a1b…-uuid:employees] * 1000       cross-record ref by record id
 amount.amountMicros + [company:…:budget]    mixing same- and cross-record
-IF(formulaInputA > 9, formulaInputA + formulaInputB, formulaInputA)
+IF(probability > 50, amount.amountMicros, 0)    conditional on a threshold
 IF(discount, price - discount, price)       numeric condition (0 = false)
 IF(a >= 10, 1, IF(a >= 5, 0.5, 0))          nested IF (tiering)
 ```
@@ -366,5 +366,6 @@ workspace-scoped API_KEY JWT). Read it in Node scripts; never mint/forge tokens.
   `/graphql`): `getLoginTokenFromCredentials` → `getAuthTokensFromLoginToken` →
   `getRoles` (Admin id; `createApiKey` requires a `roleId`) → `createApiKey` →
   `generateApiKeyToken`, then write the token to `~/.twenty/config.json`
-  `remotes.local.apiKey`. `dev --once` does NOT fire the post-install function
-  (only a real install does), so after a reset seed the demo formula manually.
+  `remotes.local.apiKey`. The install is production-clean — it seeds no demo
+  data — so after a reset create your first formula through the setup wizard on
+  a record page (or via `createFormulaDefinition` against an existing field).
