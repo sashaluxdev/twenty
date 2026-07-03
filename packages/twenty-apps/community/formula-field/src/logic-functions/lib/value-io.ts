@@ -57,22 +57,39 @@ export const readTargetValue = (
   targetField: string,
 ): number | null => normalizeStoredValue(navigatePath(record, targetField));
 
+// True when the target is an integer-backed NUMBER field. The wizard's "integer"
+// format creates a NUMBER field with settings.dataType 'int', whose GraphQL
+// scalar is Int and THROWS on a fractional write — so `x / 3` on an integer
+// target fails permanently unless the value is rounded (finding M2).
+// outputFormat is the cheapest reliable signal already on the definition record;
+// targetFieldType alone cannot tell an int NUMBER from a float NUMBER. (A
+// targetFieldSettings JSON field being added concurrently can become the source
+// later.)
+export const isIntegerBackedFormat = (
+  outputFormat: string | null | undefined,
+): boolean => outputFormat === 'integer';
+
 // The value as it will actually be stored, in the field's own representation:
 // CURRENCY keeps integer micros; DATE floors to a whole UTC epoch-day (a date
-// has no time); DATE_TIME rounds to whole milliseconds (the scalar resolution).
-// Comparisons against stored values MUST use this, or a fractional result would
-// never converge (recompute) and the app's own write would look like a human
-// override (override detection) — the rewrite-forever trap (ADR 0011, mirroring
-// the CURRENCY-micros precedent).
+// has no time); DATE_TIME rounds to whole milliseconds (the scalar resolution);
+// an integer-backed NUMBER rounds to a whole number (the Int scalar). Comparisons
+// against stored values MUST use this, or a fractional result would never
+// converge (recompute) and the app's own write would look like a human override
+// (override detection) — the rewrite-forever trap (ADR 0011, mirroring the
+// CURRENCY-micros precedent).
 export const normalizeComputedValue = (
   targetFieldType: string | null | undefined,
   value: number | null,
+  options?: { integerBacked?: boolean },
 ): number | null => {
   if (value === null) return value;
   const kind = targetFieldKind(targetFieldType);
   if (kind === 'CURRENCY') return Math.round(value);
   if (kind === 'DATE') return Math.floor(value);
   if (kind === 'DATE_TIME') return Math.round(value * MS_PER_DAY) / MS_PER_DAY;
+  // Integer-backed NUMBER: round through the same funnel CURRENCY uses so the
+  // Int scalar accepts the write and comparisons converge (no rewrite loop).
+  if (options?.integerBacked) return Math.round(value);
   return value;
 };
 

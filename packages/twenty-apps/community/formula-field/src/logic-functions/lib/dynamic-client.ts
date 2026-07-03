@@ -1,6 +1,7 @@
 import { CoreApiClient } from 'twenty-client-sdk/core';
-import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 
+import { assertSafeGraphqlIdentifier } from 'src/logic-functions/lib/identifier';
+import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 
 // FormulaClient over RAW GraphQL instead of the generated genql client.
@@ -44,10 +45,16 @@ export const serializeArgumentValue = (value: unknown): string => {
     return `[${value.map(serializeArgumentValue).join(', ')}]`;
   }
   if (typeof value === 'object') {
+    // Argument-object keys (e.g. the `data` payload's field names, filter keys)
+    // are identifiers in the emitted document — guard them (finding M1). This is
+    // the boundary value-io's `{ [targetField]: value }` writes flow through.
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, entryValue]) => entryValue !== undefined)
       .map(
-        ([key, entryValue]) => `${key}: ${serializeArgumentValue(entryValue)}`,
+        ([key, entryValue]) =>
+          `${assertSafeGraphqlIdentifier(key)}: ${serializeArgumentValue(
+            entryValue,
+          )}`,
       );
     return `{ ${entries.join(', ')} }`;
   }
@@ -65,8 +72,11 @@ export const serializeSelection = (
     if (key === '__args' || value === undefined || value === false) {
       continue;
     }
+    // Every selection key (object / operation / field name) and argument name is
+    // an identifier in the emitted document — guard them all so no untrusted
+    // object/field name can inject GraphQL (finding M1).
     if (value === true) {
-      parts.push(key);
+      parts.push(assertSafeGraphqlIdentifier(key));
       continue;
     }
     if (typeof value === 'object' && value !== null) {
@@ -79,12 +89,14 @@ export const serializeSelection = (
           ? `(${argEntries
               .map(
                 ([argKey, argValue]) =>
-                  `${argKey}: ${serializeArgumentValue(argValue)}`,
+                  `${assertSafeGraphqlIdentifier(argKey)}: ${serializeArgumentValue(
+                    argValue,
+                  )}`,
               )
               .join(', ')})`
           : '';
       parts.push(
-        `${key}${argsString} ${serializeSelection(
+        `${assertSafeGraphqlIdentifier(key)}${argsString} ${serializeSelection(
           value as Record<string, unknown>,
         )}`,
       );
@@ -118,53 +130,69 @@ const execute = async (
 // records — the server does NOT error on a scalar selection of a composite,
 // it silently returns null, which made formulas with currency inputs compute
 // nothing (no error!) on activation. The metadata ObjectFilter cannot filter
-// by nameSingular, so ALL objects are fetched in one query and cached
-// briefly: a field created mid-session is picked up within a minute.
+// by nameSingular, so ALL objects are loaded (paginated, via
+// loadAllObjectsWithFields) and cached briefly: a field created mid-session is
+// picked up within a minute.
 const FIELD_KINDS_TTL_MS = 60_000;
-let fieldKindsCache: {
+
+// finding m4: this cache is process-global, and a single worker process serves
+// MANY workspaces. Keying it by workspace stops workspace A's field kinds from
+// being served to workspace B within the TTL (which would build wrong
+// sub-selections -> silent null reads). The workspace subdomain / app-token
+// workspaceId claim is the cheapest identifier the logic-function runtime
+// exposes; the front-component sandbox (a single workspace per process, and no
+// process.env) falls back to a constant, which is safe there.
+const workspaceCacheKey = (): string => {
+  const env = (
+    globalThis as {
+      process?: { env?: Record<string, string | undefined> };
+    }
+  ).process?.env;
+  if (env?.TWENTY_WORKSPACE_SUBDOMAIN) {
+    return env.TWENTY_WORKSPACE_SUBDOMAIN;
+  }
+  const token = env?.TWENTY_APP_ACCESS_TOKEN;
+  if (token && typeof Buffer !== 'undefined') {
+    try {
+      const payload = JSON.parse(
+        Buffer.from(token.split('.')[1] ?? '', 'base64').toString('utf8'),
+      );
+      if (typeof payload?.workspaceId === 'string') {
+        return payload.workspaceId;
+      }
+    } catch {
+      // Malformed token -> fall through to the shared key.
+    }
+  }
+  return 'global';
+};
+
+type FieldKindsEntry = {
   byObject: Map<string, Map<string, string>>;
   loadedAt: number;
-} | null = null;
+};
+const fieldKindsCacheByWorkspace = new Map<string, FieldKindsEntry>();
 
 const loadFieldKinds = async (
   objectName: string,
 ): Promise<Map<string, string>> => {
-  if (
-    fieldKindsCache &&
-    Date.now() - fieldKindsCache.loadedAt < FIELD_KINDS_TTL_MS
-  ) {
-    return fieldKindsCache.byObject.get(objectName) ?? new Map();
+  const cacheKey = workspaceCacheKey();
+  const cached = fieldKindsCacheByWorkspace.get(cacheKey);
+  if (cached && Date.now() - cached.loadedAt < FIELD_KINDS_TTL_MS) {
+    return cached.byObject.get(objectName) ?? new Map();
   }
 
   try {
-    const client = new MetadataApiClient();
-    const response = await client.query({
-      objects: {
-        __args: { filter: {}, paging: { first: 1000 } },
-        edges: {
-          node: {
-            nameSingular: true,
-            fields: {
-              __args: { paging: { first: 1000 }, filter: {} },
-              edges: { node: { name: true, type: true } },
-            },
-          },
-        },
-      },
-    });
+    const objects = await loadAllObjectsWithFields();
     const byObject = new Map<string, Map<string, string>>();
-    for (const objectEdge of response?.objects?.edges ?? []) {
-      const node = objectEdge?.node;
-      if (!node?.nameSingular) continue;
+    for (const object of objects) {
       const kinds = new Map<string, string>();
-      for (const fieldEdge of node.fields?.edges ?? []) {
-        if (fieldEdge?.node?.name && fieldEdge?.node?.type) {
-          kinds.set(fieldEdge.node.name, fieldEdge.node.type);
-        }
+      for (const field of object.fields) {
+        kinds.set(field.name, field.type);
       }
-      byObject.set(node.nameSingular, kinds);
+      byObject.set(object.nameSingular, kinds);
     }
-    fieldKindsCache = { byObject, loadedAt: Date.now() };
+    fieldKindsCacheByWorkspace.set(cacheKey, { byObject, loadedAt: Date.now() });
     return byObject.get(objectName) ?? new Map();
   } catch {
     // Metadata unavailable -> fall back to scalar selections; do not cache.

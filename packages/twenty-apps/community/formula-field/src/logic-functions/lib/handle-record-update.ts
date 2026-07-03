@@ -20,7 +20,9 @@ import {
   type FormulaClient,
   type RecomputeOutcome,
 } from 'src/logic-functions/lib/types';
+import { navigatePath } from 'src/logic-functions/lib/coercion';
 import {
+  isIntegerBackedFormat,
   normalizeComputedValue,
   normalizeStoredValue,
 } from 'src/logic-functions/lib/value-io';
@@ -110,24 +112,41 @@ export const handleRecordUpdate = async ({
 
       // Composite-aware: a CURRENCY value field arrives as
       // { amountMicros, currencyCode } — its numeric value is the micros.
-      const normalized = normalizeStoredValue(after?.[field]);
+      const eventValue = normalizeStoredValue(after?.[field]);
 
-      const computed = await computeFormulaValueForRecord({
+      // finding m1: read the record FRESH (no prefetch) so the decision uses the
+      // CURRENT inputs and CURRENT stored value, not the possibly-stale event
+      // snapshot. This closes the echo-race: the event that echoes the app's own
+      // write can arrive after an input already moved on, and comparing the fresh
+      // compute to the stale snapshot would fabricate a spurious override.
+      const fresh = await computeFormulaValueForRecord({
         client,
         formula,
         targetRecordId: recordId,
-        prefetchedRecord: after ?? undefined,
       });
-      const computedStored = normalizeComputedValue(
-        formula.targetFieldType,
-        computed.value,
+      // Can't compute (record vanished / load error) -> never risk a false pin.
+      if (fresh.error !== null || fresh.sameRecord === null) continue;
+
+      const currentStored = normalizeStoredValue(
+        navigatePath(fresh.sameRecord, field),
       );
 
-      // Matches the formula -> app recompute -> not an override.
-      if (computed.error === null && numbersEqual(computedStored, normalized)) {
-        continue;
-      }
-      await upsertOverride(client, objectName, field, recordId, normalized);
+      // Superseded write in flight: the stored value already moved past the
+      // value this event reports, so a newer write is converging — treating the
+      // stale echo as a human pin would be wrong. Skip it.
+      if (!numbersEqual(currentStored, eventValue)) continue;
+
+      const computedStored = normalizeComputedValue(
+        formula.targetFieldType,
+        fresh.value,
+        { integerBacked: isIntegerBackedFormat(formula.outputFormat) },
+      );
+
+      // The current stored value matches the formula on CURRENT inputs -> it is
+      // the app's own recompute, not a human pin.
+      if (numbersEqual(computedStored, currentStored)) continue;
+
+      await upsertOverride(client, objectName, field, recordId, currentStored);
     }
   }
 

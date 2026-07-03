@@ -17,6 +17,7 @@ export const FORMULA_DEFINITION_FIELDS = {
   currencyCode: '73e22ce5-7b4e-48d4-9f96-00ca3973af35',
   createdField: '9cc13837-c40a-4987-947e-a6635e94aa12',
   outputFormat: '89f978e2-b08a-4778-98d6-fbfe52efd162',
+  targetFieldSettings: 'b1e7c2a4-9f3d-4c86-8a71-2d5e0f6b4c19',
   expression: 'd7750c25-b265-48aa-92a7-a649855449d7',
   dependencies: 'a39455b0-c789-441a-8fea-1d6c87277446',
   enabled: '64790652-18a3-47d9-a1ac-8883d0830a7a',
@@ -145,6 +146,18 @@ export default defineObject({
         'wizard persists ' +
         'selections as they are made and resumes from them.',
       icon: 'IconForms',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.targetFieldSettings,
+      type: FieldType.TEXT,
+      name: 'targetFieldSettings',
+      label: 'Target field settings',
+      description:
+        'JSON-serialized display settings for the value field (decimals, ' +
+        'number/currency format, date display) plus currency code. Persisted ' +
+        'so the wizard resumes and the definition editor can restore/edit the ' +
+        'exact chosen options. System-managed.',
+      icon: 'IconAdjustments',
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.createdField,

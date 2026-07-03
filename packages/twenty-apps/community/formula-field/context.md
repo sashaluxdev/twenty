@@ -134,7 +134,32 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   - Recompute skips **active** overrides. Toggle OFF **deactivates** (keeps the
     value) + recomputes; toggle ON **restores** the last override value and shows
     an "Override value restored" hint.
-- **Tests**: 191 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
+- **Wizard format parity + safely-editable config + hardening (2026-07-03,
+  verified live)**: wizard exposes every native field option (number/short/
+  percent decimals; currency Short/Full + decimals + code; date/datetime
+  display format incl. Custom Unicode) — shapes match the native settings UI
+  exactly (server does NO settings validation for these types, so parity =
+  editability later). All choices persist on `targetFieldSettings` (TEXT JSON)
+  for wizard resumability. Definition editor gains a "Field settings" section:
+  label editable (always writes `isLabelSyncedWithName:false` so the API name
+  can't drift), API name locked, format options editable. Record-page
+  expression save is now a two-step all-records confirm (host
+  openCommandConfirmationModal can't gate — it discards the result — so it's
+  inline). Post-create snackbar nudges refresh (SSE-staleness mitigation;
+  README documents the platform limit; GH issue drafted at
+  ~/twenty-metadata-staleness-issue-draft.md).
+  **Audit fixes** (independent Fable review, graded B→ addressed): M1 GraphQL
+  identifier-injection guard in dynamic-client serializer + save-validation
+  target-name check (role canUpdateAllSettings KEPT — needed server-side by
+  setFieldActive); M2 integer-format rounding (was: `x/3` on an int field
+  errored forever); M3 heartbeat write-avoidance (no-op recompute = zero
+  definition writes); m1 override echo-race hardening (fresh re-read +
+  superseded-write guard); m2 UI cycle-check now keys on object+field
+  (validate-expression.ts helper); m3 metadata paging via fieldsList (no
+  false-OFFLINE truncation); m4 fieldKinds cache workspace-keyed. Remaining
+  known: m5 cross-referenced-record recompute recomputes the whole object
+  (scaling cliff, not blocking — future batching).
+- **Tests**: 223 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
   integration suite (`src/__tests__/app-install.integration-test.ts`). Lint clean.
 
 ## What is NOT done (next work)
@@ -190,6 +215,14 @@ Then:
    automatically — new fields are hidden in views by default, and layout
    convergence currently only touches record-page Fields views;
    currency-in-units input option; duration helpers (`days(n)`) once IF lands.
+7. **FUTURE (user-approved concept 2026-07-03, explicitly NOT now): per-record
+   formula overrides** — a record-specific expression (e.g. `x * 3` while the
+   definition says `x * 2`), marked as unique in the widget. Sketch: add
+   `overrideExpression` to FormulaOverride; recompute evaluates it when an
+   active row has one; validate at save; UNION per-record expressions' deps
+   into the definition's dependency set (over-triggering is safe, no-op writes
+   suppressed); precedence rule: value override wins over formula override.
+   Est. 2-4 focused agent-days.
 
 README (formula grammar, architecture diagram, limitations, runbook) is now
 written at the app root (`README.md`).
@@ -214,6 +247,14 @@ written at the app root (`README.md`).
 
 ## Platform facts & gotchas (learned the hard way)
 
+- **Never name a CLI remote `local`.** The SDK's ConfigService always lists
+  `local` as an existing remote (DEFAULT_REMOTE_NAME) even when the config
+  file has none, so `remote:add --as local --url ...` takes the
+  RE-AUTHENTICATE path, silently DISCARDS `--url`, and falls back to the
+  baked-in default `http://localhost:2020` → `ECONNREFUSED` ("Cannot connect
+  to Twenty server"). It only ever worked here because the old config.json
+  already carried remotes.local with the right :3000 URL. Use any other name
+  (e.g. `dev`) and pass `-r dev` to app:publish/app:install.
 - **Auth mutations are on `/metadata`, not `/graphql`** (`getLoginTokenFrom...`,
   `createApiKey`, `generateApiKeyToken`). `/graphql` is core (workspace records).
   Errors come back HTTP 200 in `errors[]`.

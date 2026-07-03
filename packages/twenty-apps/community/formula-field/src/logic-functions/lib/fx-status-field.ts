@@ -1,5 +1,6 @@
 import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 
+import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
 import { pluralize } from 'src/logic-functions/lib/recompute';
 import {
   type FormulaClient,
@@ -34,36 +35,16 @@ export const loadObjectFieldIndex = async (): Promise<
 > => {
   const index = new Map<string, ObjectFieldIndex>();
   try {
-    const client = new MetadataApiClient();
-    const response = await client.query({
-      objects: {
-        __args: { filter: {}, paging: { first: 1000 } },
-        edges: {
-          node: {
-            id: true,
-            nameSingular: true,
-            fields: {
-              __args: { paging: { first: 1000 }, filter: {} },
-              edges: { node: { id: true, name: true, isActive: true } },
-            },
-          },
-        },
-      },
-    });
-    for (const objectEdge of response?.objects?.edges ?? []) {
-      const node = objectEdge?.node;
-      if (!node?.nameSingular || !node?.id) continue;
+    const objects = await loadAllObjectsWithFields();
+    for (const object of objects) {
       const fields = new Map<string, FieldInfo>();
-      for (const fieldEdge of node.fields?.edges ?? []) {
-        const field = fieldEdge?.node;
-        if (field?.id && field?.name) {
-          fields.set(field.name, {
-            id: field.id,
-            isActive: field.isActive !== false,
-          });
-        }
+      for (const field of object.fields) {
+        fields.set(field.name, { id: field.id, isActive: field.isActive });
       }
-      index.set(node.nameSingular, { objectMetadataId: node.id, fields });
+      index.set(object.nameSingular, {
+        objectMetadataId: object.id,
+        fields,
+      });
     }
   } catch {
     // Metadata unavailable -> empty index (companions simply not synced).

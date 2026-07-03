@@ -16,6 +16,7 @@ import {
   deleteDefinitionCompletely,
   planDeleteDefinition,
 } from 'src/front-components/lib/delete-definition-completely';
+import { FieldSettingsEditor } from 'src/front-components/lib/field-settings-editor';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
@@ -37,6 +38,7 @@ type Definition = {
   targetFieldType: string;
   currencyCode: string;
   outputFormat: string;
+  targetFieldSettings: string;
   expression: string;
   enabled: boolean;
   lastValue: number | null;
@@ -263,6 +265,7 @@ const FormulaDefinitionEditor = () => {
             targetFieldType: true,
             currencyCode: true,
             outputFormat: true,
+            targetFieldSettings: true,
             expression: true,
             enabled: true,
             lastValue: true,
@@ -283,6 +286,7 @@ const FormulaDefinitionEditor = () => {
         targetFieldType: edge.node.targetFieldType ?? 'NUMBER',
         currencyCode: edge.node.currencyCode ?? '',
         outputFormat: edge.node.outputFormat ?? '',
+        targetFieldSettings: edge.node.targetFieldSettings ?? '',
         expression: edge.node.expression ?? '',
         enabled: edge.node.enabled ?? false,
         lastValue: edge.node.lastValue ?? null,
@@ -371,6 +375,7 @@ const FormulaDefinitionEditor = () => {
             targetObject: definition.targetObject,
             outputFormat: definition.outputFormat,
             currencyCode: definition.currencyCode,
+            targetFieldSettings: definition.targetFieldSettings,
           }}
           onCreated={load}
         />
@@ -452,6 +457,15 @@ const FormulaDefinitionEditor = () => {
       ) : (
         <div style={s.ok}>Valid</div>
       )}
+
+      <FieldSettingsEditor
+        definitionId={definition.id}
+        targetObject={definition.targetObject}
+        targetField={definition.targetField}
+        targetFieldType={definition.targetFieldType}
+        outputFormat={definition.outputFormat}
+        currencyCode={definition.currencyCode}
+      />
 
       <FormulaDangerZone
         definitionId={definition.id}

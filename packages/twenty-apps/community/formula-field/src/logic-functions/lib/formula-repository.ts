@@ -14,6 +14,7 @@ const FORMULA_FIELDS = {
   targetField: true,
   targetFieldType: true,
   currencyCode: true,
+  outputFormat: true,
   createdField: true,
   expression: true,
   enabled: true,
@@ -114,14 +115,26 @@ export const updateFormulaBookkeeping = async (
 // column-level so lastValue is a representative sample, not per-record. These are
 // all bookkeeping fields, so the write is ignored by the save-time trigger and
 // never loops.
+//
+// finding M3: write-avoidant. A no-op recompute (value unchanged, no new error)
+// must perform ZERO definition-row writes — otherwise every same-record echo and
+// every sweep pass rewrites the row purely to bump lastEvaluatedAt, churning
+// formulaDefinition.updated events. So the timestamp ALONE never forces a write:
+// only a changed value or changed error content does.
 export const recordEvaluationHeartbeat = async (
   client: FormulaClient,
   formula: FormulaDefinitionRecord,
   outcome: { value: number | null; error: string | null },
 ): Promise<void> => {
+  const nextValue = outcome.value ?? null;
   const nextError = outcome.error ?? '';
+  const valueChanged = (formula.lastValue ?? null) !== nextValue;
+  const errorChanged = (formula.lastError ?? '') !== nextError;
+  if (!valueChanged && !errorChanged) {
+    return;
+  }
   await updateFormulaBookkeeping(client, formula.id, {
-    lastValue: outcome.value,
+    lastValue: nextValue,
     lastError: nextError,
     lastEvaluatedAt: new Date().toISOString(),
   });

@@ -6,6 +6,7 @@ import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
 import {
   buildTargetWriteData,
+  isIntegerBackedFormat,
   normalizeComputedValue,
   normalizeStoredValue,
   selectionEntryForFieldKind,
@@ -337,9 +338,12 @@ export const recomputeForRecord = async ({
   if (computed.error !== null || computed.sameRecord === null) {
     return { ...base, error: computed.error ?? 'Record not found' };
   }
-  // CURRENCY stores integer micros — compare and write the rounded value, or a
-  // fractional result would never match the stored value and rewrite forever.
-  const result = normalizeComputedValue(formula.targetFieldType, computed.value);
+  // CURRENCY stores integer micros and integer-backed NUMBER fields store whole
+  // numbers — compare and write the rounded value, or a fractional result would
+  // never match the stored value and rewrite forever (finding M2).
+  const result = normalizeComputedValue(formula.targetFieldType, computed.value, {
+    integerBacked: isIntegerBackedFormat(formula.outputFormat),
+  });
   const sameRecord = computed.sameRecord;
 
   const currentRaw = navigatePath(sameRecord, targetField);

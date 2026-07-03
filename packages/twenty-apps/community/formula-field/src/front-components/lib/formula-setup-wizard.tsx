@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CoreApiClient } from 'twenty-client-sdk/core';
 import { MetadataApiClient } from 'twenty-client-sdk/metadata';
+import { enqueueSnackbar } from 'twenty-sdk/front-component';
 
 import { ensureFormulaTabOnObject } from 'src/front-components/lib/ensure-formula-tab';
 import { ensureFieldLayoutVisibility } from 'src/logic-functions/lib/fx-status-field';
+import { FormatOptionsFields } from 'src/front-components/lib/format-options-fields';
 import {
+  areFormatOptionsValid,
+  buildCurrencyDefaultValue,
+  buildFieldSettings,
   deriveFieldName,
+  type FormatOptions,
   getOutputFormat,
   isValidFieldName,
+  makeFormatOptions,
+  optionsFromSettings,
   OUTPUT_FORMATS,
   type OutputFormat,
+  parseTargetFieldSettings,
+  serializeTargetFieldSettings,
 } from 'src/front-components/lib/formula-field-formats';
 
 // Guided setup for a fresh FormulaDefinition (feature #1): pick the target
@@ -27,12 +37,6 @@ import {
 
 // The app's own objects can't host formula fields.
 const EXCLUDED_OBJECTS = new Set(['formulaDefinition', 'formulaOverride']);
-
-// Codes offered for CURRENCY fields; JPY is the default when the user does not
-// intervene. The chosen code becomes the field's default currency and the code
-// recompute writes on records that have none.
-const CURRENCY_CODES = ['JPY', 'USD', 'EUR', 'GBP', 'CHF', 'CAD'];
-const DEFAULT_CURRENCY_CODE = 'JPY';
 
 // Options for the hidden "FX Status" companion SELECT created next to every
 // value field (ADR 0009). Fixed option ids: the remote-dom sandbox has no
@@ -69,6 +73,9 @@ export type WizardDraft = {
   targetObject: string;
   outputFormat: string;
   currencyCode: string;
+  // JSON-serialized { settings, currencyCode } — the persisted format options
+  // so the wizard resumes with the exact chosen decimals / format / date style.
+  targetFieldSettings: string;
 };
 
 type FormulaSetupWizardProps = {
@@ -88,12 +95,24 @@ export const FormulaSetupWizard = ({
   const [objectFilter, setObjectFilter] = useState('');
   const [selectedObject, setSelectedObject] =
     useState<TargetObjectOption | null>(null);
-  const [format, setFormat] = useState<OutputFormat | null>(
-    isOutputFormat(draft.outputFormat) ? draft.outputFormat : null,
-  );
-  const [currencyCode, setCurrencyCode] = useState(
-    draft.currencyCode || DEFAULT_CURRENCY_CODE,
-  );
+  const initialFormat = isOutputFormat(draft.outputFormat)
+    ? draft.outputFormat
+    : null;
+  const [format, setFormat] = useState<OutputFormat | null>(initialFormat);
+  // Format options (decimals / currency Short-Full + code / date display style)
+  // seeded from the persisted targetFieldSettings so a resumed draft restores
+  // exactly what the user chose.
+  const [options, setOptions] = useState<FormatOptions>(() => {
+    const parsed = parseTargetFieldSettings(draft.targetFieldSettings);
+    if (initialFormat) {
+      return optionsFromSettings(
+        initialFormat,
+        parsed?.settings ?? null,
+        draft.currencyCode || parsed?.currencyCode,
+      );
+    }
+    return makeFormatOptions('integer');
+  });
   const [label, setLabel] = useState(draft.name);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
@@ -203,17 +222,40 @@ export const FormulaSetupWizard = ({
     return () => clearTimeout(handle);
   }, [label, persistDraft]);
 
+  // Serializes and persists the current format + options as the resumable draft.
+  const persistFormatOptions = useCallback(
+    (formatKey: OutputFormat, nextOptions: FormatOptions) => {
+      const settings = buildFieldSettings(formatKey, nextOptions);
+      const isCurrency = getOutputFormat(formatKey).fieldType === 'CURRENCY';
+      persistDraft({
+        outputFormat: formatKey,
+        currencyCode: nextOptions.currencyCode,
+        targetFieldSettings: serializeTargetFieldSettings({
+          settings,
+          currencyCode: isCurrency ? nextOptions.currencyCode : undefined,
+        }),
+      });
+    },
+    [persistDraft],
+  );
+
   const pickObject = (object: TargetObjectOption) => {
     setSelectedObject(object);
     persistDraft({ targetObject: object.nameSingular });
   };
   const pickFormat = (key: OutputFormat) => {
+    // Reset options to the new format's defaults but keep the chosen currency.
+    const nextOptions = {
+      ...makeFormatOptions(key),
+      currencyCode: options.currencyCode,
+    };
     setFormat(key);
-    persistDraft({ outputFormat: key });
+    setOptions(nextOptions);
+    persistFormatOptions(key, nextOptions);
   };
-  const pickCurrency = (code: string) => {
-    setCurrencyCode(code);
-    persistDraft({ currencyCode: code });
+  const changeOptions = (nextOptions: FormatOptions) => {
+    setOptions(nextOptions);
+    if (format) persistFormatOptions(format, nextOptions);
   };
 
   const fieldName = useMemo(() => deriveFieldName(label), [label]);
@@ -241,7 +283,8 @@ export const FormulaSetupWizard = ({
     Boolean(format) &&
     isValidFieldName(fieldName) &&
     !collision &&
-    !creating;
+    !creating &&
+    (!format || areFormatOptionsValid(format, options));
 
   const create = useCallback(async () => {
     if (!selectedObject || !format || !isValidFieldName(fieldName)) return;
@@ -250,6 +293,7 @@ export const FormulaSetupWizard = ({
     try {
       const formatDefinition = getOutputFormat(format);
       const isCurrency = formatDefinition.targetFieldType === 'CURRENCY';
+      const settings = buildFieldSettings(format, options);
       const metadataClient = new MetadataApiClient();
 
       let valueFieldId = existingField?.id ?? null;
@@ -266,16 +310,13 @@ export const FormulaSetupWizard = ({
                   description: `Computed by the Formula Field app (${format}).`,
                   icon: 'IconMathFunction',
                   isUIEditable: true,
-                  ...(formatDefinition.settings
-                    ? { settings: formatDefinition.settings }
-                    : {}),
+                  ...(settings ? { settings } : {}),
                   // String defaults use the server's quoted-literal convention.
                   ...(isCurrency
                     ? {
-                        defaultValue: {
-                          amountMicros: null,
-                          currencyCode: `'${currencyCode}'`,
-                        },
+                        defaultValue: buildCurrencyDefaultValue(
+                          options.currencyCode,
+                        ),
                       }
                     : {}),
                 },
@@ -358,8 +399,12 @@ export const FormulaSetupWizard = ({
               targetObject: selectedObject.nameSingular,
               targetField: fieldName,
               targetFieldType: formatDefinition.targetFieldType,
-              currencyCode: isCurrency ? currencyCode : '',
+              currencyCode: isCurrency ? options.currencyCode : '',
               outputFormat: format,
+              targetFieldSettings: serializeTargetFieldSettings({
+                settings,
+                currencyCode: isCurrency ? options.currencyCode : undefined,
+              }),
               // Provenance: the lifecycle machinery only deactivates /
               // reactivates fields the wizard created (ADR 0009).
               createdField: true,
@@ -368,6 +413,22 @@ export const FormulaSetupWizard = ({
           id: true,
         },
       });
+
+      // Runtime-created fields/tabs propagate to already-open tabs only over
+      // live SSE; there is no app-side metadata-invalidation API. Nudge the user
+      // to refresh if the new field does not show up. Best-effort: the host may
+      // not expose the snackbar bridge.
+      try {
+        await enqueueSnackbar({
+          message:
+            'Formula field created. If it does not appear in views or tabs, ' +
+            'refresh the page.',
+          variant: 'info',
+          dedupeKey: 'formula-field-created',
+        });
+      } catch {
+        // No host snackbar — the expression editor also shows an inline note.
+      }
       onCreated();
     } catch (createError) {
       setError((createError as Error).message ?? String(createError));
@@ -377,7 +438,7 @@ export const FormulaSetupWizard = ({
   }, [
     selectedObject,
     format,
-    currencyCode,
+    options,
     fieldName,
     label,
     draft.id,
@@ -440,23 +501,14 @@ export const FormulaSetupWizard = ({
         </div>
       </div>
 
-      {format === 'currency' ? (
+      {format ? (
         <div style={w.step}>
-          <div style={w.stepTitle}>2b · Default currency</div>
-          <div style={w.formatRow}>
-            {CURRENCY_CODES.map((code) => (
-              <button
-                key={code}
-                style={{
-                  ...w.chip,
-                  ...(currencyCode === code ? w.chipSelected : {}),
-                }}
-                onMouseDown={() => pickCurrency(code)}
-              >
-                {code}
-              </button>
-            ))}
-          </div>
+          <div style={w.stepTitle}>2b · Format options</div>
+          <FormatOptionsFields
+            format={format}
+            options={options}
+            onChange={changeOptions}
+          />
         </div>
       ) : null}
 

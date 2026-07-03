@@ -1,10 +1,9 @@
-import { MetadataApiClient } from 'twenty-client-sdk/metadata';
-
 import { compileFormula } from 'src/engine';
 import {
   loadAllEnabledFormulas,
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
+import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
 import {
   loadObjectFieldIndex,
   syncCompanionStatusField,
@@ -138,28 +137,12 @@ export const computeFormulaStatuses = (
 // is assumed live: no false OFFLINE alarms from a transient hiccup.
 export const loadFieldLiveness = async (): Promise<FieldLiveness> => {
   try {
-    const client = new MetadataApiClient();
-    const response = await client.query({
-      objects: {
-        __args: { filter: {}, paging: { first: 1000 } },
-        edges: {
-          node: {
-            nameSingular: true,
-            fields: {
-              __args: { paging: { first: 1000 }, filter: {} },
-              edges: { node: { name: true, isActive: true } },
-            },
-          },
-        },
-      },
-    });
+    const objects = await loadAllObjectsWithFields();
     const live = new Set<string>();
-    for (const objectEdge of response?.objects?.edges ?? []) {
-      const node = objectEdge?.node;
-      if (!node?.nameSingular) continue;
-      for (const fieldEdge of node.fields?.edges ?? []) {
-        if (fieldEdge?.node?.name && fieldEdge.node.isActive !== false) {
-          live.add(fieldKey(node.nameSingular, fieldEdge.node.name));
+    for (const object of objects) {
+      for (const field of object.fields) {
+        if (field.isActive) {
+          live.add(fieldKey(object.nameSingular, field.name));
         }
       }
     }

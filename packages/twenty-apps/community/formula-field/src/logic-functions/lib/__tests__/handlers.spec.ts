@@ -104,6 +104,28 @@ describe('handleFormulaChange (save-time validation)', () => {
     );
   });
 
+  it('rejects and disables a definition with an injection-shaped target field (finding M1)', async () => {
+    const bad: FormulaDefinitionRecord = {
+      id: 'inj',
+      targetObject: 'opportunity',
+      targetField: 'score) { id } evil(',
+      expression: 'formulaInputA',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [bad]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: bad,
+      updatedFields: undefined,
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'inj')!;
+    expect(stored.enabled).toBe(false);
+    expect(String(stored.lastError)).toMatch(/Invalid target field name/);
+  });
+
   it('ignores its own bookkeeping-only writes (no re-processing loop)', async () => {
     const def: FormulaDefinitionRecord = {
       id: 'f1',
@@ -338,6 +360,60 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(outcome?.overridden).toBe(true);
     // The formula would say 25, but the pinned 99 is untouched.
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(99);
+  });
+
+  it('performs zero definition-row writes on a no-op recompute (heartbeat write-avoidance, finding M3)', async () => {
+    // The definition already holds the value the formula computes, and the
+    // record is already correct: recompute changes nothing, so NOTHING — not
+    // even a lastEvaluatedAt bump — may be written back to the definition row.
+    client.seed('formulaDefinition', [
+      {
+        id: 'f1',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        expression: 'formulaInputA + formulaInputB * 2',
+        enabled: true,
+        lastValue: 25,
+        lastError: '',
+      },
+    ]);
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 25 },
+    ]);
+    const before = client.mutations;
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 25 },
+      updatedFields: ['formulaInputA'],
+    });
+
+    expect(client.mutations).toBe(before);
+  });
+
+  it('does NOT create a spurious override when the stored value was superseded (echo-race, finding m1)', async () => {
+    // The record has already converged to 29 (inputs 9,10), but a STALE echo of
+    // the app's earlier write of 25 arrives carrying a user identity and lacking
+    // the input fields. Comparing a fresh recompute to that stale snapshot would
+    // fabricate an override; the superseded-write guard must skip it.
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 9, formulaInputB: 10, formulaScore: 29 },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaScore: 25 },
+      updatedFields: ['formulaScore'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+    // The converged value is left untouched.
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(29);
   });
 
   it('recomputes cross-object formulas when a referenced record changed', async () => {

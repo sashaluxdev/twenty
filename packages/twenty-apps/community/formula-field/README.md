@@ -31,8 +31,17 @@ through a front component on the record page.
 ### Feature summary
 
 - **Guided "Add formula field" wizard** — pick object → output format (integer /
-  decimal / percent / currency / date / datetime) → name; the value field is
-  created at runtime via the metadata API, no redeploy (ADR 0008).
+  decimal / percent / short / currency / date / datetime) → per-format options
+  (decimals, currency Short/Full + code, date display style with custom Unicode
+  pattern — the same options the native field creator exposes) → name; the value
+  field is created at runtime via the metadata API, no redeploy (ADR 0008). Every
+  choice persists on the definition (`targetFieldSettings`) so the wizard resumes.
+- **Editable field settings** — a completed definition's record page has a
+  collapsible "Field settings" section: the target object and field API name are
+  read-only (formulas reference the API name; the label update forces
+  `isLabelSyncedWithName: false` so the API name stays fixed), while the field
+  label and display settings (decimals, number/currency/date format) are
+  editable and written straight back through `updateOneField`.
 - **Output formats** — integer, decimal, percent (all `NUMBER`), currency
   (`CURRENCY`, stored and computed in **micros**, ×1e6), and date / datetime
   (`DATE` / `DATE_TIME`, the Excel serial-date model — **epoch-days**, ADR 0011).
@@ -237,9 +246,13 @@ the evaluator independently caps AST depth at runtime.
   `status`/`statusReason`, and `lastValue`/`lastEvaluatedAt`/`lastError`.
 - **Recompute engine** (`src/logic-functions/lib/recompute.ts`, `value-io.ts`,
   ADR 0004) — resolves same- and cross-record inputs, evaluates, and writes the
-  value field. Currency reads/writes go through micros; computed values are
-  rounded before every comparison so convergence and override detection are
-  stable. No-op writes are suppressed (recursion guard).
+  value field. Currency reads/writes go through micros. Before a value is
+  written or compared it is normalized per target kind (`normalizeComputedValue`
+  in `value-io.ts`): CURRENCY rounds to whole micros, DATE floors to a whole UTC
+  day, DATE_TIME rounds to a whole millisecond, and an integer-format NUMBER
+  rounds to a whole number; a plain float NUMBER is written and compared exactly.
+  This keeps convergence and override detection stable. No-op writes are
+  suppressed (recursion guard).
 - **Wildcard record triggers** (`on-record-updated`, `on-record-created`, ADR
   0008) — fire on `*.updated` / `*.created` for any object (object name from
   `payload.objectMetadata.nameSingular`); the app's own objects are skipped.
@@ -295,6 +308,14 @@ the evaluator independently caps AST depth at runtime.
   is no read-your-write guarantee inside a single transaction.
 - **Currency is stored as micros** (×1e6) end-to-end. Formula math on a currency
   field operates on `amountMicros`; the field is labelled "currency (micros)".
+- **Runtime-created fields/tabs don't invalidate open tabs.** A field or
+  record-page tab created at runtime (by the setup wizard) propagates to
+  already-open browser tabs only over the live SSE metadata stream; there is no
+  app-side metadata-invalidation verb exposed to front components
+  (`FrontComponentHostCommunicationApi` offers `enqueueSnackbar` but no
+  metadata-refresh). A page refresh reliably syncs. After creating a formula
+  field the wizard therefore raises an info snackbar prompting a refresh if the
+  new field does not immediately appear in views or tabs.
 
 ## Runbook
 

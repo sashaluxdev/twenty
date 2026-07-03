@@ -50,6 +50,18 @@ const toTarget = (
   }
 };
 
+// Target object/field API names must be plain camelCase identifiers — the same
+// shape the wizard's isValidFieldName enforces and the GraphQL serializer
+// accepts. Validating here (finding M1) means a definition with a malformed or
+// injection-shaped target name is rejected + disabled at save with a clear
+// error, consistent with how a cycle is rejected, rather than reaching the
+// dynamically built recompute query. (A shared helper here avoids importing from
+// the front-components tree, which would invert the dependency direction.)
+const SAFE_TARGET_NAME = /^[a-z][a-zA-Z0-9]*$/i;
+
+export const isValidTargetName = (name: string): boolean =>
+  SAFE_TARGET_NAME.test(name);
+
 export type ValidateArgs = {
   candidate: Pick<
     FormulaDefinitionRecord,
@@ -109,6 +121,18 @@ export const validateFormula = ({
   }
   if (!field) {
     return { valid: false, error: 'targetField is required' };
+  }
+  if (!isValidTargetName(object)) {
+    return {
+      valid: false,
+      error: `Invalid target object name "${object}" (must be a camelCase identifier)`,
+    };
+  }
+  if (!isValidTargetName(field)) {
+    return {
+      valid: false,
+      error: `Invalid target field name "${field}" (must be a camelCase identifier)`,
+    };
   }
 
   // 1. Parse + dependency extraction.

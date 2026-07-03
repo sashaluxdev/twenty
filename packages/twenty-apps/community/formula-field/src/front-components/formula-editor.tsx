@@ -4,14 +4,8 @@ import { FORMULA_EDITOR_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/fr
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { useRecordId } from 'twenty-sdk/front-component';
 
-import {
-  detectCycle,
-  extractDependenciesFromAst,
-  type FormulaTarget,
-  isFormulaError,
-  parse,
-} from 'src/engine';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
+import { validateExpression } from 'src/front-components/lib/validate-expression';
 import {
   activateOverride,
   deactivateOverride,
@@ -83,43 +77,6 @@ const displayValue = (
   return String(value);
 };
 
-const validateExpression = (
-  expression: string,
-  hostObject: string,
-  targetField: string,
-  allDefinitions: Definition[],
-): string | null => {
-  let dependencies;
-  try {
-    dependencies = extractDependenciesFromAst(parse(expression));
-  } catch (error) {
-    return isFormulaError(error)
-      ? `${error.code}: ${error.message}`
-      : String(error);
-  }
-
-  const others: FormulaTarget[] = allDefinitions
-    .filter((definition) => definition.targetField !== targetField)
-    .map((definition) => {
-      try {
-        return {
-          object: definition.targetObject,
-          field: definition.targetField,
-          dependencies: extractDependenciesFromAst(parse(definition.expression)),
-        };
-      } catch {
-        return null;
-      }
-    })
-    .filter((target): target is FormulaTarget => target !== null);
-
-  const cycle = detectCycle([
-    ...others,
-    { object: hostObject, field: targetField, dependencies },
-  ]);
-  return cycle.hasCycle ? `Dependency cycle: ${cycle.cycle.join(' -> ')}` : null;
-};
-
 const OverrideToggle = ({
   on,
   busy,
@@ -175,8 +132,23 @@ const FormulaEditor = () => {
   const [loading, setLoading] = useState(true);
   // Transient per-formula hint, e.g. "Override value restored".
   const [restoredHint, setRestoredHint] = useState<Record<string, boolean>>({});
+  // Two-step save guard: saving an expression changes the formula for EVERY
+  // record of the object, so the first Save click arms this warning and a second
+  // click within ~5s confirms. Editing the expression (or the timeout) disarms.
+  const [armedSaveId, setArmedSaveId] = useState<string | null>(null);
+  const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The record id never changes for a mounted widget — resolve its object once.
   const resolvedHost = useRef<string | null>(null);
+
+  const disarmSave = useCallback(() => {
+    if (armTimer.current) {
+      clearTimeout(armTimer.current);
+      armTimer.current = null;
+    }
+    setArmedSaveId(null);
+  }, []);
+
+  useEffect(() => () => disarmSave(), [disarmSave]);
 
   const load = useCallback(async () => {
     // Dynamic client: wizard-created value fields are not in the genql type map.
@@ -348,6 +320,14 @@ const FormulaEditor = () => {
         );
         return;
       }
+      // First click arms the all-records warning; a second click confirms.
+      if (armedSaveId !== definition.id) {
+        setArmedSaveId(definition.id);
+        if (armTimer.current) clearTimeout(armTimer.current);
+        armTimer.current = setTimeout(() => setArmedSaveId(null), 5000);
+        return;
+      }
+      disarmSave();
       setBusy(definition.id);
       try {
         // Dynamic client: wizard-created value fields are not in the genql type map.
@@ -365,7 +345,7 @@ const FormulaEditor = () => {
         setTimeout(load, 1500);
       }
     },
-    [drafts, definitions, load],
+    [drafts, definitions, load, armedSaveId, disarmSave],
   );
 
   const toggleOverride = useCallback(
@@ -387,7 +367,9 @@ const FormulaEditor = () => {
           );
           if (restored) {
             // Write the retained value back to the field (composite-aware; a
-            // restored CURRENCY value defaults its code to USD).
+            // restored CURRENCY value resolves its code as
+            // existing-on-record -> definition.currencyCode -> JPY fallback,
+            // per buildTargetWriteData).
             await client.mutation({
               [`update${capitalize(definition.targetObject)}`]: {
                 __args: {
@@ -490,6 +472,7 @@ const FormulaEditor = () => {
         ? overrideEntry.value
         : values[definition.targetField];
       const rowBusy = busy === definition.id;
+      const armed = armedSaveId === definition.id;
 
       return (
         <div key={definition.id} style={styles.row}>
@@ -519,22 +502,31 @@ const FormulaEditor = () => {
           <div style={styles.editRow}>
             <FormulaFieldInput
               value={draft}
-              onChange={(next) =>
-                setDrafts((prev) => ({ ...prev, [definition.id]: next }))
-              }
+              onChange={(next) => {
+                // Editing disarms a pending all-records save confirmation.
+                if (armedSaveId === definition.id) disarmSave();
+                setDrafts((prev) => ({ ...prev, [definition.id]: next }));
+              }}
               targetObject={definition.targetObject}
             />
             <button
               style={{
                 ...styles.button,
+                ...(armed ? styles.buttonArmed : {}),
                 ...(dirty && !liveError ? {} : styles.buttonDisabled),
               }}
               disabled={!dirty || Boolean(liveError) || rowBusy}
               onClick={() => saveExpression(definition)}
             >
-              Save
+              {armed ? 'Confirm' : 'Save'}
             </button>
           </div>
+          {armed ? (
+            <div style={styles.confirmWarning}>
+              This changes the formula for ALL {definition.targetObject} records —
+              click Save again to confirm.
+            </div>
+          ) : null}
 
           <div style={styles.overrideRow}>
             <OverrideToggle
@@ -572,6 +564,8 @@ const FormulaEditor = () => {
     overrides,
     restoredHint,
     busy,
+    armedSaveId,
+    disarmSave,
     saveExpression,
     toggleOverride,
   ]);
@@ -651,7 +645,17 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontSize: '12px',
   },
+  buttonArmed: { background: '#e0483d' },
   buttonDisabled: { background: '#c3c2c9', cursor: 'default' },
+  confirmWarning: {
+    background: '#fff4e5',
+    border: '1px solid #e58600',
+    color: '#a35c00',
+    borderRadius: '4px',
+    padding: '6px 8px',
+    fontSize: '11px',
+    marginTop: '6px',
+  },
   error: { color: '#e0483d', fontSize: '11px', marginTop: '4px' },
   bannerOffline: {
     background: '#fdecea',

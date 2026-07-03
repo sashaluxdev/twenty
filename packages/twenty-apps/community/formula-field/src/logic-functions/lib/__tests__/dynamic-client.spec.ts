@@ -89,3 +89,37 @@ describe('serializeSelection', () => {
     ).toBe('{ person { id } }');
   });
 });
+
+describe('identifier injection guard (finding M1)', () => {
+  it('rejects an injection-shaped selection key rather than emitting it', () => {
+    // An unvalidated targetObject like this would otherwise break out of the
+    // field position and inject a sibling operation / extra fields.
+    expect(() =>
+      serializeSelection({
+        'opportunity) { id } evil(': { id: true },
+      }),
+    ).toThrow(/Unsafe GraphQL identifier/);
+  });
+
+  it('rejects an injection-shaped nested field key', () => {
+    expect(() =>
+      serializeSelection({
+        opportunity: { __args: {}, 'id } extra { secret': true },
+      }),
+    ).toThrow(/Unsafe GraphQL identifier/);
+  });
+
+  it('rejects an injection-shaped argument-value object key (the write data path)', () => {
+    // value-io writes `{ [targetField]: value }` — a malicious targetField must
+    // not survive serialization.
+    expect(() =>
+      serializeArgumentValue({ 'score: 1, injected': 5 }),
+    ).toThrow(/Unsafe GraphQL identifier/);
+  });
+
+  it('still accepts legitimate identifiers (incl. underscores, matching the tokenizer)', () => {
+    expect(
+      serializeSelection({ my_object: { field_one: true } }),
+    ).toBe('{ my_object { field_one } }');
+  });
+});

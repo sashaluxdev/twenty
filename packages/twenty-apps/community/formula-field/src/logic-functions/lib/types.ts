@@ -24,6 +24,14 @@ export type FormulaDefinitionRecord = {
   targetFieldType?: string | null;
   // Currency code written when the record has none (wizard-picked; JPY default).
   currencyCode?: string | null;
+  // Wizard-picked output format: 'integer' | 'decimal' | 'percent' | 'currency'
+  // | 'date' | 'datetime'. The only signal in the recompute path that
+  // distinguishes an int-backed NUMBER field (dataType 'int' -> GraphQL Int
+  // scalar, which rejects fractional writes) from a float one, so recompute
+  // rounds integer targets before write/compare (finding M2). A
+  // targetFieldSettings JSON field is being added to the object concurrently and
+  // can become the authoritative source later.
+  outputFormat?: string | null;
   // True when the wizard created the value field for this definition —
   // provenance for the delete/restore field lifecycle.
   createdField?: boolean | null;
