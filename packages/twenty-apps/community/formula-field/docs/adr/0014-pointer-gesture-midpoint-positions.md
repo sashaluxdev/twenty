@@ -47,7 +47,17 @@ commit-on-mouseleave (persisting an order the user may not have chosen).
 
 ## Consequences
 
-- Touch drag works with no additional code path; scroll-vs-drag conflicts
+- ~~Touch drag works with no additional code path~~ **CORRECTED 2026-07-04
+  after live verification: touch drag is NON-FUNCTIONAL on the current
+  renderer.** Touch pointerdown gives the handle implicit pointer capture;
+  releasing it requires `event.target.releasePointerCapture()`, but
+  remote-dom's `SerializedEventData` exposes no `target`, so the release is
+  unreachable from app code (verified empirically — the fix attempt was a
+  no-op). Result: a touch drag arms but `pointerenter` never fires on other
+  rows — the preview never moves and ZERO writes occur (safe degradation, no
+  corruption possible). Mouse and pen are fully functional. A real fix needs
+  a renderer-package change (expose target / pointer-capture control).
+  User-accepted limitation, 2026-07-04. Scroll-vs-drag conflicts still
   resolve via pointercancel → silent revert (never a partial write).
 - Steady-state drops are O(1) writes regardless of list length; the
   duplicate-order window under concurrent tabs shrinks to single-row

@@ -357,10 +357,13 @@ const FormulaEditor = () => {
       // Self-heal (ADR 0015): a stale TODAY() formula on this record means the
       // sweep/worker isn't converging it — recompute it here in the front
       // runtime, throttled so a persistently-stale record doesn't re-trigger
-      // on every 4s poll. After it resolves, reload picks up the fresh value
-      // (and, once the resulting write round-trips through the record-update
-      // event handler, a fresh lastEvaluatedAt) — at which point this record
-      // is no longer stale and the throttle naturally stops firing.
+      // on every 4s poll. With a LIVE worker the resulting write round-trips
+      // through the record-update handler, refreshing lastEvaluatedAt and
+      // clearing staleness. With a DEAD worker (this feature's primary case)
+      // lastEvaluatedAt stays frozen, so the note persists and this re-fires
+      // every 60s while the widget is open — deliberate: each pass is an
+      // idempotent, write-avoidant recompute that keeps the viewed record
+      // correct, and the persisting note truthfully reports pipeline health.
       const now = Date.now();
       const staleDefs = defs.filter(
         (definition) =>

@@ -160,11 +160,46 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   false-OFFLINE truncation); m4 fieldKinds cache workspace-keyed. Remaining
   known: m5 cross-referenced-record recompute recomputes the whole object
   (scaling cliff, not blocking — future batching).
-- **Tests**: 252 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
+- **Tests**: 301 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
   integration suite (`src/__tests__/app-install.integration-test.ts`). Lint clean.
 - **Roadmap COMPLETE as of 2026-07-04** (items 1-5 below all DONE; branch
   audited whole — final review verdict READY TO MERGE, no Critical/Important
-  findings). Awaiting user verification + next design inputs.
+  findings).
+- **HARDENING PASS (2026-07-04, ADR 0014 + 0015, spec in repo
+  docs/superpowers/specs/, final audit READY TO CLOSE, 10/11 gauntlet PASS)**,
+  cross-referenced against core twenty-front's design philosophy:
+  - **Drag gesture**: pointer events replace mouse events (touch/pen unified);
+    8px activation distance (core's DndKitSensors constant — clicks never
+    write); drop-outside/pointercancel = SILENT CANCEL, zero writes, load()
+    revert (core's no-destination semantics; supersedes commit-on-leave);
+    **fractional midpoint positions** — a drop writes ONE row
+    (`computeDropWrite`: (prev+next)/2, edge±1), full 0..N−1 reindex demoted
+    to normalization fallback (null/duplicate/NaN neighbors, float precision
+    exhaustion). `order` is now an opaque float line — nothing may assume
+    contiguous integers. Core-language visuals (tint+border while dragging,
+    muted ⋮⋮ grip, grab/grabbing cursors).
+  - **TODAY() staleness**: engine `usesToday` walker; heartbeat carve-out
+    (no-op outcome + TODAY formula + lastEvaluatedAt >1h → refresh
+    lastEvaluatedAt alone; NaN-safe parse; M3 write-avoidance intact
+    otherwise); widget shows muted orange `Formula last evaluated {relative}`
+    (definition-level framing, `formatRelativePast` replicates core's
+    beautifyPastDateRelativeToNow format) when enabled + usesTodayFlag +
+    >2.5h, and SELF-HEALS the viewed record via front-runtime
+    recomputeForRecord (60s throttle) — **verified live with the worker
+    DEAD**: value corrected in ~1-2s, zero worker involvement. Note persists
+    while the pipeline is down (deliberate: it reports definition-level
+    health; other records stay stale until the sweep returns).
+  - **Lockdown**: `isUIEditable: false` on the 8 system-managed
+    FormulaDefinition fields (order, dependencies, lastValue, lastError,
+    lastEvaluatedAt, status, statusReason, createdField) — UI read-only,
+    API/logic-function writes unaffected.
+  - **KNOWN LIMITATION (user-accepted 2026-07-04): touch drag is
+    non-functional** — remote-dom SerializedEventData exposes no
+    `event.target`, so implicit touch pointer capture can't be released from
+    app code; touch arms but the preview never moves, zero writes (safe).
+    Mouse/pen fully verified. Real fix = renderer-package change. See ADR
+    0014's corrected Consequences.
+  Awaiting user verification + next design inputs.
 
 ## What is NOT done (next work)
 
@@ -337,6 +372,14 @@ written at the app root (`README.md`).
   Fix: `event.preventDefault()` in the handle's `onMouseDown`. The
   `draggable` prop is NOT in HtmlCommonProperties and is silently dropped —
   passing `draggable={false}` is documentation, not the fix.
+- **remote-dom events carry NO `target`** (`SerializedEventData` in
+  packages/twenty-front-component-renderer): anything needing the event's
+  element handle — `releasePointerCapture`, `setPointerCapture`,
+  `closest()` — is unreachable from app code. Consequence: implicit TOUCH
+  pointer capture cannot be released, so touch-drag interactions built on
+  cross-element pointerenter are dead on arrival (mouse is unaffected — no
+  implicit capture). `clientX/clientY` ARE populated (live-verified) for
+  both mouse and touch.
 - **Never mix the `border` SHORTHAND with `borderTop`-style LONGHANDS across
   merged React style objects**: React warns and permanently strips the
   border after style switches (e.g. a drag-highlight style reverting to the
