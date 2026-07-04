@@ -572,7 +572,14 @@ const FormulaEditor = () => {
           <div style={styles.header}>
             <span
               style={styles.dragHandle}
-              onMouseDown={() => {
+              draggable={false}
+              onMouseDown={(event) => {
+                // Without this, the browser's native text-drag gesture can
+                // hijack the mousedown (dragstart fires), which suppresses
+                // mousemove/mouseenter for the rest of the gesture and
+                // silently breaks the custom reorder — most reliably when
+                // dragging downward or at normal (non-careful) speeds.
+                event.preventDefault();
                 draggingRef.current = true;
                 setDraggingId(definition.id);
               }}
@@ -688,11 +695,27 @@ const styles: Record<string, React.CSSProperties> = {
   },
   title: { fontWeight: 600, marginBottom: '10px', color: '#474451' },
   muted: { color: '#908e99', fontSize: '12px' },
-  row: { borderTop: '1px solid #ecebf0', padding: '10px 0' },
-  rowDragging: { opacity: 0.7, border: '1px dashed #999' },
+  // rowDragging uses the same longhand border properties as `row` (not the
+  // `border` shorthand) — mixing shorthand and longhand across renders makes
+  // React drop the longhand value on the next render that doesn't repeat it,
+  // permanently stripping the row's top separator once a drag ends.
+  row: {
+    borderTop: '1px solid #ecebf0',
+    borderRight: 'none',
+    borderBottom: 'none',
+    borderLeft: 'none',
+    padding: '10px 0',
+  },
+  rowDragging: {
+    opacity: 0.7,
+    borderTop: '1px dashed #999',
+    borderRight: '1px dashed #999',
+    borderBottom: '1px dashed #999',
+    borderLeft: '1px dashed #999',
+  },
   header: {
     display: 'flex',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     alignItems: 'center',
   },
   dragHandle: {
@@ -706,6 +729,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: 'tabular-nums',
     fontWeight: 700,
     color: '#1b1b1f',
+    marginLeft: 'auto',
   },
   fieldLabel: { fontSize: '11px', color: '#908e99', margin: '2px 0 6px' },
   editRow: { display: 'flex', gap: '6px', alignItems: 'flex-start' },
