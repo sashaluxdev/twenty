@@ -204,11 +204,11 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
    SOFT-delete of override rows). `date * 2` is silently-wrong Excel-style
    (documented tradeoff). Duration helpers like `days(n)` remain optional
    polish.
+4. Drag to reorder the formula fields within the Formula tab on each record.
+5. Add a way to determine the current date within a formula so you can do operations such as IF(StartDate>TODAY+100, true, false).
 
 Then:
 
-4. **Final acceptance report** demonstrating each mission criterion (criteria
-   list pending user confirmation — not recorded in repo).
 5. **Production deploy** is explicitly out of scope (local-only). Prod would need
    `twenty remote:add --url <cloud> && twenty app deploy --private` — do NOT run.
 6. Possible polish: surface wizard-created VALUE fields in table (index) views
@@ -223,6 +223,7 @@ Then:
    into the definition's dependency set (over-triggering is safe, no-op writes
    suppressed); precedence rule: value override wins over formula override.
    Est. 2-4 focused agent-days.
+
 
 README (formula grammar, architecture diagram, limitations, runbook) is now
 written at the app root (`README.md`).

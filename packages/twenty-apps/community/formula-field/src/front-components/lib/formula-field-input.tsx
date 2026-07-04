@@ -16,14 +16,21 @@ export type FieldOption = {
   insertText?: string;
 };
 
-// Static keyword suggestions alongside the metadata-driven field options. IF is
-// engine grammar, not a metadata field, so it is offered here (ADR 0010).
+// Static keyword suggestions alongside the metadata-driven field options. IF
+// and TODAY are engine grammar, not metadata fields, so they are offered here
+// (ADR 0010, ADR 0012).
 const FUNCTION_SUGGESTIONS: FieldOption[] = [
   {
     name: 'IF',
     label: 'IF(condition, then, else)',
     type: 'function',
     insertText: 'IF(',
+  },
+  {
+    name: 'TODAY',
+    label: 'TODAY() — current date',
+    type: 'function',
+    insertText: 'TODAY()',
   },
 ];
 

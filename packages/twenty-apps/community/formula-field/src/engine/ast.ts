@@ -58,6 +58,14 @@ export type IfNode = {
   else: AstNode;
 };
 
+// Nullary function: the current date as an epoch-day number (ADR 0012).
+// Carries no data of its own — evaluate() fills in the value from
+// EvaluateOptions.todayEpochDay, supplied by the caller, never read from the
+// system clock inside the engine.
+export type TodayNode = {
+  type: 'today';
+};
+
 export type AstNode =
   | NumberNode
   | FieldNode
@@ -65,4 +73,5 @@ export type AstNode =
   | UnaryNode
   | BinaryNode
   | ComparisonNode
-  | IfNode;
+  | IfNode
+  | TodayNode;

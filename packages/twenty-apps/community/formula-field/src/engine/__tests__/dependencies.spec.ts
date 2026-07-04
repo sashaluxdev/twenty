@@ -89,4 +89,16 @@ describe('dependency extraction', () => {
     const deps = extractDependencies('IF(flagField, 1, 2)');
     expect(deps.sameRecordFields).toEqual(['flagField']);
   });
+
+  it('should treat TODAY() as a dependency-free no-op', () => {
+    const deps = extractDependencies('TODAY() + 100');
+    expect(deps.sameRecordFields).toEqual([]);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
+
+  it('should still collect field dependencies from an expression that also uses TODAY()', () => {
+    const deps = extractDependencies('IF(startDate > TODAY() + 100, 1, 0)');
+    expect(deps.sameRecordFields).toEqual(['startDate']);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
 });

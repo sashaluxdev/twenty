@@ -11,8 +11,9 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 //   expression := term (('+' | '-') term)*
 //   term       := unary (('*' | '/' | '%') unary)*
 //   unary      := ('+' | '-') unary | primary
-//   primary    := NUMBER | FIELD | CROSSREF | if | '(' expression ')'
+//   primary    := NUMBER | FIELD | CROSSREF | if | today | '(' expression ')'
 //   if         := IF '(' condition ',' expression ',' expression ')'
+//   today      := TODAY '(' ')'
 //   condition  := expression (compareOp expression)?
 //   compareOp  := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 //
@@ -25,8 +26,11 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 // (top level, arithmetic, then/else branches, or a comparison operand). That
 // keeps booleans out of the engine's public number|null value domain. Chained
 // comparisons (`a > b > c`) are rejected — comparison is not associative here.
-// `IF` is a reserved word (case-insensitive): a bare same-record field named
-// `if` is no longer expressible; dotted paths like `if.x` still are.
+// `IF` and `TODAY` are reserved words (case-insensitive): a bare same-record
+// field named `if` or `today` is no longer expressible; dotted paths like
+// `if.x` / `today.x` still are. TODAY() resolves to the current epoch-day
+// (ADR 0012, Excel-style current-date value) via a caller-supplied
+// evaluator option, not an engine-internal clock read.
 
 // Guards against pathological input. The recursive-descent parser recurses once
 // per nesting level, so unbounded input could overflow the JS call stack before
@@ -177,6 +181,18 @@ class Parser {
             token.position,
           );
         }
+        // `today` is likewise reserved (ADR 0012): followed by "()" it is the
+        // current-date nullary function; bare, or with arguments, is an error.
+        if (token.fieldPath!.toLowerCase() === 'today') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseToday();
+          }
+          throw new FormulaError(
+            'PARSE_ERROR',
+            '"TODAY" is a reserved word — expected TODAY()',
+            token.position,
+          );
+        }
         this.advance();
         return { type: 'field', path: token.fieldPath! };
       }
@@ -274,6 +290,25 @@ class Parser {
 
     this.leave();
     return { type: 'if', condition, then: thenBranch, else: elseBranch };
+  }
+
+  // TODAY() — a reserved nullary function (ADR 0012). No arguments, no parse
+  // depth to guard (unlike IF, it recurses into nothing).
+  private parseToday(): AstNode {
+    this.advance(); // the TODAY identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'TODAY takes no arguments — expected TODAY()',
+        closing.position,
+      );
+    }
+    this.advance();
+
+    return { type: 'today' };
   }
 
   // The ONLY place a comparison may appear: the top level of IF's first

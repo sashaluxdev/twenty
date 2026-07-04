@@ -79,6 +79,15 @@ describe('parser precedence & associativity', () => {
       });
     }
   });
+
+  it('builds a crossref node when the field segment is a reserved word like "today"', () => {
+    const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    const ast = parse(`[company:${uuid}:today]`);
+    expect(ast).toEqual({
+      type: 'crossref',
+      ref: { object: 'company', recordId: uuid, fieldPath: 'today' },
+    });
+  });
 });
 
 describe('parser IF conditionals', () => {
@@ -155,6 +164,61 @@ describe('parser IF conditionals', () => {
 
   it('should reject an unterminated IF when the closing parenthesis is missing', () => {
     expect(() => parse('IF(1, 2, 3')).toThrowError(/closing parenthesis/);
+  });
+});
+
+describe('parser TODAY()', () => {
+  it('should parse TODAY() into a today node', () => {
+    expect(parse('TODAY()')).toEqual({ type: 'today' });
+  });
+
+  it('should accept the keyword case-insensitively when written as today or Today', () => {
+    expect(parse('today()')).toEqual({ type: 'today' });
+    expect(parse('Today()')).toEqual({ type: 'today' });
+  });
+
+  it('should tolerate whitespace between TODAY and its parentheses', () => {
+    expect(parse('TODAY ()')).toEqual({ type: 'today' });
+  });
+
+  it('should compose with arithmetic and comparisons', () => {
+    const ast = parse('TODAY() + 100');
+    expect(ast).toEqual({
+      type: 'binary',
+      operator: '+',
+      left: { type: 'today' },
+      right: { type: 'number', value: 100 },
+    });
+
+    const ifAst = parse('IF(startDate > TODAY() + 100, 1, 0)');
+    expect(ifAst.type).toBe('if');
+    if (ifAst.type === 'if' && ifAst.condition.type === 'comparison') {
+      expect(ifAst.condition.right).toEqual({
+        type: 'binary',
+        operator: '+',
+        left: { type: 'today' },
+        right: { type: 'number', value: 100 },
+      });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
+  });
+
+  it('should still allow a dotted field path starting with "today"', () => {
+    expect(parse('today.value')).toEqual({ type: 'field', path: 'today.value' });
+  });
+
+  it('should reject a bare "today" when it is not followed by parentheses', () => {
+    expect(() => parse('today + 1')).toThrowError(/reserved word/);
+    expect(() => parse('today')).toThrowError(/reserved word/);
+  });
+
+  it('should reject TODAY called with arguments', () => {
+    expect(() => parse('TODAY(1)')).toThrowError(/takes no arguments/);
+  });
+
+  it('should reject an unterminated TODAY when the closing parenthesis is missing', () => {
+    expect(() => parse('TODAY(')).toThrowError(/takes no arguments/);
   });
 });
 

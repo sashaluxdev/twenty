@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
@@ -147,5 +147,66 @@ describe('recomputeForRecord', () => {
 
     expect(outcome.value).toBe(105);
     expect(client.get('opportunity', 'o1')!.formulaCrossScore).toBe(105);
+  });
+});
+
+describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('evaluates TODAY() against the current system date, read once per recompute', async () => {
+    vi.setSystemTime(new Date('2026-07-04T12:00:00.000Z'));
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 100, formulaScore: null },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'IF(formulaInputA > TODAY(), 1, 0)' }),
+      targetRecordId: 'o1',
+    });
+
+    // The epoch-day for 2026-07-04 comfortably exceeds 100, so the condition
+    // (formulaInputA > TODAY()) is false regardless of the exact serial value —
+    // this asserts TODAY() actually reads a real, large epoch-day, not 0/NaN.
+    expect(outcome.value).toBe(0);
+    expect(outcome.error).toBeNull();
+  });
+
+  it('re-evaluates TODAY() against a later system clock on the next recompute', async () => {
+    // A threshold set to "epoch-day of 2026-07-05" — false the day before, true
+    // the day after — demonstrates the sweep's convergence story (ADR 0012):
+    // no dependency changed, only wall-clock time did.
+    const epochDayOf = (iso: string) => Date.parse(iso) / 86_400_000;
+    const threshold = epochDayOf('2026-07-05T00:00:00.000Z');
+
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: threshold, formulaScore: null },
+    ]);
+
+    vi.setSystemTime(new Date('2026-07-04T12:00:00.000Z'));
+    const before = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'IF(TODAY() >= formulaInputA, 1, 0)' }),
+      targetRecordId: 'o1',
+    });
+    expect(before.value).toBe(0);
+
+    vi.setSystemTime(new Date('2026-07-05T12:00:00.000Z'));
+    const after = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'IF(TODAY() >= formulaInputA, 1, 0)' }),
+      targetRecordId: 'o1',
+    });
+    expect(after.value).toBe(1);
+    expect(after.changed).toBe(true);
   });
 });

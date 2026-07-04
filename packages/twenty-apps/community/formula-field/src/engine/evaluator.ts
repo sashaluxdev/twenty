@@ -37,6 +37,11 @@ const DEFAULT_MAX_DEPTH = 64;
 
 export type EvaluateOptions = {
   maxDepth?: number;
+  // Current date as a whole epoch-day (ADR 0012), supplied by the caller —
+  // never read from the system clock inside the engine, so evaluate() stays a
+  // pure function of its arguments. Required only when the AST contains a
+  // TODAY() node.
+  todayEpochDay?: number;
 };
 
 // Comparison truth, internal only: booleans stay confined to IF's condition
@@ -47,10 +52,11 @@ const evaluateConditionTruth = (
   resolve: VariableResolver,
   depth: number,
   maxDepth: number,
+  todayEpochDay: number | undefined,
 ): boolean | null => {
   if (node.type === 'comparison') {
-    const left = evaluateNode(node.left, resolve, depth + 1, maxDepth);
-    const right = evaluateNode(node.right, resolve, depth + 1, maxDepth);
+    const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay);
+    const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay);
 
     if (left === null || right === null) {
       return null;
@@ -72,7 +78,7 @@ const evaluateConditionTruth = (
     }
   }
 
-  const value = evaluateNode(node, resolve, depth, maxDepth);
+  const value = evaluateNode(node, resolve, depth, maxDepth, todayEpochDay);
 
   if (value === null) {
     return null;
@@ -87,6 +93,7 @@ const evaluateNode = (
   resolve: VariableResolver,
   depth: number,
   maxDepth: number,
+  todayEpochDay: number | undefined,
 ): number | null => {
   if (depth > maxDepth) {
     throw new FormulaError(
@@ -121,8 +128,21 @@ const evaluateNode = (
       return value;
     }
 
+    // ADR 0012: the value is a caller-supplied input, never a system-clock
+    // read inside the engine — same UNKNOWN_VARIABLE failure mode as an
+    // unresolved field when the caller forgot to supply it.
+    case 'today': {
+      if (todayEpochDay === undefined) {
+        throw new FormulaError(
+          'UNKNOWN_VARIABLE',
+          'TODAY() requires todayEpochDay to be supplied in EvaluateOptions',
+        );
+      }
+      return todayEpochDay;
+    }
+
     case 'unary': {
-      const operand = evaluateNode(node.operand, resolve, depth + 1, maxDepth);
+      const operand = evaluateNode(node.operand, resolve, depth + 1, maxDepth, todayEpochDay);
       if (operand === null) {
         return null;
       }
@@ -130,8 +150,8 @@ const evaluateNode = (
     }
 
     case 'binary': {
-      const left = evaluateNode(node.left, resolve, depth + 1, maxDepth);
-      const right = evaluateNode(node.right, resolve, depth + 1, maxDepth);
+      const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay);
+      const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay);
 
       // Null propagation: any null operand makes the result null.
       if (left === null || right === null) {
@@ -179,6 +199,7 @@ const evaluateNode = (
         resolve,
         depth + 1,
         maxDepth,
+        todayEpochDay,
       );
 
       // Null condition (or null in a comparison operand) nulls the whole IF.
@@ -193,6 +214,7 @@ const evaluateNode = (
         resolve,
         depth + 1,
         maxDepth,
+        todayEpochDay,
       );
     }
 
@@ -212,7 +234,7 @@ export const evaluate = (
   options: EvaluateOptions = {},
 ): number | null => {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
-  const result = evaluateNode(node, resolve, 0, maxDepth);
+  const result = evaluateNode(node, resolve, 0, maxDepth, options.todayEpochDay);
 
   if (result !== null && !Number.isFinite(result)) {
     throw new FormulaError(

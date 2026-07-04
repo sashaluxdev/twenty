@@ -134,6 +134,38 @@ describe('evaluator IF conditionals', () => {
   });
 });
 
+describe('evaluator TODAY()', () => {
+  it('resolves to the caller-supplied todayEpochDay', () => {
+    expect(evaluate(parse('TODAY()'), resolverFor({}), { todayEpochDay: 20000 })).toBe(20000);
+  });
+
+  it('composes with arithmetic and field references', () => {
+    expect(
+      evaluate(parse('TODAY() + 100'), resolverFor({}), { todayEpochDay: 20000 }),
+    ).toBe(20100);
+    expect(
+      evaluate(parse('IF(startDate > TODAY() + 100, 1, 0)'), resolverFor({ startDate: 20200 }), {
+        todayEpochDay: 20000,
+      }),
+    ).toBe(1);
+    expect(
+      evaluate(parse('IF(startDate > TODAY() + 100, 1, 0)'), resolverFor({ startDate: 20050 }), {
+        todayEpochDay: 20000,
+      }),
+    ).toBe(0);
+  });
+
+  it('throws UNKNOWN_VARIABLE when todayEpochDay is not supplied', () => {
+    try {
+      evaluate(parse('TODAY() + 1'), resolverFor({}));
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('UNKNOWN_VARIABLE');
+    }
+  });
+});
+
 describe('evaluator errors', () => {
   it('throws UNKNOWN_VARIABLE for a missing field', () => {
     try {

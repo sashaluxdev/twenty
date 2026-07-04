@@ -74,3 +74,10 @@ export const epochDaysToDateString = (epochDays: number): string => {
 // whole millisecond (the DATE_TIME scalar's resolution).
 export const epochDaysToIsoDateTime = (epochDays: number): string =>
   new Date(Math.round(epochDays * MS_PER_DAY)).toISOString();
+
+// The ONE place the engine's ambient "current date" (TODAY(), ADR 0012) reads
+// the system clock — a whole UTC epoch-day, floored like a DATE target. Callers
+// (recompute.ts) read this once per evaluation and pass it into
+// EvaluateOptions.todayEpochDay; the engine itself never calls Date.now().
+export const currentEpochDay = (): number =>
+  Math.floor(Date.now() / MS_PER_DAY);

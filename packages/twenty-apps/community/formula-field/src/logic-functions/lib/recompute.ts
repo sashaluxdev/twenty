@@ -3,6 +3,7 @@ import { type FormulaDependencies } from 'src/engine/dependencies';
 import { FormulaError, isFormulaError } from 'src/engine/errors';
 import { evaluate, type VariableResolver } from 'src/engine/evaluator';
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
+import { currentEpochDay } from 'src/logic-functions/lib/date-serial';
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
 import {
   buildTargetWriteData,
@@ -289,7 +290,7 @@ export const computeFormulaValueForRecord = async ({
     const value = evaluate(
       compiled.ast,
       buildResolver(sameRecord, crossRecords),
-      { maxDepth: MAX_EVAL_DEPTH },
+      { maxDepth: MAX_EVAL_DEPTH, todayEpochDay: currentEpochDay() },
     );
     return { value, sameRecord, error: null };
   } catch (error) {

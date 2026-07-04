@@ -39,6 +39,11 @@ const walk = (
     case 'number':
       return;
 
+    // TODAY() names no field — it is fed by the caller at evaluation time
+    // (ADR 0012), so it contributes no dependency and needs no cycle edge.
+    case 'today':
+      return;
+
     case 'field':
       sameRecordFields.add(rootSegment(node.path));
       return;
