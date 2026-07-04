@@ -34,3 +34,56 @@ export const computeReorderWrites = (
     .map((item, index) => ({ id: item.id, order: index, stored: item.order }))
     .filter((item) => item.stored !== item.order)
     .map(({ id, order }) => ({ id, order }));
+
+// Core-aligned drop persistence (ADR 0014): ONE fractional midpoint write
+// for the dragged row; full reindex only when the list needs normalizing
+// (unnumbered rows involved, duplicate/NaN neighbors, or float precision
+// exhausted). Items must be in FINAL visual order.
+export const computeDropWrite = (
+  items: Array<{ id: string; order: number | null }>,
+  draggedId: string,
+): Array<{ id: string; order: number }> => {
+  const index = items.findIndex((item) => item.id === draggedId);
+  if (index < 0) {
+    return [];
+  }
+  const dragged = items[index];
+  const previous = index > 0 ? items[index - 1] : undefined;
+  const next = index < items.length - 1 ? items[index + 1] : undefined;
+  if (
+    (previous !== undefined && previous.order === null) ||
+    (next !== undefined && next.order === null) ||
+    (previous === undefined && next === undefined && dragged.order === null)
+  ) {
+    return computeReorderWrites(items);
+  }
+  const previousOrder = previous?.order ?? undefined;
+  const nextOrder = next?.order ?? undefined;
+  // A drag returned to its origin slot persists nothing.
+  if (
+    dragged.order !== null &&
+    Number.isFinite(dragged.order) &&
+    (previousOrder === undefined || previousOrder < dragged.order) &&
+    (nextOrder === undefined || dragged.order < nextOrder)
+  ) {
+    return [];
+  }
+  let candidate: number;
+  if (previousOrder === undefined && nextOrder === undefined) {
+    candidate = 0;
+  } else if (previousOrder === undefined) {
+    candidate = (nextOrder as number) - 1;
+  } else if (nextOrder === undefined) {
+    candidate = previousOrder + 1;
+  } else {
+    candidate = (previousOrder + nextOrder) / 2;
+  }
+  if (
+    !Number.isFinite(candidate) ||
+    (previousOrder !== undefined && candidate <= previousOrder) ||
+    (nextOrder !== undefined && candidate >= nextOrder)
+  ) {
+    return computeReorderWrites(items);
+  }
+  return [{ id: draggedId, order: candidate }];
+};

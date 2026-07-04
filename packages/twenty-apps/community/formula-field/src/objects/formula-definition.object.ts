@@ -102,6 +102,7 @@ export default defineObject({
       description:
         'Parsed dependency index (auto-computed on save). Do not edit by hand.',
       icon: 'IconListTree',
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.enabled,
@@ -119,6 +120,7 @@ export default defineObject({
       label: 'Last evaluated at',
       description: 'Timestamp of the last successful evaluation.',
       icon: 'IconClock',
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.lastValue,
@@ -127,6 +129,7 @@ export default defineObject({
       label: 'Last value',
       description: 'Most recently computed value (diagnostic).',
       icon: 'IconNumber',
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.lastError,
@@ -135,6 +138,7 @@ export default defineObject({
       label: 'Last error',
       description: 'Last evaluation/validation error, empty when healthy.',
       icon: 'IconAlertTriangle',
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.outputFormat,
@@ -173,6 +177,7 @@ export default defineObject({
         'not this app, so explicit provenance is required.',
       icon: 'IconWand',
       defaultValue: false,
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.status,
@@ -184,6 +189,7 @@ export default defineObject({
         'an input field is deactivated or missing, UPSTREAM = a formula ' +
         'earlier in the dependency chain is broken.',
       icon: 'IconHeartbeat',
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.statusReason,
@@ -194,6 +200,7 @@ export default defineObject({
         'What broke: the missing input (OFFLINE) or where in the chain the ' +
         'break is (UPSTREAM). System-managed.',
       icon: 'IconInfoCircle',
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.order,
@@ -202,6 +209,7 @@ export default defineObject({
       label: 'Order',
       description: 'Display position in the record-page Formula tab (managed by drag-to-reorder).',
       icon: 'IconArrowsSort',
+      isUIEditable: false,
     },
   ],
 });
