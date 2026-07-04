@@ -404,6 +404,16 @@ written at the app root (`README.md`).
   name, label, settings?, ... } } }`; `settings` is a JSON scalar with
   LOWERCASE `dataType` ('int'|'float'); CURRENCY needs no settings/default.
 - CURRENCY fields are micros (×1e6). Soft-deleted records keep unique indexes.
+- **`twenty-sdk/ui` crashes the front-component sandbox at runtime**:
+  `"Dynamic require of \"react\" is not supported"` — it builds and typechecks
+  cleanly, but every reload in both light and dark theme fails to mount the
+  whole widget tree (not just the sdk/ui markup), reproduced via a spike
+  (`.superpowers/sdd/ui-spike-verdict.md`). Avoid importing `twenty-sdk/ui`
+  from any front component; use `@emotion/styled` replicas driven by
+  `var(--t-*)` tokens instead (see `src/front-components/lib/ui.ts(x)` and the
+  call-recorder app's `recording-theme-css-variables.ts` pattern) — emotion's
+  `<style>` tags stream to the host fine (`:hover`/`:focus`/transitions work)
+  and CSS vars repaint on theme toggle with zero JS.
 
 ## Key files (by area)
 

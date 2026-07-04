@@ -1,0 +1,30 @@
+// Twenty core theme tokens as live CSS variables (see spec §Platform facts:
+// widgets are light-DOM, so these resolve against the host's .light/.dark
+// class and repaint on theme toggle with zero JS).
+export const TOKENS = {
+  fontFamily: 'var(--t-font-family)',
+  fontSizeXs: 'var(--t-font-size-xs)',
+  fontSizeXl: 'var(--t-font-size-xl)',
+  fontColorPrimary: 'var(--t-font-color-primary)',
+  fontColorSecondary: 'var(--t-font-color-secondary)',
+  fontColorTertiary: 'var(--t-font-color-tertiary)',
+  fontColorLight: 'var(--t-font-color-light)',
+  colorBlue: 'var(--t-color-blue)',
+  colorRed: 'var(--t-color-red)',
+  colorOrange: 'var(--t-color-orange)',
+  colorGreen: 'var(--t-color-green)',
+  colorTurquoise: 'var(--t-color-turquoise)',
+  accentTertiary: 'var(--t-accent-tertiary)',
+  bgPrimary: 'var(--t-background-primary)',
+  bgTransparentLighter: 'var(--t-background-transparent-lighter)',
+  bgTransparentLight: 'var(--t-background-transparent-light)',
+  bgTransparentMedium: 'var(--t-background-transparent-medium)',
+  bgTransparentDanger: 'var(--t-background-transparent-danger)',
+  bgTransparentOrange: 'var(--t-background-transparent-orange)',
+  borderMedium: 'var(--t-border-color-medium)',
+  borderLight: 'var(--t-border-color-light)',
+  borderStrong: 'var(--t-border-color-strong)',
+  borderDanger: 'var(--t-border-color-danger)',
+  radiusSm: 'var(--t-border-radius-sm)',
+  radiusMd: 'var(--t-border-radius-md)',
+} as const;
