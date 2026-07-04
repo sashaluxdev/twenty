@@ -15,6 +15,23 @@ import {
   movePreview,
   sortByOrder,
 } from 'src/front-components/lib/reorder-definitions';
+import {
+  BannerDanger,
+  BannerWarning,
+  DangerButton,
+  DragHandle,
+  ErrText,
+  MutedText,
+  OkText,
+  PrimaryButton,
+  RowDivider,
+  SectionTitle,
+  ToggleKnob,
+  ToggleTrack,
+  WarnText,
+  WidgetRoot,
+} from 'src/front-components/lib/ui';
+import { TOKENS } from 'src/front-components/lib/ui-tokens';
 import { validateExpression } from 'src/front-components/lib/validate-expression';
 import {
   activateOverride,
@@ -112,33 +129,30 @@ const OverrideToggle = ({
   busy: boolean;
   onChange: (next: boolean) => void;
 }) => (
-  <div style={styles.toggleWrap}>
-    <span style={styles.toggleLabel}>Override</span>
-    <button
+  <div style={layout.toggleWrap}>
+    <MutedText style={layout.toggleLabel}>Override</MutedText>
+    <ToggleTrack
       type="button"
       role="switch"
       aria-checked={on}
       disabled={busy}
+      on={on}
       onClick={() => onChange(!on)}
-      style={{
-        ...styles.toggleTrack,
-        background: on ? '#e0483d' : '#3ba55d',
-        opacity: busy ? 0.6 : 1,
-      }}
+      style={{ opacity: busy ? 0.6 : 1 }}
       title={
         on
           ? 'Overridden — click to reset this record to the formula'
           : 'Formula-controlled — click to override this record'
       }
     >
-      <span
-        style={{
-          ...styles.toggleKnob,
-          transform: on ? 'translateX(18px)' : 'translateX(0px)',
-        }}
-      />
-    </button>
-    <span style={{ ...styles.toggleState, color: on ? '#e0483d' : '#3ba55d' }}>
+      <ToggleKnob on={on} />
+    </ToggleTrack>
+    <span
+      style={{
+        ...layout.toggleState,
+        color: on ? TOKENS.colorRed : TOKENS.colorGreen,
+      }}
+    >
       {on ? 'on' : 'off'}
     </span>
   </div>
@@ -615,13 +629,13 @@ const FormulaEditor = () => {
   );
 
   const content = useMemo(() => {
-    if (loading) return <div style={styles.muted}>Loading formulas…</div>;
+    if (loading) return <MutedText as="div">Loading formulas…</MutedText>;
     if (definitions.length === 0) {
       return (
-        <div style={styles.muted}>
+        <MutedText as="div">
           No formulas target this object yet. Create one in the “Formula
           definitions” view.
-        </div>
+        </MutedText>
       );
     }
     return definitions.map((definition) => {
@@ -649,7 +663,11 @@ const FormulaEditor = () => {
       return (
         <div
           key={definition.id}
-          style={isDragging ? { ...styles.row, ...styles.rowDragging } : styles.row}
+          style={
+            isDragging
+              ? { ...layout.row, ...RowDivider.dragging }
+              : { ...layout.row, ...RowDivider.base }
+          }
           onPointerMove={(event) => {
             const pending = pendingDragRef.current;
             if (!pending || draggingRef.current) return;
@@ -682,22 +700,19 @@ const FormulaEditor = () => {
           }}
         >
           {definition.status === 'OFFLINE' ? (
-            <div style={styles.bannerOffline}>
+            <BannerDanger style={layout.banner}>
               OFFLINE — {definition.statusReason || 'an input field is gone'}
-            </div>
+            </BannerDanger>
           ) : definition.status === 'UPSTREAM' ? (
-            <div style={styles.bannerUpstream}>
+            <BannerWarning style={layout.banner}>
               UPSTREAM BREAK — {definition.statusReason ||
                 'a formula earlier in the chain is broken'}
-            </div>
+            </BannerWarning>
           ) : null}
-          <div style={styles.header}>
-            <span
-              style={
-                isDragging
-                  ? { ...styles.dragHandle, ...styles.dragHandleActive }
-                  : styles.dragHandle
-              }
+          <div style={layout.header}>
+            <DragHandle
+              active={isDragging}
+              style={layout.dragHandle}
               onPointerDown={(event) => {
                 // Without this, the browser's native text-drag gesture can
                 // hijack the pointerdown (dragstart fires), which suppresses
@@ -717,11 +732,11 @@ const FormulaEditor = () => {
               title="Drag to reorder"
             >
               ⋮⋮
-            </span>
-            <span style={styles.name}>
+            </DragHandle>
+            <span style={layout.name}>
               {definition.name || definition.targetField}
             </span>
-            <span style={styles.value}>{displayValue(definition, value)}</span>
+            <span style={layout.value}>{displayValue(definition, value)}</span>
           </div>
           {stale && definition.lastEvaluatedAt ? (
             // Definition-level framing on purpose: the DEFINITION's heartbeat
@@ -729,19 +744,19 @@ const FormulaEditor = () => {
             // value may have just been verified correct by the self-heal —
             // and "refreshing…" would over-claim during the 60s throttle
             // window when nothing is actively running.
-            <div style={styles.staleNote}>
+            <WarnText as="div" style={layout.staleNote}>
               Formula last evaluated{' '}
               {formatRelativePast(definition.lastEvaluatedAt, Date.now())}
-            </div>
+            </WarnText>
           ) : null}
-          <div style={styles.fieldLabel}>
+          <MutedText as="div" style={layout.fieldLabel}>
             {definition.targetField}
             {!definition.enabled ? (
-              <span style={styles.error}> (formula disabled)</span>
+              <ErrText> (formula disabled)</ErrText>
             ) : null}
-          </div>
+          </MutedText>
 
-          <div style={styles.editRow}>
+          <div style={layout.editRow}>
             <FormulaFieldInput
               value={draft}
               onChange={(next) => {
@@ -751,26 +766,26 @@ const FormulaEditor = () => {
               }}
               targetObject={definition.targetObject}
             />
-            <button
-              style={{
-                ...styles.button,
-                ...(armed ? styles.buttonArmed : {}),
-                ...(dirty && !liveError ? {} : styles.buttonDisabled),
-              }}
-              disabled={!dirty || Boolean(liveError) || rowBusy}
-              onClick={() => saveExpression(definition)}
-            >
-              {armed ? 'Confirm' : 'Save'}
-            </button>
+            {(() => {
+              const SaveButton = armed ? DangerButton : PrimaryButton;
+              return (
+                <SaveButton
+                  disabled={!dirty || Boolean(liveError) || rowBusy}
+                  onClick={() => saveExpression(definition)}
+                >
+                  {armed ? 'Confirm' : 'Save'}
+                </SaveButton>
+              );
+            })()}
           </div>
           {armed ? (
-            <div style={styles.confirmWarning}>
+            <BannerWarning style={layout.confirmWarning}>
               This changes the formula for ALL {definition.targetObject} records —
               click Save again to confirm.
-            </div>
+            </BannerWarning>
           ) : null}
 
-          <div style={styles.overrideRow}>
+          <div style={layout.overrideRow}>
             <OverrideToggle
               on={isOverridden}
               busy={rowBusy}
@@ -778,22 +793,22 @@ const FormulaEditor = () => {
             />
             {isOverridden ? (
               restoredHint[definition.id] ? (
-                <span style={styles.restored} title="Override value restored">
+                <OkText style={layout.restored} title="Override value restored">
                   Override value restored
-                </span>
+                </OkText>
               ) : (
-                <span style={styles.overrideHint}>
+                <MutedText>
                   Edit the “{definition.name || definition.targetField}” field
                   directly to change this record’s value.
-                </span>
+                </MutedText>
               )
             ) : null}
           </div>
 
           {liveError ? (
-            <div style={styles.error}>{liveError}</div>
+            <ErrText as="div" style={layout.error}>{liveError}</ErrText>
           ) : definition.lastError ? (
-            <div style={styles.error}>{definition.lastError}</div>
+            <ErrText as="div" style={layout.error}>{definition.lastError}</ErrText>
           ) : null}
         </div>
       );
@@ -814,73 +829,37 @@ const FormulaEditor = () => {
   ]);
 
   return (
-    <div
-      style={styles.container}
+    <WidgetRoot
+      style={layout.container}
       onPointerUp={commitDrag}
       onPointerLeave={cancelDrag}
       onPointerCancel={cancelDrag}
     >
-      <div style={styles.title}>Formula fields</div>
+      <SectionTitle style={layout.title}>Formula fields</SectionTitle>
       {content}
-    </div>
+    </WidgetRoot>
   );
 };
 
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    padding: '12px 16px',
-    fontFamily: 'Inter, system-ui, sans-serif',
-    fontSize: '13px',
-    color: '#1b1b1f',
-    boxSizing: 'border-box',
-    width: '100%',
-    height: '100%',
-  },
-  title: { fontWeight: 600, marginBottom: '10px', color: '#474451' },
-  muted: { color: '#908e99', fontSize: '12px' },
-  // rowDragging uses the same longhand border properties as `row` (not the
-  // `border` shorthand) — mixing shorthand and longhand across renders makes
-  // React drop the longhand value on the next render that doesn't repeat it,
-  // permanently stripping the row's top separator once a drag ends.
-  row: {
-    borderTop: '1px solid #ecebf0',
-    borderRight: 'none',
-    borderBottom: 'none',
-    borderLeft: 'none',
-    padding: '10px 0',
-  },
-  // Light background tint + a strengthened (never dashed/opacity-dimmed) top
-  // border — core reserves opacity-dimming for secondary multi-drag items
-  // (ADR 0014 §5). Longhands on every side, matching `row`, per the
-  // shorthand/longhand React bug noted above.
-  rowDragging: {
-    background: 'rgba(0,0,0,0.04)',
-    borderTop: '2px solid #908e99',
-    borderRight: 'none',
-    borderBottom: 'none',
-    borderLeft: 'none',
-  },
-  header: {
-    display: 'flex',
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-  },
-  dragHandle: {
-    cursor: 'grab',
-    userSelect: 'none',
-    marginRight: 8,
-    color: '#999',
-    touchAction: 'none',
-  },
-  dragHandleActive: { cursor: 'grabbing' },
+// Layout-only values (flex, gap, margins, widths) — every color/font/border/
+// radius/background comes from the archetypes in lib/ui.tsx or lib/ui-tokens
+// instead (spec: docs/superpowers/specs/2026-07-04-formula-field-ui-polish-design.md).
+const layout: Record<string, React.CSSProperties> = {
+  container: { padding: '12px 16px', boxSizing: 'border-box', height: '100%' },
+  title: { marginBottom: '10px' },
+  // RowDivider (base/dragging) already supplies all-longhand border props —
+  // this only adds the row's own vertical padding (shorthand/longhand rule,
+  // ADR 0014 §5, stays enforced because layout.row never sets `border*`).
+  row: { padding: '10px 0' },
+  header: { display: 'flex', justifyContent: 'flex-start', alignItems: 'center' },
+  dragHandle: { marginRight: 8 },
   name: { fontWeight: 600 },
   value: {
     fontVariantNumeric: 'tabular-nums',
     fontWeight: 700,
-    color: '#1b1b1f',
     marginLeft: 'auto',
   },
-  fieldLabel: { fontSize: '11px', color: '#908e99', margin: '2px 0 6px' },
+  fieldLabel: { margin: '2px 0 6px' },
   editRow: { display: 'flex', gap: '6px', alignItems: 'flex-start' },
   overrideRow: {
     display: 'flex',
@@ -890,79 +869,16 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: 'wrap',
   },
   toggleWrap: { display: 'flex', alignItems: 'center', gap: '8px' },
-  toggleLabel: { fontSize: '12px', fontWeight: 600, color: '#474451' },
-  toggleTrack: {
-    position: 'relative',
-    width: '38px',
-    height: '20px',
-    borderRadius: '10px',
-    border: 'none',
-    cursor: 'pointer',
-    padding: 0,
-    transition: 'background 0.15s ease',
-  },
-  toggleKnob: {
-    position: 'absolute',
-    top: '2px',
-    left: '2px',
-    width: '16px',
-    height: '16px',
-    borderRadius: '50%',
-    background: '#fff',
-    transition: 'transform 0.15s ease',
-  },
-  toggleState: { fontSize: '11px', fontWeight: 600 },
-  overrideHint: { fontSize: '11px', color: '#908e99' },
-  restored: { fontSize: '11px', color: '#3ba55d', fontWeight: 600 },
-  button: {
-    padding: '6px 12px',
-    borderRadius: '4px',
-    border: 'none',
-    background: '#1961ed',
-    color: '#fff',
-    cursor: 'pointer',
-    fontSize: '12px',
-  },
-  buttonArmed: { background: '#e0483d' },
-  buttonDisabled: { background: '#c3c2c9', cursor: 'default' },
-  confirmWarning: {
-    background: '#fff4e5',
-    border: '1px solid #e58600',
-    color: '#a35c00',
-    borderRadius: '4px',
-    padding: '6px 8px',
-    fontSize: '11px',
-    marginTop: '6px',
-  },
-  error: { color: '#e0483d', fontSize: '11px', marginTop: '4px' },
-  bannerOffline: {
-    background: '#fdecea',
-    border: '1px solid #e0483d',
-    color: '#b3271e',
-    borderRadius: '4px',
-    padding: '6px 8px',
-    fontSize: '11px',
-    marginBottom: '8px',
-  },
-  bannerUpstream: {
-    background: '#fff4e5',
-    border: '1px solid #e58600',
-    color: '#a35c00',
-    borderRadius: '4px',
-    padding: '6px 8px',
-    fontSize: '11px',
-    marginBottom: '8px',
-  },
+  toggleLabel: { fontWeight: 600 },
+  toggleState: { fontWeight: 600 },
+  restored: { fontWeight: 600 },
+  confirmWarning: { marginTop: '6px' },
+  error: { marginTop: '4px' },
+  banner: { marginBottom: '8px' },
   // Not a banner (ADR 0015): smaller, inline, no background/border — this is
   // a self-correcting note (the front runtime is already recomputing), not an
-  // actionable break like OFFLINE/UPSTREAM above. Same orange as
-  // bannerUpstream's text, core's Status color convention for "attention, not
-  // error".
-  staleNote: {
-    color: '#a35c00',
-    fontSize: '10px',
-    marginTop: '2px',
-  },
+  // actionable break like OFFLINE/UPSTREAM above.
+  staleNote: { marginTop: '2px' },
 };
 
 export { FORMULA_EDITOR_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
