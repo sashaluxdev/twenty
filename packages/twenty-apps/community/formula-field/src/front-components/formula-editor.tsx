@@ -5,6 +5,11 @@ import { defineFrontComponent } from 'twenty-sdk/define';
 import { useRecordId } from 'twenty-sdk/front-component';
 
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
+import {
+  computeReorderWrites,
+  movePreview,
+  sortByOrder,
+} from 'src/front-components/lib/reorder-definitions';
 import { validateExpression } from 'src/front-components/lib/validate-expression';
 import {
   activateOverride,
@@ -54,6 +59,7 @@ type Definition = {
   lastError: string;
   status: string;
   statusReason: string;
+  order: number | null;
 };
 
 // Values are handled in micros for CURRENCY fields (like the engine); shown to
@@ -139,6 +145,14 @@ const FormulaEditor = () => {
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The record id never changes for a mounted widget — resolve its object once.
   const resolvedHost = useRef<string | null>(null);
+  // Drag-to-reorder (ADR 0013): draggingId drives render (handle/row styling),
+  // draggingRef is read synchronously inside closures (poll guard, finishDrag)
+  // where state would be stale. definitionsRef mirrors the latest visual order
+  // so finishDrag always reads the current list rather than a stale one from
+  // the render that created the callback.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const draggingRef = useRef(false);
+  const definitionsRef = useRef<Definition[]>([]);
 
   const disarmSave = useCallback(() => {
     if (armTimer.current) {
@@ -170,6 +184,7 @@ const FormulaEditor = () => {
             lastError: true,
             status: true,
             statusReason: true,
+            order: true,
           },
         },
       },
@@ -192,6 +207,7 @@ const FormulaEditor = () => {
         lastError: edge.node.lastError ?? '',
         status: edge.node.status ?? '',
         statusReason: edge.node.statusReason ?? '',
+        order: edge.node.order ?? null,
       }),
     );
 
@@ -221,8 +237,15 @@ const FormulaEditor = () => {
     const defs = host
       ? allDefs.filter((definition) => definition.targetObject === host)
       : [];
+    const sortedDefs = sortByOrder(defs);
 
-    setDefinitions(defs);
+    // Mid-drag, the live reorder preview owns `definitions` — the poll must
+    // not clobber it with the server's (not-yet-persisted) order. Everything
+    // below (values/overrides/drafts) still refreshes unconditionally.
+    if (!draggingRef.current) {
+      setDefinitions(sortedDefs);
+      definitionsRef.current = sortedDefs;
+    }
 
     // Converge chip visibility/position in the record-page layout (throttled;
     // must run client-side — view mutations reject the app's server token).
@@ -301,6 +324,49 @@ const FormulaEditor = () => {
     load();
     const interval = setInterval(load, 4000);
     return () => clearInterval(interval);
+  }, [load]);
+
+  // Drop handler for drag-to-reorder (ADR 0013). Reads definitionsRef (not
+  // `definitions`) so it always sees the live hover-preview order rather than
+  // a stale render-time snapshot. Reindex-on-drop: the whole visible list is
+  // renumbered 0..N-1 and only the rows whose order actually changed are
+  // written (computeReorderWrites is write-avoidant).
+  const finishDrag = useCallback(async () => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    setDraggingId(null);
+    const writes = computeReorderWrites(
+      definitionsRef.current.map(({ id, order }) => ({ id, order })),
+    );
+    if (writes.length === 0) return;
+    try {
+      // Dynamic client: wizard-created value fields are not in the genql type map.
+      const client = createDynamicCoreClient();
+      await Promise.all(
+        writes.map((write) =>
+          client.mutation({
+            updateFormulaDefinition: {
+              __args: { id: write.id, data: { order: write.order } },
+              id: true,
+            },
+          }),
+        ),
+      );
+      // Reflect persisted orders locally so the next poll (which re-sorts by
+      // `order`) agrees with what's on screen instead of snapping back.
+      setDefinitions((current) => {
+        const next = current.map((definition, index) => ({
+          ...definition,
+          order: index,
+        }));
+        definitionsRef.current = next;
+        return next;
+      });
+    } catch {
+      // Server write failed mid-drag — re-converge from the server rather
+      // than leaving the UI showing an order that never persisted.
+      setTimeout(load, 500);
+    }
   }, [load]);
 
   const saveExpression = useCallback(
@@ -473,9 +539,26 @@ const FormulaEditor = () => {
         : values[definition.targetField];
       const rowBusy = busy === definition.id;
       const armed = armedSaveId === definition.id;
+      const isDragging = draggingId === definition.id;
 
       return (
-        <div key={definition.id} style={styles.row}>
+        <div
+          key={definition.id}
+          style={isDragging ? { ...styles.row, ...styles.rowDragging } : styles.row}
+          onMouseEnter={() => {
+            if (
+              draggingRef.current &&
+              draggingId &&
+              draggingId !== definition.id
+            ) {
+              setDefinitions((current) => {
+                const next = movePreview(current, draggingId, definition.id);
+                definitionsRef.current = next;
+                return next;
+              });
+            }
+          }}
+        >
           {definition.status === 'OFFLINE' ? (
             <div style={styles.bannerOffline}>
               OFFLINE — {definition.statusReason || 'an input field is gone'}
@@ -487,6 +570,16 @@ const FormulaEditor = () => {
             </div>
           ) : null}
           <div style={styles.header}>
+            <span
+              style={styles.dragHandle}
+              onMouseDown={() => {
+                draggingRef.current = true;
+                setDraggingId(definition.id);
+              }}
+              title="Drag to reorder"
+            >
+              ⠿
+            </span>
             <span style={styles.name}>
               {definition.name || definition.targetField}
             </span>
@@ -565,13 +658,18 @@ const FormulaEditor = () => {
     restoredHint,
     busy,
     armedSaveId,
+    draggingId,
     disarmSave,
     saveExpression,
     toggleOverride,
   ]);
 
   return (
-    <div style={styles.container}>
+    <div
+      style={styles.container}
+      onMouseUp={finishDrag}
+      onMouseLeave={finishDrag}
+    >
       <div style={styles.title}>Formula fields</div>
       {content}
     </div>
@@ -591,10 +689,17 @@ const styles: Record<string, React.CSSProperties> = {
   title: { fontWeight: 600, marginBottom: '10px', color: '#474451' },
   muted: { color: '#908e99', fontSize: '12px' },
   row: { borderTop: '1px solid #ecebf0', padding: '10px 0' },
+  rowDragging: { opacity: 0.7, border: '1px dashed #999' },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  dragHandle: {
+    cursor: 'grab',
+    userSelect: 'none',
+    marginRight: 8,
+    color: '#999',
   },
   name: { fontWeight: 600 },
   value: {
