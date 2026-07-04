@@ -10,6 +10,7 @@ export {
 export {
   extractDependencies,
   extractDependenciesFromAst,
+  usesToday,
   type CrossRecordDependency,
   type FormulaDependencies,
 } from 'src/engine/dependencies';

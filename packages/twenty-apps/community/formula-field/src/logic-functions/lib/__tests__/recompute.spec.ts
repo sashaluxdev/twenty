@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
@@ -208,5 +209,125 @@ describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
     });
     expect(after.value).toBe(1);
     expect(after.changed).toBe(true);
+  });
+});
+
+describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-04T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('writes lastEvaluatedAt alone on a no-op outcome when the flag is set and the stored heartbeat is >1h stale', async () => {
+    const stale = formula({
+      lastValue: 25,
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: 25, error: null },
+      true,
+    );
+
+    expect(mutationSpy).toHaveBeenCalledTimes(1);
+    const [[selection]] = mutationSpy.mock.calls;
+    expect(selection.updateFormulaDefinition.__args.data).toEqual({
+      lastEvaluatedAt: '2026-07-04T12:00:00.000Z',
+    });
+  });
+
+  it('writes nothing on a no-op outcome when the flag is set but the stored heartbeat is fresh (<1h)', async () => {
+    const fresh = formula({
+      lastValue: 25,
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T11:50:00.000Z', // 10min old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      fresh,
+      { value: 25, error: null },
+      true,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
+  });
+
+  it('treats an unparseable lastEvaluatedAt as stale (never silently stalls self-heal)', async () => {
+    // Date.parse('garbage') is NaN; a naive `now - NaN > threshold` comparison
+    // is always false, which would read corrupt data as "fresh" forever.
+    const corrupt = formula({
+      lastValue: 25,
+      lastError: '',
+      lastEvaluatedAt: 'garbage-not-a-date',
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      corrupt,
+      { value: 25, error: null },
+      true,
+    );
+
+    expect(mutationSpy).toHaveBeenCalledTimes(1);
+    const [[selection]] = mutationSpy.mock.calls;
+    expect(selection.updateFormulaDefinition.__args.data).toEqual({
+      lastEvaluatedAt: '2026-07-04T12:00:00.000Z',
+    });
+  });
+
+  it('preserves M3 write-avoidance: writes nothing on a no-op outcome when the flag is false, even if stale', async () => {
+    const stale = formula({
+      lastValue: 25,
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: 25, error: null },
+      false,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes the full bookkeeping payload on a changed-value outcome regardless of the flag', async () => {
+    const changed = formula({
+      lastValue: 10,
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old, irrelevant here
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      changed,
+      { value: 25, error: null },
+      false,
+    );
+
+    expect(mutationSpy).toHaveBeenCalledTimes(1);
+    const [[selection]] = mutationSpy.mock.calls;
+    expect(selection.updateFormulaDefinition.__args.data).toEqual({
+      lastValue: 25,
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T12:00:00.000Z',
+    });
   });
 });

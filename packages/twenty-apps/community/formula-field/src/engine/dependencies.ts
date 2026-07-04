@@ -88,6 +88,43 @@ const walk = (
   }
 };
 
+// True if the expression reads TODAY() anywhere — condition, either IF branch,
+// or nested under arithmetic. Mirrors the walk() switch above case-for-case,
+// but returns a boolean (OR of children) instead of collecting fields, since
+// staleness detection (ADR 0015) needs to know THAT a formula depends on the
+// system clock, not which fields it also reads.
+export const usesToday = (node: AstNode): boolean => {
+  switch (node.type) {
+    case 'number':
+      return false;
+
+    case 'today':
+      return true;
+
+    case 'field':
+      return false;
+
+    case 'crossref':
+      return false;
+
+    case 'unary':
+      return usesToday(node.operand);
+
+    case 'binary':
+      return usesToday(node.left) || usesToday(node.right);
+
+    case 'comparison':
+      return usesToday(node.left) || usesToday(node.right);
+
+    // Same eager bias as dependency extraction: either branch can determine
+    // staleness once its condition takes it, so OR across all three.
+    case 'if':
+      return (
+        usesToday(node.condition) || usesToday(node.then) || usesToday(node.else)
+      );
+  }
+};
+
 export const extractDependenciesFromAst = (
   node: AstNode,
 ): FormulaDependencies => {

@@ -20,6 +20,7 @@ const FORMULA_FIELDS = {
   enabled: true,
   lastValue: true,
   lastError: true,
+  lastEvaluatedAt: true,
   status: true,
   statusReason: true,
 } as const;
@@ -121,16 +122,42 @@ export const updateFormulaBookkeeping = async (
 // every sweep pass rewrites the row purely to bump lastEvaluatedAt, churning
 // formulaDefinition.updated events. So the timestamp ALONE never forces a write:
 // only a changed value or changed error content does.
+//
+// ADR 0015 carve-out: for a formula that reads TODAY(), "no value change" does
+// NOT mean "not evaluated" — a healthy TODAY formula can go a long time between
+// value changes, so `lastEvaluatedAt` would otherwise mean "last change" and
+// falsely look stale to the widget/editor. The caller-supplied
+// `expressionUsesToday` flag (computed once from the already-parsed AST, no
+// re-parse) scopes a single extra write — timestamp alone, nothing else — to
+// only these formulas, and only once per hour (sweep cadence), so
+// `lastEvaluatedAt` becomes truthful ("last evaluation") for TODAY formulas
+// while every other formula keeps the original zero-write guarantee.
 export const recordEvaluationHeartbeat = async (
   client: FormulaClient,
   formula: FormulaDefinitionRecord,
   outcome: { value: number | null; error: string | null },
+  expressionUsesToday: boolean,
 ): Promise<void> => {
   const nextValue = outcome.value ?? null;
   const nextError = outcome.error ?? '';
   const valueChanged = (formula.lastValue ?? null) !== nextValue;
   const errorChanged = (formula.lastError ?? '') !== nextError;
   if (!valueChanged && !errorChanged) {
+    if (expressionUsesToday) {
+      const staleMs = 60 * 60 * 1000;
+      // NaN from an unparseable timestamp must read as STALE, not fresh — a
+      // `now - NaN > staleMs` comparison is always false, which would stall
+      // the self-heal forever (same Number.isFinite guard as date-serial.ts).
+      const lastEvaluatedAtMs = Date.parse(formula.lastEvaluatedAt ?? '');
+      const isStale =
+        !Number.isFinite(lastEvaluatedAtMs) ||
+        Date.now() - lastEvaluatedAtMs > staleMs;
+      if (isStale) {
+        await updateFormulaBookkeeping(client, formula.id, {
+          lastEvaluatedAt: new Date().toISOString(),
+        });
+      }
+    }
     return;
   }
   await updateFormulaBookkeeping(client, formula.id, {

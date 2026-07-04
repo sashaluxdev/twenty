@@ -44,6 +44,10 @@ export type FormulaDefinitionRecord = {
   enabled?: boolean | null;
   lastValue?: number | null;
   lastError?: string | null;
+  // ISO timestamp of the last evaluation (ADR 0015: for TODAY-using formulas
+  // this now means "last evaluation", not just "last value change" — see
+  // recordEvaluationHeartbeat's carve-out).
+  lastEvaluatedAt?: string | null;
 };
 
 export type RecomputeOutcome = {

@@ -1,5 +1,5 @@
 import { compileFormula } from 'src/engine';
-import { type FormulaDependencies } from 'src/engine/dependencies';
+import { type FormulaDependencies, usesToday } from 'src/engine/dependencies';
 import { FormulaError, isFormulaError } from 'src/engine/errors';
 import { evaluate, type VariableResolver } from 'src/engine/evaluator';
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
@@ -50,6 +50,17 @@ export const pluralize = (singular: string): string => {
 
 const crossKey = (object: string, recordId: string): string =>
   `${object}:${recordId}`;
+
+// Safe usesToday() over a possibly-invalid expression, for the heartbeat
+// carve-out (ADR 0015). A formula that fails to parse has no TODAY()
+// dependency to track — evaluation surfaces the parse error elsewhere.
+const expressionUsesTodayOf = (formula: FormulaDefinitionRecord): boolean => {
+  try {
+    return usesToday(compileFormula(formula.expression ?? '').ast);
+  } catch {
+    return false;
+  }
+};
 
 // Builds the genql field selection for a set of root field names.
 const fieldSelection = (fields: string[]): Record<string, boolean> => {
@@ -455,10 +466,15 @@ export const recomputeAllRecords = async (
       outcomes.find((o) => !o.error && o.value !== null)?.value ??
       outcomes.find((o) => !o.error)?.value ??
       null;
-    await recordEvaluationHeartbeat(client, formula, {
-      value: sampleValue,
-      error: firstError,
-    });
+    await recordEvaluationHeartbeat(
+      client,
+      formula,
+      {
+        value: sampleValue,
+        error: firstError,
+      },
+      expressionUsesTodayOf(formula),
+    );
   }
 
   return outcomes;

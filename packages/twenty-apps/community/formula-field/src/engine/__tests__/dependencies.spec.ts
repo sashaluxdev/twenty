@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractDependencies } from 'src/engine/dependencies';
+import { extractDependencies, usesToday } from 'src/engine/dependencies';
+import { parse } from 'src/engine/parser';
 
 const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
 const UUID2 = 'ac4d683d-f20b-4728-9ab0-7d52938dd36b';
@@ -100,5 +101,39 @@ describe('dependency extraction', () => {
     const deps = extractDependencies('IF(startDate > TODAY() + 100, 1, 0)');
     expect(deps.sameRecordFields).toEqual(['startDate']);
     expect(deps.crossRecordRefs).toEqual([]);
+  });
+});
+
+describe('usesToday', () => {
+  it('detects TODAY() alone', () => {
+    expect(usesToday(parse('TODAY()'))).toBe(true);
+  });
+
+  it('detects TODAY() inside a binary expression', () => {
+    expect(usesToday(parse('TODAY() + 100'))).toBe(true);
+  });
+
+  it('detects TODAY() in an IF condition', () => {
+    expect(usesToday(parse('IF(a > TODAY(), 1, 2)'))).toBe(true);
+  });
+
+  it('detects TODAY() in the THEN branch', () => {
+    expect(usesToday(parse('IF(a, TODAY(), 2)'))).toBe(true);
+  });
+
+  it('detects TODAY() in the ELSE branch', () => {
+    expect(usesToday(parse('IF(a, 1, TODAY())'))).toBe(true);
+  });
+
+  it('returns false for an expression with no TODAY()', () => {
+    expect(usesToday(parse('a + b * 2'))).toBe(false);
+  });
+
+  it('returns false for a cross-record reference with no TODAY()', () => {
+    expect(usesToday(parse(`[object:${UUID}:field] + 1`))).toBe(false);
+  });
+
+  it('detects TODAY() nested under unary negation', () => {
+    expect(usesToday(parse('-(TODAY())'))).toBe(true);
   });
 });

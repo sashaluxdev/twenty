@@ -1,4 +1,5 @@
 import { compileFormula } from 'src/engine';
+import { usesToday } from 'src/engine/dependencies';
 import {
   loadAllEnabledFormulas,
   recordEvaluationHeartbeat,
@@ -46,9 +47,11 @@ const numbersEqual = (a: number | null, b: number | null): boolean => {
   return Math.abs(a - b) < 1e-9;
 };
 
-const safeDependencies = (expression: string) => {
+// Parses once and returns both the AST and its dependency set — the AST feeds
+// usesToday() for the heartbeat carve-out (ADR 0015) without a second parse.
+const safeCompile = (expression: string) => {
   try {
-    return compileFormula(expression).dependencies;
+    return compileFormula(expression);
   } catch {
     return null;
   }
@@ -161,10 +164,11 @@ export const handleRecordUpdate = async ({
       continue;
     }
 
-    const dependencies = safeDependencies(formula.expression ?? '');
-    if (!dependencies) {
+    const compiled = safeCompile(formula.expression ?? '');
+    if (!compiled) {
       continue;
     }
+    const dependencies = compiled.dependencies;
 
     // Case 1: this object's own record changed and it feeds this formula.
     if (
@@ -196,10 +200,15 @@ export const handleRecordUpdate = async ({
         prefetchedRecord: after ?? undefined,
       });
       outcomes.push(outcome);
-      await recordEvaluationHeartbeat(client, formula, {
-        value: outcome.value,
-        error: outcome.error,
-      });
+      await recordEvaluationHeartbeat(
+        client,
+        formula,
+        {
+          value: outcome.value,
+          error: outcome.error,
+        },
+        usesToday(compiled.ast),
+      );
       continue;
     }
 
