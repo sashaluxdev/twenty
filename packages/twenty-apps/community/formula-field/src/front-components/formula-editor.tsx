@@ -6,7 +6,7 @@ import { useRecordId } from 'twenty-sdk/front-component';
 
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import {
-  computeReorderWrites,
+  computeDropWrite,
   movePreview,
   sortByOrder,
 } from 'src/front-components/lib/reorder-definitions';
@@ -145,14 +145,24 @@ const FormulaEditor = () => {
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The record id never changes for a mounted widget — resolve its object once.
   const resolvedHost = useRef<string | null>(null);
-  // Drag-to-reorder (ADR 0013): draggingId drives render (handle/row styling),
-  // draggingRef is read synchronously inside closures (poll guard, finishDrag)
-  // where state would be stale. definitionsRef mirrors the latest visual order
-  // so finishDrag always reads the current list rather than a stale one from
-  // the render that created the callback.
+  // Drag-to-reorder (ADR 0014, pointer events): pointerdown only records a
+  // pending gesture (id + start coordinates) in pendingDragRef — it does NOT
+  // arm the drag. A row's onPointerMove arms it once the pointer has moved
+  // >= 8px (draggingRef.current = true, draggingId set for render). Only an
+  // armed drag previews (onPointerEnter), persists (onPointerUp), or cancels
+  // (onPointerLeave/onPointerCancel — reverts via load(), writes nothing).
+  // draggingRef is read synchronously inside closures (poll guard, commit/
+  // cancel) where state would be stale. definitionsRef mirrors the latest
+  // visual order so commit always reads the current list rather than a stale
+  // one from the render that created the callback.
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const draggingRef = useRef(false);
   const definitionsRef = useRef<Definition[]>([]);
+  const pendingDragRef = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+  } | null>(null);
 
   const disarmSave = useCallback(() => {
     if (armTimer.current) {
@@ -326,17 +336,23 @@ const FormulaEditor = () => {
     return () => clearInterval(interval);
   }, [load]);
 
-  // Drop handler for drag-to-reorder (ADR 0013). Reads definitionsRef (not
+  // Drop handler for drag-to-reorder (ADR 0014). Reads definitionsRef (not
   // `definitions`) so it always sees the live hover-preview order rather than
-  // a stale render-time snapshot. Reindex-on-drop: the whole visible list is
-  // renumbered 0..N-1 and only the rows whose order actually changed are
-  // written (computeReorderWrites is write-avoidant).
-  const finishDrag = useCallback(async () => {
+  // a stale render-time snapshot. Fractional-midpoint drop: ONE row's order
+  // is written in steady state; computeDropWrite falls back to a full
+  // reindex only when normalization is required (unnumbered rows involved,
+  // duplicate/NaN neighbors, or float precision exhausted).
+  const commitDrag = useCallback(async () => {
+    const pending = pendingDragRef.current;
+    pendingDragRef.current = null;
     if (!draggingRef.current) return;
     draggingRef.current = false;
     setDraggingId(null);
-    const writes = computeReorderWrites(
+    const draggedId = pending?.id;
+    if (!draggedId) return;
+    const writes = computeDropWrite(
       definitionsRef.current.map(({ id, order }) => ({ id, order })),
+      draggedId,
     );
     if (writes.length === 0) return;
     try {
@@ -352,13 +368,16 @@ const FormulaEditor = () => {
           }),
         ),
       );
-      // Reflect persisted orders locally so the next poll (which re-sorts by
-      // `order`) agrees with what's on screen instead of snapping back.
+      // Reflect ONLY the written rows' persisted orders locally — unwritten
+      // rows keep whatever order they already had (no renumbering the whole
+      // list, per ADR 0014's single-row-write model).
+      const writtenOrders = new Map(writes.map((write) => [write.id, write.order]));
       setDefinitions((current) => {
-        const next = current.map((definition, index) => ({
-          ...definition,
-          order: index,
-        }));
+        const next = current.map((definition) =>
+          writtenOrders.has(definition.id)
+            ? { ...definition, order: writtenOrders.get(definition.id) as number }
+            : definition,
+        );
         definitionsRef.current = next;
         return next;
       });
@@ -367,6 +386,18 @@ const FormulaEditor = () => {
       // than leaving the UI showing an order that never persisted.
       setTimeout(load, 500);
     }
+  }, [load]);
+
+  // Drop-outside cancel (ADR 0014): pointercancel or the pointer leaving the
+  // container mid-drag disarms and reverts the preview via a reload — the
+  // guard is already clear when load() runs, so it re-sorts from server
+  // state. Nothing is persisted.
+  const cancelDrag = useCallback(() => {
+    pendingDragRef.current = null;
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    setDraggingId(null);
+    load();
   }, [load]);
 
   const saveExpression = useCallback(
@@ -545,7 +576,24 @@ const FormulaEditor = () => {
         <div
           key={definition.id}
           style={isDragging ? { ...styles.row, ...styles.rowDragging } : styles.row}
-          onMouseEnter={() => {
+          onPointerMove={(event) => {
+            const pending = pendingDragRef.current;
+            if (!pending || draggingRef.current) return;
+            // remote-dom may proxy pointer events without clientX/clientY —
+            // when coordinates are unavailable, arm on this first move
+            // rather than silently never arming (dead feature).
+            const { clientX, clientY } = event;
+            const hasCoordinates =
+              typeof clientX === 'number' && typeof clientY === 'number';
+            const distance = hasCoordinates
+              ? Math.hypot(clientX - pending.startX, clientY - pending.startY)
+              : Number.POSITIVE_INFINITY;
+            if (distance >= 8) {
+              draggingRef.current = true;
+              setDraggingId(pending.id);
+            }
+          }}
+          onPointerEnter={() => {
             if (
               draggingRef.current &&
               draggingId &&
@@ -571,21 +619,30 @@ const FormulaEditor = () => {
           ) : null}
           <div style={styles.header}>
             <span
-              style={styles.dragHandle}
-              draggable={false}
-              onMouseDown={(event) => {
+              style={
+                isDragging
+                  ? { ...styles.dragHandle, ...styles.dragHandleActive }
+                  : styles.dragHandle
+              }
+              onPointerDown={(event) => {
                 // Without this, the browser's native text-drag gesture can
-                // hijack the mousedown (dragstart fires), which suppresses
-                // mousemove/mouseenter for the rest of the gesture and
+                // hijack the pointerdown (dragstart fires), which suppresses
+                // pointermove/pointerenter for the rest of the gesture and
                 // silently breaks the custom reorder — most reliably when
-                // dragging downward or at normal (non-careful) speeds.
+                // dragging downward or at normal (non-careful) speeds. This
+                // only records the pending gesture — it does NOT arm the
+                // drag; arming happens after 8px of travel (see the row's
+                // onPointerMove).
                 event.preventDefault();
-                draggingRef.current = true;
-                setDraggingId(definition.id);
+                pendingDragRef.current = {
+                  id: definition.id,
+                  startX: event.clientX,
+                  startY: event.clientY,
+                };
               }}
               title="Drag to reorder"
             >
-              ⠿
+              ⋮⋮
             </span>
             <span style={styles.name}>
               {definition.name || definition.targetField}
@@ -674,8 +731,9 @@ const FormulaEditor = () => {
   return (
     <div
       style={styles.container}
-      onMouseUp={finishDrag}
-      onMouseLeave={finishDrag}
+      onPointerUp={commitDrag}
+      onPointerLeave={cancelDrag}
+      onPointerCancel={cancelDrag}
     >
       <div style={styles.title}>Formula fields</div>
       {content}
@@ -706,12 +764,16 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeft: 'none',
     padding: '10px 0',
   },
+  // Light background tint + a strengthened (never dashed/opacity-dimmed) top
+  // border — core reserves opacity-dimming for secondary multi-drag items
+  // (ADR 0014 §5). Longhands on every side, matching `row`, per the
+  // shorthand/longhand React bug noted above.
   rowDragging: {
-    opacity: 0.7,
-    borderTop: '1px dashed #999',
-    borderRight: '1px dashed #999',
-    borderBottom: '1px dashed #999',
-    borderLeft: '1px dashed #999',
+    background: 'rgba(0,0,0,0.04)',
+    borderTop: '2px solid #908e99',
+    borderRight: 'none',
+    borderBottom: 'none',
+    borderLeft: 'none',
   },
   header: {
     display: 'flex',
@@ -723,7 +785,9 @@ const styles: Record<string, React.CSSProperties> = {
     userSelect: 'none',
     marginRight: 8,
     color: '#999',
+    touchAction: 'none',
   },
+  dragHandleActive: { cursor: 'grabbing' },
   name: { fontWeight: 600 },
   value: {
     fontVariantNumeric: 'tabular-nums',
