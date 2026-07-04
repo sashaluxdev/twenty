@@ -199,6 +199,19 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
     app code; touch arms but the preview never moves, zero writes (safe).
     Mouse/pen fully verified. Real fix = renderer-package change. See ADR
     0014's corrected Consequences.
+- **UI POLISH (2026-07-04, final stage)**: all six front-component surfaces
+  restyled to Twenty core's aesthetic, BOTH themes, zero functional changes
+  (final whole-branch audit READY TO CLOSE; exhaustive both-theme Playwright
+  verification: every surface PASS light+dark, functional smoke clean,
+  19-screenshot gallery in scratchpad `ui-polish/gallery/`). Mechanism:
+  widgets are light-DOM in the host document, so `var(--t-*)` inline/emotion
+  styles track the host `.light`/`.dark` class live. `twenty-sdk/ui` is
+  UNUSABLE at runtime (see gotcha) — archetypes are emotion replicas of
+  core's exact component specs (Button variants incl. `armed` stable-element
+  save flow, TextInput focus, ChoiceChip selected, Banner secondary variants,
+  Status text colors, toggle, dropdown, drag rows) in `lib/ui.tsx` +
+  `lib/ui-tokens.ts`. See "Widget styling rules" gotcha before editing any
+  widget styling.
   Awaiting user verification + next design inputs.
 
 ## What is NOT done (next work)
@@ -410,10 +423,21 @@ written at the app root (`README.md`).
   whole widget tree (not just the sdk/ui markup), reproduced via a spike
   (`.superpowers/sdd/ui-spike-verdict.md`). Avoid importing `twenty-sdk/ui`
   from any front component; use `@emotion/styled` replicas driven by
-  `var(--t-*)` tokens instead (see `src/front-components/lib/ui.ts(x)` and the
-  call-recorder app's `recording-theme-css-variables.ts` pattern) — emotion's
-  `<style>` tags stream to the host fine (`:hover`/`:focus`/transitions work)
-  and CSS vars repaint on theme toggle with zero JS.
+  `var(--t-*)` tokens instead (see `src/front-components/lib/ui-tokens.ts` +
+  `lib/ui.tsx` and the call-recorder app's `recording-theme-css-variables.ts`
+  pattern) — emotion's `<style>` tags stream to the host fine
+  (`:hover`/`:focus`/transitions work) and CSS vars repaint on theme toggle
+  with zero JS.
+- **Widget styling rules** (UI polish, 2026-07-04): ALL colors/fonts/borders/
+  radii come from `lib/ui.tsx` archetypes + `lib/ui-tokens.ts` `TOKENS`
+  (`var(--t-*)` map); the six surface files keep only layout-only style
+  objects (flex/gap/margin/padding). Styled components must be MODULE-LEVEL
+  (never `styled()` inside render); every prop-driven styled component filters
+  its transient props via `shouldForwardProp` (no DOM attribute leakage
+  through the remote-dom bridge); never flip a styled component TYPE on state
+  (remount drops focus — use a transient prop like `PrimaryButton armed` /
+  `ToggleTrack on`); no hardcoded hex except the two sanctioned `#fff`
+  (text-on-blue, toggle knob); shadows via `var(--t-box-shadow-light)`.
 
 ## Key files (by area)
 
