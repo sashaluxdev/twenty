@@ -230,7 +230,6 @@ export const FieldSettingsEditor = ({
         onClick={() => setOpen((previous) => !previous)}
       >
         <HintText
-          as="span"
           style={{
             ...layout.caret,
             transform: open ? 'rotate(90deg)' : 'rotate(0deg)',

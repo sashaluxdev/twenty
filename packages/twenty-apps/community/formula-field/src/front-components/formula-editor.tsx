@@ -18,7 +18,6 @@ import {
 import {
   BannerDanger,
   BannerWarning,
-  DangerButton,
   DragHandle,
   ErrText,
   MutedText,
@@ -766,17 +765,15 @@ const FormulaEditor = () => {
               }}
               targetObject={definition.targetObject}
             />
-            {(() => {
-              const SaveButton = armed ? DangerButton : PrimaryButton;
-              return (
-                <SaveButton
-                  disabled={!dirty || Boolean(liveError) || rowBusy}
-                  onClick={() => saveExpression(definition)}
-                >
-                  {armed ? 'Confirm' : 'Save'}
-                </SaveButton>
-              );
-            })()}
+            {/* Same element type across the arm flip (armed prop, not a
+                component swap) so keyboard focus survives the recolor. */}
+            <PrimaryButton
+              armed={armed}
+              disabled={!dirty || Boolean(liveError) || rowBusy}
+              onClick={() => saveExpression(definition)}
+            >
+              {armed ? 'Confirm' : 'Save'}
+            </PrimaryButton>
           </div>
           {armed ? (
             <BannerWarning style={layout.confirmWarning}>

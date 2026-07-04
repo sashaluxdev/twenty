@@ -30,11 +30,20 @@ export const WidgetRoot = styled.div`
 // Every button sets font-family/font-size explicitly: form controls do not
 // inherit these from ancestors in browsers, unlike ordinary text elements.
 
-export const PrimaryButton = styled.button`
-  background: ${TOKENS.colorBlue};
+// `armed` is a transient prop (shouldForwardProp keeps it off the DOM,
+// mirroring ToggleTrack's `on`). When armed the button flips to the danger
+// palette (matching DangerButton) while keeping IDENTICAL geometry — WHY: the
+// two-step save confirm needs to recolor a button in place. Swapping the React
+// component TYPE (PrimaryButton -> DangerButton) would remount the DOM node and
+// drop keyboard focus mid-flow; a single element that only changes its CSS
+// preserves focus across the arm flip.
+export const PrimaryButton = styled('button', {
+  shouldForwardProp: (prop) => prop !== 'armed',
+})<{ armed?: boolean }>`
+  background: ${({ armed }) => (armed ? TOKENS.colorRed : TOKENS.colorBlue)};
   border: none;
   border-radius: ${TOKENS.radiusSm};
-  color: #fff;
+  color: ${({ armed }) => (armed ? TOKENS.bgPrimary : '#fff')};
   cursor: pointer;
   font-family: ${TOKENS.fontFamily};
   font-size: ${TOKENS.fontSizeXs};
@@ -43,10 +52,12 @@ export const PrimaryButton = styled.button`
   padding: 0 8px;
   transition: background 0.1s ease;
   &:hover:not(:disabled) {
-    background: var(--t-color-blue10);
+    background: ${({ armed }) =>
+      armed ? 'var(--t-color-red8)' : 'var(--t-color-blue10)'};
   }
   &:focus {
-    box-shadow: 0 0 0 3px ${TOKENS.accentTertiary};
+    box-shadow: 0 0 0 3px
+      ${({ armed }) => (armed ? 'var(--t-color-red3)' : TOKENS.accentTertiary)};
     outline: none;
   }
   &:disabled {
@@ -55,9 +66,6 @@ export const PrimaryButton = styled.button`
   }
 `;
 
-// Armed-save (2nd-click destructive confirm) reuses this exact geometry with
-// danger colors — see DangerButton below (spec: "keep primary geometry,
-// danger colors ... as danger solid").
 export const SecondaryButton = styled.button`
   background: transparent;
   border: 1px solid ${TOKENS.bgTransparentMedium};
