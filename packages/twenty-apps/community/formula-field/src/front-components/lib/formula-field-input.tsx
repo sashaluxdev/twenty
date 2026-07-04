@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 
+import {
+  DropdownOption,
+  DropdownPanel,
+  MonoInput,
+  TextArea,
+} from 'src/front-components/lib/ui';
+import { TOKENS } from 'src/front-components/lib/ui-tokens';
+
 // Reusable formula text input with inline, same-record field autocomplete.
 // As the user types an identifier, a dropdown shows the target object's numeric
 // fields (label + API name), narrowing live; selecting inserts the API name.
@@ -267,25 +275,21 @@ export const FormulaFieldInput = ({
     onKeyDown: handleKeyDown,
     onKeyUp: syncCaret,
     onClick: syncCaret,
-    style: inputStyle,
   };
 
   return (
-    <div style={{ position: 'relative', width: '100%' }}>
+    <div style={layout.wrapper}>
       {multiline ? (
-        <textarea {...(commonProps as any)} rows={2} />
+        <TextArea {...(commonProps as any)} rows={2} style={layout.textarea} />
       ) : (
-        <input {...(commonProps as any)} />
+        <MonoInput {...(commonProps as any)} style={layout.input} />
       )}
       {open ? (
-        <div style={dropdownStyle}>
+        <DropdownPanel style={layout.dropdown}>
           {suggestions.map((field, index) => (
-            <div
+            <DropdownOption
               key={field.name}
-              style={{
-                ...optionStyle,
-                background: index === activeIndex ? '#eef3ff' : '#fff',
-              }}
+              active={index === activeIndex}
               onMouseDown={(event) => {
                 // onMouseDown (not onClick) so the input doesn't blur first.
                 event.preventDefault();
@@ -293,59 +297,50 @@ export const FormulaFieldInput = ({
               }}
               onMouseEnter={() => setActiveIndex(index)}
             >
-              <span style={{ fontWeight: 600 }}>{field.label}</span>
-              <span style={optionApiName}>{field.name}</span>
-              <span style={optionType}>{field.type.toLowerCase()}</span>
-            </div>
+              <span style={layout.optionLabel}>{field.label}</span>
+              <span style={layout.optionApiName}>{field.name}</span>
+              <span style={layout.optionType}>{field.type.toLowerCase()}</span>
+            </DropdownOption>
           ))}
-        </div>
+        </DropdownPanel>
       ) : null}
     </div>
   );
 };
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '6px 8px',
-  border: '1px solid #d6d5db',
-  borderRadius: '4px',
-  fontFamily: 'ui-monospace, monospace',
-  fontSize: '13px',
-  boxSizing: 'border-box',
-  resize: 'none',
-};
-
-const dropdownStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: '100%',
-  left: 0,
-  right: 0,
-  zIndex: 20,
-  marginTop: '2px',
-  background: '#fff',
-  border: '1px solid #d6d5db',
-  borderRadius: '6px',
-  boxShadow: '0 6px 20px rgba(0,0,0,0.12)',
-  overflow: 'hidden',
-};
-
-const optionStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  gap: '8px',
-  padding: '6px 10px',
-  cursor: 'pointer',
-  fontSize: '12px',
-};
-
-const optionApiName: React.CSSProperties = {
-  fontFamily: 'ui-monospace, monospace',
-  color: '#1961ed',
-  fontSize: '11px',
-};
-
-const optionType: React.CSSProperties = {
-  marginLeft: 'auto',
-  color: '#b0aeb8',
-  fontSize: '10px',
+// Layout-only values (padding, gaps, positioning) — every color/background/
+// border comes from the archetypes in lib/ui.tsx or lib/ui-tokens instead
+// (spec: docs/superpowers/specs/2026-07-04-formula-field-ui-polish-design.md).
+// wrapper/optionLabel are pure layout literals (no color) per the task brief.
+const layout: Record<string, React.CSSProperties> = {
+  wrapper: { position: 'relative', width: '100%' },
+  input: { width: '100%', boxSizing: 'border-box' },
+  // TextArea's base archetype isn't monospace — formula text stays mono here.
+  textarea: {
+    width: '100%',
+    boxSizing: 'border-box',
+    fontFamily: 'ui-monospace, monospace',
+    resize: 'none',
+  },
+  dropdown: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    marginTop: '2px',
+  },
+  optionLabel: { fontWeight: 600 },
+  // Sub-column colors are consumer-applied via TOKENS per DropdownOption's
+  // documented contract (api-name blue, type font-color-light).
+  optionApiName: {
+    fontFamily: 'ui-monospace, monospace',
+    color: TOKENS.colorBlue,
+    fontSize: '11px',
+  },
+  optionType: {
+    marginLeft: 'auto',
+    color: TOKENS.fontColorLight,
+    fontSize: '10px',
+  },
 };

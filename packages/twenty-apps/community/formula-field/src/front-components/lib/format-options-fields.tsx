@@ -8,6 +8,14 @@ import {
   type NumberDisplayType,
   type OutputFormat,
 } from 'src/front-components/lib/formula-field-formats';
+import {
+  ChoiceChip,
+  ErrText,
+  HintText,
+  MonoInput,
+  MutedText,
+  StepperButton,
+} from 'src/front-components/lib/ui';
 
 // isValidCustomUnicodeDateFormat is used below to flag an incomplete CUSTOM
 // date pattern inline; areFormatOptionsValid (the save gate) lives in the pure
@@ -62,23 +70,21 @@ const Counter = ({
   onChange: (next: number) => void;
 }) => (
   <div style={f.counter}>
-    <button
+    <StepperButton
       type="button"
-      style={f.counterButton}
       disabled={value <= min}
       onMouseDown={() => onChange(clamp(value - 1, min, max))}
     >
       −
-    </button>
+    </StepperButton>
     <span style={f.counterValue}>{value}</span>
-    <button
+    <StepperButton
       type="button"
-      style={f.counterButton}
       disabled={value >= max}
       onMouseDown={() => onChange(clamp(value + 1, min, max))}
     >
       +
-    </button>
+    </StepperButton>
   </div>
 );
 
@@ -93,17 +99,14 @@ const ChoiceRow = <TValue extends string>({
 }) => (
   <div style={f.choiceRow}>
     {choices.map((choice) => (
-      <button
+      <ChoiceChip
         key={choice.value}
         type="button"
-        style={{
-          ...f.choiceChip,
-          ...(selected === choice.value ? f.choiceChipSelected : {}),
-        }}
+        selected={selected === choice.value}
         onMouseDown={() => onSelect(choice.value)}
       >
         {choice.label}
-      </button>
+      </ChoiceChip>
     ))}
   </div>
 );
@@ -124,7 +127,9 @@ export const FormatOptionsFields = ({
       <div>
         {showNumberTypeSelect ? (
           <div style={f.field}>
-            <div style={f.fieldLabel}>Number type</div>
+            <MutedText as="div" style={f.fieldLabel}>
+              Number type
+            </MutedText>
             <ChoiceRow
               choices={NUMBER_TYPE_CHOICES}
               selected={options.numberDisplayType}
@@ -138,10 +143,14 @@ export const FormatOptionsFields = ({
           </div>
         ) : null}
         {isShort ? (
-          <div style={f.hint}>Short numbers have no decimals (e.g. 1.2k).</div>
+          <HintText as="div" style={f.hint}>
+            Short numbers have no decimals (e.g. 1.2k).
+          </HintText>
         ) : (
           <div style={f.field}>
-            <div style={f.fieldLabel}>Decimals</div>
+            <MutedText as="div" style={f.fieldLabel}>
+              Decimals
+            </MutedText>
             <Counter
               value={options.decimals}
               min={0}
@@ -151,10 +160,10 @@ export const FormatOptionsFields = ({
           </div>
         )}
         {options.numberDisplayType === 'percentage' ? (
-          <div style={f.hint}>
+          <HintText as="div" style={f.hint}>
             Percentage changes how the stored number is DISPLAYED, not the stored
             value.
-          </div>
+          </HintText>
         ) : null}
       </div>
     );
@@ -164,7 +173,9 @@ export const FormatOptionsFields = ({
     return (
       <div>
         <div style={f.field}>
-          <div style={f.fieldLabel}>Default currency</div>
+          <MutedText as="div" style={f.fieldLabel}>
+            Default currency
+          </MutedText>
           <ChoiceRow
             choices={CURRENCY_CODES.map((code) => ({ value: code, label: code }))}
             selected={options.currencyCode}
@@ -172,7 +183,9 @@ export const FormatOptionsFields = ({
           />
         </div>
         <div style={f.field}>
-          <div style={f.fieldLabel}>Format</div>
+          <MutedText as="div" style={f.fieldLabel}>
+            Format
+          </MutedText>
           <ChoiceRow
             choices={CURRENCY_FORMAT_CHOICES}
             selected={options.currencyFormat}
@@ -181,7 +194,9 @@ export const FormatOptionsFields = ({
         </div>
         {options.currencyFormat === 'full' ? (
           <div style={f.field}>
-            <div style={f.fieldLabel}>Decimals</div>
+            <MutedText as="div" style={f.fieldLabel}>
+              Decimals
+            </MutedText>
             <Counter
               value={clamp(options.decimals, 0, 5)}
               min={0}
@@ -201,7 +216,9 @@ export const FormatOptionsFields = ({
   return (
     <div>
       <div style={f.field}>
-        <div style={f.fieldLabel}>Display format</div>
+        <MutedText as="div" style={f.fieldLabel}>
+          Display format
+        </MutedText>
         <ChoiceRow
           choices={DATE_FORMAT_CHOICES}
           selected={options.dateDisplayFormat}
@@ -210,8 +227,10 @@ export const FormatOptionsFields = ({
       </div>
       {options.dateDisplayFormat === 'CUSTOM' ? (
         <div style={f.field}>
-          <div style={f.fieldLabel}>Custom Unicode format</div>
-          <input
+          <MutedText as="div" style={f.fieldLabel}>
+            Custom Unicode format
+          </MutedText>
+          <MonoInput
             style={f.input}
             value={options.customUnicodeDateFormat}
             placeholder="e.g. yyyy-MM-dd HH:mm"
@@ -220,7 +239,9 @@ export const FormatOptionsFields = ({
             }
           />
           {customInvalid ? (
-            <div style={f.err}>Enter a Unicode date pattern (e.g. yyyy-MM-dd).</div>
+            <ErrText as="div" style={f.err}>
+              Enter a Unicode date pattern (e.g. yyyy-MM-dd).
+            </ErrText>
           ) : null}
         </div>
       ) : null}
@@ -228,52 +249,22 @@ export const FormatOptionsFields = ({
   );
 };
 
+// Layout-only values (padding, gaps, margins) — every color/font-family-for-
+// body-text/background/border comes from the archetypes in lib/ui.tsx or
+// lib/ui-tokens instead (spec: docs/superpowers/specs/
+// 2026-07-04-formula-field-ui-polish-design.md).
 const f: Record<string, React.CSSProperties> = {
   field: { marginBottom: '10px' },
-  fieldLabel: { fontSize: '11px', color: '#908e99', marginBottom: '4px' },
+  fieldLabel: { marginBottom: '4px' },
   choiceRow: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
-  choiceChip: {
-    padding: '4px 10px',
-    borderRadius: '12px',
-    border: '1px solid #d6d5db',
-    background: '#fff',
-    color: '#1b1b1f',
-    cursor: 'pointer',
-    fontSize: '12px',
-  },
-  choiceChipSelected: {
-    border: '1px solid #1961ed',
-    background: '#eef3fe',
-    color: '#1961ed',
-  },
   counter: { display: 'flex', alignItems: 'center', gap: '8px' },
-  counterButton: {
-    width: '24px',
-    height: '24px',
-    borderRadius: '4px',
-    border: '1px solid #d6d5db',
-    background: '#fff',
-    color: '#1b1b1f',
-    cursor: 'pointer',
-    fontSize: '14px',
-    lineHeight: '1',
-    padding: 0,
-  },
   counterValue: {
     minWidth: '24px',
     textAlign: 'center',
     fontVariantNumeric: 'tabular-nums',
     fontSize: '13px',
   },
-  input: {
-    width: '100%',
-    padding: '6px 8px',
-    border: '1px solid #d6d5db',
-    borderRadius: '4px',
-    fontSize: '13px',
-    boxSizing: 'border-box',
-    fontFamily: 'ui-monospace, monospace',
-  },
-  hint: { fontSize: '11px', color: '#b0aeb8', marginBottom: '6px' },
-  err: { color: '#e0483d', fontSize: '12px', marginTop: '4px' },
+  input: { width: '100%', boxSizing: 'border-box' },
+  hint: { marginBottom: '6px' },
+  err: { marginTop: '4px' },
 };

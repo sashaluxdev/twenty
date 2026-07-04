@@ -21,6 +21,17 @@ import {
   parseTargetFieldSettings,
   serializeTargetFieldSettings,
 } from 'src/front-components/lib/formula-field-formats';
+import {
+  ChoiceChip,
+  ErrText,
+  HintText,
+  MutedText,
+  PrimaryButton,
+  StepTitle,
+  TextInput,
+  WarnText,
+} from 'src/front-components/lib/ui';
+import { TOKENS } from 'src/front-components/lib/ui-tokens';
 
 // Guided setup for a fresh FormulaDefinition (feature #1): pick the target
 // object, pick an output format, name the field — the wizard then CREATES the
@@ -449,61 +460,55 @@ export const FormulaSetupWizard = ({
 
   return (
     <div>
-      <div style={w.step}>
-        <div style={w.stepTitle}>1 · Target object</div>
+      <div style={layout.step}>
+        <StepTitle style={layout.stepTitle}>1 · Target object</StepTitle>
         {objectsLoading ? (
-          <div style={w.muted}>Loading objects…</div>
+          <MutedText as="div">Loading objects…</MutedText>
         ) : (
           <div>
-            <input
-              style={w.filter}
+            <TextInput
+              style={layout.filter}
               value={objectFilter}
               placeholder="Filter objects…"
               onChange={(event) => setObjectFilter(event.target.value)}
             />
-            <div style={w.objectList}>
+            <div style={layout.objectList}>
               {visibleObjects.map((object) => (
-                <button
+                <ChoiceChip
                   key={object.id}
-                  style={{
-                    ...w.chip,
-                    ...(selectedObject?.id === object.id ? w.chipSelected : {}),
-                  }}
+                  selected={selectedObject?.id === object.id}
                   onMouseDown={() => pickObject(object)}
                 >
                   {object.labelSingular}
-                </button>
+                </ChoiceChip>
               ))}
               {visibleObjects.length === 0 ? (
-                <span style={w.muted}>No matching object</span>
+                <MutedText>No matching object</MutedText>
               ) : null}
             </div>
           </div>
         )}
       </div>
 
-      <div style={w.step}>
-        <div style={w.stepTitle}>2 · Output format</div>
-        <div style={w.formatRow}>
+      <div style={layout.step}>
+        <StepTitle style={layout.stepTitle}>2 · Output format</StepTitle>
+        <div style={layout.formatRow}>
           {OUTPUT_FORMATS.map((candidate) => (
-            <button
+            <ChoiceChip
               key={candidate.key}
-              style={{
-                ...w.chip,
-                ...(format === candidate.key ? w.chipSelected : {}),
-              }}
+              selected={format === candidate.key}
               onMouseDown={() => pickFormat(candidate.key)}
             >
               {candidate.label}
-              <span style={w.formatHint}> {candidate.hint}</span>
-            </button>
+              <HintText as="span"> {candidate.hint}</HintText>
+            </ChoiceChip>
           ))}
         </div>
       </div>
 
       {format ? (
-        <div style={w.step}>
-          <div style={w.stepTitle}>2b · Format options</div>
+        <div style={layout.step}>
+          <StepTitle style={layout.stepTitle}>2b · Format options</StepTitle>
           <FormatOptionsFields
             format={format}
             options={options}
@@ -512,10 +517,10 @@ export const FormulaSetupWizard = ({
         </div>
       ) : null}
 
-      <div style={w.step}>
-        <div style={w.stepTitle}>3 · Field name</div>
-        <input
-          style={w.filter}
+      <div style={layout.step}>
+        <StepTitle style={layout.stepTitle}>3 · Field name</StepTitle>
+        <TextInput
+          style={layout.filter}
           value={label}
           placeholder="e.g. Deal score"
           onChange={(event) => {
@@ -524,59 +529,51 @@ export const FormulaSetupWizard = ({
           }}
         />
         {fieldName ? (
-          <div style={w.muted}>
-            API name: <span style={w.mono}>{fieldName}</span>
+          <MutedText as="div">
+            API name: <span style={layout.mono}>{fieldName}</span>
             {collision ? (
-              <span style={w.err}>
+              <ErrText>
                 {' '}
                 — already exists on {selectedObject?.labelSingular}
-              </span>
+              </ErrText>
             ) : null}
             {resumable ? (
-              <span style={w.resume}>
+              <WarnText>
                 {' '}
                 — fields from an interrupted attempt found; creating will adopt
                 them
-              </span>
+              </WarnText>
             ) : null}
-          </div>
+          </MutedText>
         ) : null}
       </div>
 
-      <div style={w.actions}>
-        <button
-          style={{ ...w.create, ...(readyToCreate ? {} : w.createDisabled) }}
-          disabled={!readyToCreate}
-          onMouseDown={create}
-        >
+      <div style={layout.actions}>
+        <PrimaryButton disabled={!readyToCreate} onMouseDown={create}>
           {creating
             ? 'Creating field…'
             : resumable
               ? 'Adopt fields & finish setup'
               : 'Create formula field'}
-        </button>
-        <span style={w.muted}>
+        </PrimaryButton>
+        <MutedText>
           Progress is saved — you can leave and resume anytime.
-        </span>
+        </MutedText>
       </div>
 
-      {error ? <div style={w.err}>{error}</div> : null}
+      {error ? <ErrText as="div">{error}</ErrText> : null}
     </div>
   );
 };
 
-const w: Record<string, React.CSSProperties> = {
+// Layout-only values (padding, gaps, margins) — every color/font-family-for-
+// body-text/background/border comes from the archetypes in lib/ui.tsx or
+// lib/ui-tokens instead (spec: docs/superpowers/specs/
+// 2026-07-04-formula-field-ui-polish-design.md).
+const layout: Record<string, React.CSSProperties> = {
   step: { marginBottom: '14px' },
-  stepTitle: { fontSize: '11px', color: '#908e99', marginBottom: '6px' },
-  filter: {
-    width: '100%',
-    padding: '6px 8px',
-    border: '1px solid #d6d5db',
-    borderRadius: '4px',
-    fontSize: '13px',
-    boxSizing: 'border-box',
-    marginBottom: '6px',
-  },
+  stepTitle: { marginBottom: '6px' },
+  filter: { width: '100%', boxSizing: 'border-box', marginBottom: '6px' },
   objectList: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -585,39 +582,13 @@ const w: Record<string, React.CSSProperties> = {
     overflowY: 'auto',
   },
   formatRow: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
-  chip: {
-    padding: '4px 10px',
-    borderRadius: '12px',
-    border: '1px solid #d6d5db',
-    background: '#fff',
-    color: '#1b1b1f',
-    cursor: 'pointer',
-    fontSize: '12px',
-  },
-  chipSelected: {
-    border: '1px solid #1961ed',
-    background: '#eef3fe',
-    color: '#1961ed',
-  },
-  formatHint: { color: '#b0aeb8', fontSize: '11px' },
   actions: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
     margin: '12px 0 6px',
   },
-  create: {
-    padding: '6px 14px',
-    borderRadius: '4px',
-    border: 'none',
-    background: '#1961ed',
-    color: '#fff',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
-  createDisabled: { background: '#c3c2c9', cursor: 'default' },
-  muted: { color: '#908e99', fontSize: '12px' },
-  mono: { fontFamily: 'ui-monospace, monospace' },
-  err: { color: '#e0483d', fontSize: '12px', marginTop: '6px' },
-  resume: { color: '#a35c00', fontSize: '12px' },
+  // "mono" is a mono readonly display, not a form control — spec: "mono/
+  // readonly → keep ui-monospace, color primary".
+  mono: { fontFamily: 'ui-monospace, monospace', color: TOKENS.fontColorPrimary },
 };
