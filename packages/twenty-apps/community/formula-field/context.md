@@ -1,8 +1,9 @@
 # Formula Field — session context / handoff
 
 Read this first. It captures everything a fresh session needs to continue work on
-this app without re-deriving it. Written 2026-07-02; updated 2026-07-03 after the
-FX Status layout-rendering fix landed and the README shipped.
+this app without re-deriving it. Written 2026-07-02; updated 2026-07-04 after
+the build-pipeline roadmap completed (TODAY() ADR 0012 + drag-to-reorder ADR
+0013 landed, whole-branch audit clean).
 
 ## What this is
 
@@ -159,8 +160,11 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   false-OFFLINE truncation); m4 fieldKinds cache workspace-keyed. Remaining
   known: m5 cross-referenced-record recompute recomputes the whole object
   (scaling cliff, not blocking — future batching).
-- **Tests**: 223 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
+- **Tests**: 252 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
   integration suite (`src/__tests__/app-install.integration-test.ts`). Lint clean.
+- **Roadmap COMPLETE as of 2026-07-04** (items 1-5 below all DONE; branch
+  audited whole — final review verdict READY TO MERGE, no Critical/Important
+  findings). Awaiting user verification + next design inputs.
 
 ## What is NOT done (next work)
 
@@ -204,8 +208,31 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
    SOFT-delete of override rows). `date * 2` is silently-wrong Excel-style
    (documented tradeoff). Duration helpers like `days(n)` remain optional
    polish.
-4. Drag to reorder the formula fields within the Formula tab on each record.
-5. Add a way to determine the current date within a formula so you can do operations such as IF(StartDate>TODAY+100, true, false).
+4. ~~**Drag to reorder Formula-tab fields**~~ DONE (ADR 0013, 13 new tests,
+   verified live incl. Playwright drag both directions + poll-race hold):
+   pointer-event sortable list in `formula-editor.tsx` — native HTML5 DnD is
+   NOT in the remote-dom allowlist, so: handle `onMouseDown` arms
+   `draggingRef` (sync) + `draggingId` (render), row `onMouseEnter` live-
+   reorders the preview, container `onMouseUp`/`onMouseLeave` persists.
+   New nullable `order` NUMBER field on FormulaDefinition; sort via pure
+   helpers in `lib/reorder-definitions.ts` (`sortByOrder` null→+Infinity
+   stable, `movePreview`, `computeReorderWrites` reindex 0..N-1 writing only
+   changed rows — all-null lists heal lazily on first drop). The 4s poll
+   skips ONLY the definitions write mid-drag (values/overrides keep
+   refreshing). Ordering is per-target-object; two-tab concurrent reorder can
+   transiently duplicate `order` values (stable sort keeps render
+   deterministic; next drop heals — accepted).
+5. ~~**TODAY() current-date function**~~ DONE (ADR 0012, 16 new tests,
+   verified live: `TODAY() + 100` exact epoch-day match + `IF(closeDate >
+   TODAY() + 100, 1, 0)` both branches): reserved nullary function like `IF`
+   (bare `today` = parse error; `today.x` dotted paths and `[...:today]`
+   crossrefs unaffected). Engine stays PURE: evaluating a today node returns
+   caller-supplied `EvaluateOptions.todayEpochDay` (omitted while AST has one
+   → UNKNOWN_VARIABLE error); the ONLY production clock read is
+   `currentEpochDay()` in `date-serial.ts`, called from
+   `computeFormulaValueForRecord`. Dependency-extraction no-op → freshness
+   rides the hourly sweep (day rollover caught ≤1h after midnight UTC, no new
+   trigger machinery). Autocomplete suggests `TODAY()`.
 
 Then:
 
@@ -302,6 +329,19 @@ written at the app root (`README.md`).
   functions too). `input.setSelectionRange`/`focus` may be proxied and throw —
   guard + try/catch. There's a benign React-internal `setSelectionRange` console
   warning on controlled inputs; it doesn't break functionality.
+- **Native HTML5 drag can still START inside remote-dom** even though the
+  drag event family isn't allowlisted for handlers: mousedown-dragging an
+  element/text selection fires the browser's native dragstart, which then
+  SUPPRESSES mousemove/mouseenter for the whole gesture — silently breaking
+  pointer-event drag interactions (most reliably when dragging downward).
+  Fix: `event.preventDefault()` in the handle's `onMouseDown`. The
+  `draggable` prop is NOT in HtmlCommonProperties and is silently dropped —
+  passing `draggable={false}` is documentation, not the fix.
+- **Never mix the `border` SHORTHAND with `borderTop`-style LONGHANDS across
+  merged React style objects**: React warns and permanently strips the
+  border after style switches (e.g. a drag-highlight style reverting to the
+  base style). Use 4-side longhands in BOTH styles so every side is
+  explicitly overridden and restored.
 - **genql clients** build queries at runtime from the selection object, so
   referencing a not-yet-synced object/field doesn't fail typecheck — BUT the
   runtime validates against the type map frozen at deploy, so it THROWS on
@@ -338,7 +378,7 @@ written at the app root (`README.md`).
   on-formula-definition-destroyed,formula-sweep}.ts`
 - Front: `src/front-components/{formula-editor,formula-definition-editor}.tsx`,
   `src/front-components/lib/{formula-field-input,formula-setup-wizard}.tsx`,
-  `src/front-components/lib/formula-field-formats.ts`
+  `src/front-components/lib/{formula-field-formats,reorder-definitions}.ts`
 - Views/layouts: `src/views/`, `src/page-layouts/`, `src/navigation-menu-items/`
 - Tests: `src/engine/__tests__/`, `src/logic-functions/lib/__tests__/`,
   `src/__tests__/` (integration). Fake client: `.../lib/__tests__/fake-client.ts`
