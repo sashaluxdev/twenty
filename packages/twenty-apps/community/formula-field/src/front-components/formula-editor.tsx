@@ -4,6 +4,11 @@ import { FORMULA_EDITOR_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/fr
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { useRecordId } from 'twenty-sdk/front-component';
 
+import { parse, usesToday } from 'src/engine';
+import {
+  formatRelativePast,
+  isStaleTimestamp,
+} from 'src/front-components/lib/format-relative-past';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import {
   computeDropWrite,
@@ -60,6 +65,21 @@ type Definition = {
   status: string;
   statusReason: string;
   order: number | null;
+  lastEvaluatedAt: string | null;
+  // Parsed once at load time (staleness scoping, ADR 0015) — checking it at
+  // render/self-heal time would re-parse every expression on every 4s poll.
+  usesTodayFlag: boolean;
+};
+
+// Safe usesToday() over a possibly-invalid expression — an unparseable
+// formula has no TODAY() dependency to track (same guard as the recompute
+// engine's expressionUsesTodayOf).
+const expressionUsesToday = (expression: string): boolean => {
+  try {
+    return usesToday(parse(expression));
+  } catch {
+    return false;
+  }
 };
 
 // Values are handled in micros for CURRENCY fields (like the engine); shown to
@@ -145,6 +165,11 @@ const FormulaEditor = () => {
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The record id never changes for a mounted widget — resolve its object once.
   const resolvedHost = useRef<string | null>(null);
+  // Self-heal throttle (ADR 0015): mirrors convergeFormulaFieldLayout's 60s
+  // pattern. A dead sweep means the FRONT runtime is the only thing left to
+  // recompute a stale TODAY() formula for a viewed record — this bounds how
+  // often that recompute fires per mounted widget.
+  const lastSelfHealAtRef = useRef(0);
   // Drag-to-reorder (ADR 0014, pointer events): pointerdown only records a
   // pending gesture (id + start coordinates) in pendingDragRef — it does NOT
   // arm the drag. A row's onPointerMove arms it once the pointer has moved
@@ -195,6 +220,7 @@ const FormulaEditor = () => {
             status: true,
             statusReason: true,
             order: true,
+            lastEvaluatedAt: true,
           },
         },
       },
@@ -218,6 +244,8 @@ const FormulaEditor = () => {
         status: edge.node.status ?? '',
         statusReason: edge.node.statusReason ?? '',
         order: edge.node.order ?? null,
+        lastEvaluatedAt: edge.node.lastEvaluatedAt ?? null,
+        usesTodayFlag: expressionUsesToday(edge.node.expression ?? ''),
       }),
     );
 
@@ -325,6 +353,45 @@ const FormulaEditor = () => {
         }
       }
       setOverrides(nextOverrides);
+
+      // Self-heal (ADR 0015): a stale TODAY() formula on this record means the
+      // sweep/worker isn't converging it — recompute it here in the front
+      // runtime, throttled so a persistently-stale record doesn't re-trigger
+      // on every 4s poll. After it resolves, reload picks up the fresh value
+      // (and, once the resulting write round-trips through the record-update
+      // event handler, a fresh lastEvaluatedAt) — at which point this record
+      // is no longer stale and the throttle naturally stops firing.
+      const now = Date.now();
+      const staleDefs = defs.filter(
+        (definition) =>
+          definition.enabled &&
+          definition.usesTodayFlag &&
+          isStaleTimestamp(definition.lastEvaluatedAt, now),
+      );
+      if (staleDefs.length > 0 && now - lastSelfHealAtRef.current > 60_000) {
+        lastSelfHealAtRef.current = now;
+        Promise.all(
+          staleDefs.map((definition) =>
+            recomputeForRecord({
+              client,
+              formula: {
+                id: definition.id,
+                targetObject: definition.targetObject,
+                targetField: definition.targetField,
+                targetFieldType: definition.targetFieldType,
+                currencyCode: definition.currencyCode,
+                expression: definition.expression,
+                enabled: definition.enabled,
+              },
+              targetRecordId: recordId,
+            }),
+          ),
+        )
+          .catch(() => {})
+          .finally(() => {
+            setTimeout(load, 1500);
+          });
+      }
     }
 
     setLoading(false);
@@ -571,6 +638,10 @@ const FormulaEditor = () => {
       const rowBusy = busy === definition.id;
       const armed = armedSaveId === definition.id;
       const isDragging = draggingId === definition.id;
+      const stale =
+        definition.enabled &&
+        definition.usesTodayFlag &&
+        isStaleTimestamp(definition.lastEvaluatedAt, Date.now());
 
       return (
         <div
@@ -649,6 +720,17 @@ const FormulaEditor = () => {
             </span>
             <span style={styles.value}>{displayValue(definition, value)}</span>
           </div>
+          {stale && definition.lastEvaluatedAt ? (
+            // Definition-level framing on purpose: the DEFINITION's heartbeat
+            // is old (always true when this renders), whereas this row's
+            // value may have just been verified correct by the self-heal —
+            // and "refreshing…" would over-claim during the 60s throttle
+            // window when nothing is actively running.
+            <div style={styles.staleNote}>
+              Formula last evaluated{' '}
+              {formatRelativePast(definition.lastEvaluatedAt, Date.now())}
+            </div>
+          ) : null}
           <div style={styles.fieldLabel}>
             {definition.targetField}
             {!definition.enabled ? (
@@ -867,6 +949,16 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 8px',
     fontSize: '11px',
     marginBottom: '8px',
+  },
+  // Not a banner (ADR 0015): smaller, inline, no background/border — this is
+  // a self-correcting note (the front runtime is already recomputing), not an
+  // actionable break like OFFLINE/UPSTREAM above. Same orange as
+  // bannerUpstream's text, core's Status color convention for "attention, not
+  // error".
+  staleNote: {
+    color: '#a35c00',
+    fontSize: '10px',
+    marginTop: '2px',
   },
 };
 

@@ -17,6 +17,7 @@ import {
   planDeleteDefinition,
 } from 'src/front-components/lib/delete-definition-completely';
 import { FieldSettingsEditor } from 'src/front-components/lib/field-settings-editor';
+import { formatRelativePast } from 'src/front-components/lib/format-relative-past';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
@@ -45,6 +46,7 @@ type Definition = {
   lastError: string;
   status: string;
   statusReason: string;
+  lastEvaluatedAt: string | null;
 };
 
 const validate = (
@@ -272,6 +274,7 @@ const FormulaDefinitionEditor = () => {
             lastError: true,
             status: true,
             statusReason: true,
+            lastEvaluatedAt: true,
           },
         },
       },
@@ -293,6 +296,7 @@ const FormulaDefinitionEditor = () => {
         lastError: edge.node.lastError ?? '',
         status: edge.node.status ?? '',
         statusReason: edge.node.statusReason ?? '',
+        lastEvaluatedAt: edge.node.lastEvaluatedAt ?? null,
       }),
     );
 
@@ -420,6 +424,12 @@ const FormulaDefinitionEditor = () => {
           {definition.lastValue === null ? '—' : definition.lastValue}
         </div>
       </div>
+      {definition.lastEvaluatedAt ? (
+        <div style={s.hint}>
+          Last evaluated{' '}
+          {formatRelativePast(definition.lastEvaluatedAt, Date.now())}
+        </div>
+      ) : null}
 
       <div style={s.label}>Formula expression</div>
       <FormulaFieldInput
