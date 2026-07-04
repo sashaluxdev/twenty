@@ -21,6 +21,24 @@ import { formatRelativePast } from 'src/front-components/lib/format-relative-pas
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
+import {
+  BannerDanger,
+  BannerWarning,
+  BigValue,
+  DangerButton,
+  DangerPanel,
+  ErrText,
+  HintText,
+  MutedText,
+  OkText,
+  OutlineDangerButton,
+  PrimaryButton,
+  SecondaryButton,
+  SectionTitle,
+  TextInput,
+  WidgetRoot,
+} from 'src/front-components/lib/ui';
+import { TOKENS } from 'src/front-components/lib/ui-tokens';
 
 // Formula editor for the FormulaDefinition record page (a custom object, so the
 // page-layout renderer IS used here — unlike standard-object record pages in this
@@ -149,89 +167,87 @@ const FormulaDangerZone = ({
   const canConfirm = confirmText === 'Delete' && !deleting;
 
   return (
-    <div style={s.dangerZone}>
-      <div style={s.dangerTitle}>Danger zone</div>
+    <div style={layout.dangerZone}>
+      <SectionTitle style={{ ...layout.dangerTitle, color: TOKENS.colorRed }}>
+        Danger zone
+      </SectionTitle>
       {!open ? (
-        <button style={s.dangerButton} onClick={openPanel}>
+        <OutlineDangerButton onClick={openPanel}>
           Delete Completely…
-        </button>
+        </OutlineDangerButton>
       ) : (
-        <div style={s.dangerPanel}>
+        <DangerPanel>
           {planning ? (
-            <div style={s.muted}>Checking what will be removed…</div>
+            <MutedText as="div">Checking what will be removed…</MutedText>
           ) : plan ? (
-            <div style={s.dangerList}>
-              <div style={s.dangerItem}>
+            <div style={{ ...layout.dangerList, color: TOKENS.fontColorPrimary }}>
+              <div style={layout.dangerItem}>
                 • The formula definition will be{' '}
-                <span style={s.strong}>permanently destroyed</span> (not moved to
+                <span style={layout.strong}>permanently destroyed</span> (not moved to
                 trash).
               </div>
               {plan.deleteValueField ? (
                 <>
-                  <div style={s.dangerItem}>
-                    • The value field <span style={s.mono}>{plan.targetField}</span>{' '}
-                    on <span style={s.mono}>{plan.targetObject}</span> will be{' '}
-                    <span style={s.strong}>permanently deleted</span>, including all
+                  <div style={layout.dangerItem}>
+                    • The value field{' '}
+                    <span style={layout.mono}>{plan.targetField}</span> on{' '}
+                    <span style={layout.mono}>{plan.targetObject}</span> will be{' '}
+                    <span style={layout.strong}>permanently deleted</span>, including all
                     stored computed values on every record.
                   </div>
-                  <div style={s.dangerItem}>
+                  <div style={layout.dangerItem}>
                     • The FX status field{' '}
-                    <span style={s.mono}>{plan.companionField}</span> will be
+                    <span style={layout.mono}>{plan.companionField}</span> will be
                     permanently deleted too.
                   </div>
                 </>
               ) : plan.keepReason === 'shared' ? (
-                <div style={s.dangerItem}>
-                  • The value field <span style={s.mono}>{plan.targetField}</span>{' '}
-                  will be <span style={s.strong}>kept</span> — another formula
+                <div style={layout.dangerItem}>
+                  • The value field{' '}
+                  <span style={layout.mono}>{plan.targetField}</span> will be{' '}
+                  <span style={layout.strong}>kept</span> — another formula
                   definition also targets it. Only this definition and its
                   overrides are removed.
                 </div>
               ) : plan.keepReason === 'not-created' ? (
-                <div style={s.dangerItem}>
-                  • The value field <span style={s.mono}>{plan.targetField}</span>{' '}
-                  will be <span style={s.strong}>kept</span> — it was not created by
+                <div style={layout.dangerItem}>
+                  • The value field{' '}
+                  <span style={layout.mono}>{plan.targetField}</span> will be{' '}
+                  <span style={layout.strong}>kept</span> — it was not created by
                   this app. Only this definition and its overrides are removed.
                 </div>
               ) : (
-                <div style={s.dangerItem}>
+                <div style={layout.dangerItem}>
                   • No value field is wired to this draft yet — only the definition
                   is removed.
                 </div>
               )}
-              <div style={s.dangerItem}>
+              <div style={layout.dangerItem}>
                 • Any manual override rows for this formula will be removed.
               </div>
             </div>
           ) : null}
 
-          <div style={s.label}>
-            Type <span style={s.strong}>Delete</span> to confirm
-          </div>
-          <input
-            style={s.confirmInput}
+          <MutedText as="div" style={layout.confirmLabel}>
+            Type <span style={layout.strong}>Delete</span> to confirm
+          </MutedText>
+          <TextInput
+            style={{ ...layout.confirmInput, borderColor: TOKENS.borderDanger }}
             value={confirmText}
             placeholder="Delete"
             onChange={(event) => setConfirmText(event.target.value)}
           />
 
-          <div style={s.actions}>
-            <button
-              style={{
-                ...s.dangerConfirm,
-                ...(canConfirm ? {} : s.buttonDisabled),
-              }}
-              disabled={!canConfirm}
-              onClick={confirm}
-            >
+          <div style={layout.actions}>
+            <DangerButton disabled={!canConfirm} onClick={confirm}>
               {deleting ? 'Deleting…' : 'Delete completely'}
-            </button>
-            <button style={s.cancelButton} onClick={cancel} disabled={deleting}>
+            </DangerButton>
+            <SecondaryButton onClick={cancel} disabled={deleting}>
               Cancel
-            </button>
+            </SecondaryButton>
           </div>
-          {error ? <div style={s.err}>{error}</div> : null}
-        </div>
+          {error ? <ErrText as="div">{error}</ErrText> : null}
+        </DangerPanel>
       )}
     </div>
   );
@@ -362,16 +378,32 @@ const FormulaDefinitionEditor = () => {
   );
 
   if (deleted) {
-    return <div style={s.muted}>This formula was deleted.</div>;
+    return (
+      <WidgetRoot style={layout.container}>
+        <MutedText as="div">This formula was deleted.</MutedText>
+      </WidgetRoot>
+    );
   }
-  if (loading) return <div style={s.muted}>Loading…</div>;
-  if (!definition) return <div style={s.muted}>Formula not found.</div>;
+  if (loading) {
+    return (
+      <WidgetRoot style={layout.container}>
+        <MutedText as="div">Loading…</MutedText>
+      </WidgetRoot>
+    );
+  }
+  if (!definition) {
+    return (
+      <WidgetRoot style={layout.container}>
+        <MutedText as="div">Formula not found.</MutedText>
+      </WidgetRoot>
+    );
+  }
 
   // A definition without a target FIELD is a fresh record or a resumed draft:
   // run the guided setup, seeded from the persisted draft selections.
   if (!definition.targetField) {
     return (
-      <div style={s.container}>
+      <WidgetRoot style={layout.container}>
         <FormulaSetupWizard
           draft={{
             id: definition.id,
@@ -389,7 +421,7 @@ const FormulaDefinitionEditor = () => {
           definitionId={definition.id}
           onDeleted={() => setDeleted(true)}
         />
-      </div>
+      </WidgetRoot>
     );
   }
 
@@ -397,41 +429,41 @@ const FormulaDefinitionEditor = () => {
   const awaitingExpression = !definition.expression && !dirty;
 
   return (
-    <div style={s.container}>
+    <WidgetRoot style={layout.container}>
       {definition.status === 'OFFLINE' ? (
-        <div style={s.bannerOffline}>
+        <BannerDanger style={layout.banner}>
           OFFLINE — {definition.statusReason || 'an input field is gone'}.
           Values are frozen; recompute is paused.
-        </div>
+        </BannerDanger>
       ) : definition.status === 'UPSTREAM' ? (
-        <div style={s.bannerUpstream}>
+        <BannerWarning style={layout.banner}>
           UPSTREAM BREAK — {definition.statusReason || 'a formula earlier in the chain is broken'}.
           Still computing, but inputs may be stale.
-        </div>
+        </BannerWarning>
       ) : null}
-      <div style={s.header}>
+      <div style={layout.header}>
         <div>
-          <div style={s.target}>
+          <div style={layout.target}>
             {definition.targetObject}.{definition.targetField}
             {definition.targetFieldType === 'CURRENCY' ? (
-              <span style={s.hint}> currency (micros)</span>
+              <HintText> currency (micros)</HintText>
             ) : null}
-            {!definition.enabled ? <span style={s.err}> (disabled)</span> : null}
+            {!definition.enabled ? <ErrText> (disabled)</ErrText> : null}
           </div>
-          <div style={s.label}>Current value</div>
+          <MutedText as="div">Current value</MutedText>
         </div>
-        <div style={s.value}>
+        <BigValue style={layout.value}>
           {definition.lastValue === null ? '—' : definition.lastValue}
-        </div>
+        </BigValue>
       </div>
       {definition.lastEvaluatedAt ? (
-        <div style={s.hint}>
+        <HintText as="div">
           Last evaluated{' '}
           {formatRelativePast(definition.lastEvaluatedAt, Date.now())}
-        </div>
+        </HintText>
       ) : null}
 
-      <div style={s.label}>Formula expression</div>
+      <MutedText as="div">Formula expression</MutedText>
       <FormulaFieldInput
         value={draft}
         onChange={setDraft}
@@ -440,32 +472,28 @@ const FormulaDefinitionEditor = () => {
         placeholder="e.g. amount.amountMicros * 1.1"
       />
 
-      <div style={s.actions}>
-        <button
-          style={{
-            ...s.button,
-            ...(dirty && !liveError ? {} : s.buttonDisabled),
-          }}
+      <div style={layout.actions}>
+        <PrimaryButton
           disabled={!dirty || Boolean(liveError) || saving}
           onClick={save}
         >
           {saving ? 'Saving…' : 'Save formula'}
-        </button>
-        <span style={s.hint}>
+        </PrimaryButton>
+        <HintText>
           fields by name · cross-record as [object:uuid:field]
-        </span>
+        </HintText>
       </div>
 
       {awaitingExpression ? (
-        <div style={s.hint}>
+        <HintText as="div">
           Field created — write the formula expression and save to activate.
-        </div>
+        </HintText>
       ) : liveError ? (
-        <div style={s.err}>{liveError}</div>
+        <ErrText as="div">{liveError}</ErrText>
       ) : definition.lastError ? (
-        <div style={s.err}>{definition.lastError}</div>
+        <ErrText as="div">{definition.lastError}</ErrText>
       ) : (
-        <div style={s.ok}>Valid</div>
+        <OkText as="div">Valid</OkText>
       )}
 
       <FieldSettingsEditor
@@ -481,146 +509,49 @@ const FormulaDefinitionEditor = () => {
         definitionId={definition.id}
         onDeleted={() => setDeleted(true)}
       />
-    </div>
+    </WidgetRoot>
   );
 };
 
-const s: Record<string, React.CSSProperties> = {
-  container: {
-    padding: '16px',
-    fontFamily: 'Inter, system-ui, sans-serif',
-    fontSize: '13px',
-    color: '#1b1b1f',
-    width: '100%',
-    height: '100%',
-    boxSizing: 'border-box',
-  },
+// Layout-only values (padding, gaps, margins, weights) — every color/font-
+// family-for-body-text/background/border comes from the archetypes in
+// lib/ui.tsx or lib/ui-tokens instead (spec: docs/superpowers/specs/
+// 2026-07-04-formula-field-ui-polish-design.md).
+const layout: Record<string, React.CSSProperties> = {
+  container: { padding: '16px', width: '100%', height: '100%', boxSizing: 'border-box' },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: '14px',
   },
-  target: { fontWeight: 600, fontFamily: 'ui-monospace, monospace' },
-  value: {
-    fontSize: '22px',
-    fontWeight: 700,
-    color: '#1961ed',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  label: { fontSize: '11px', color: '#908e99', marginBottom: '4px' },
-  textarea: {
-    width: '100%',
-    padding: '8px',
-    border: '1px solid #d6d5db',
-    borderRadius: '4px',
+  // "target" is a mono readonly display, not a form control — spec: "mono/
+  // readonly → keep ui-monospace, color primary".
+  target: {
+    fontWeight: 600,
     fontFamily: 'ui-monospace, monospace',
-    fontSize: '13px',
-    resize: 'none',
-    boxSizing: 'border-box',
+    color: TOKENS.fontColorPrimary,
   },
-  actions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    margin: '10px 0',
-  },
-  button: {
-    padding: '6px 14px',
-    borderRadius: '4px',
-    border: 'none',
-    background: '#1961ed',
-    color: '#fff',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
-  buttonDisabled: { background: '#c3c2c9', cursor: 'default' },
-  hint: { fontSize: '11px', color: '#b0aeb8' },
-  muted: { padding: '16px', color: '#908e99' },
-  err: { color: '#e0483d', fontSize: '12px' },
-  ok: { color: '#3ba55d', fontSize: '12px' },
-  bannerOffline: {
-    background: '#fdecea',
-    border: '1px solid #e0483d',
-    color: '#b3271e',
-    borderRadius: '4px',
-    padding: '8px 10px',
-    fontSize: '12px',
-    marginBottom: '12px',
-  },
-  bannerUpstream: {
-    background: '#fff4e5',
-    border: '1px solid #e58600',
-    color: '#a35c00',
-    borderRadius: '4px',
-    padding: '8px 10px',
-    fontSize: '12px',
-    marginBottom: '12px',
-  },
+  value: { fontVariantNumeric: 'tabular-nums' },
+  actions: { display: 'flex', alignItems: 'center', gap: '10px', margin: '10px 0' },
+  banner: { marginBottom: '12px' },
   dangerZone: {
     marginTop: '20px',
     paddingTop: '12px',
-    borderTop: '1px solid #eeedf0',
+    borderTop: `1px solid ${TOKENS.borderLight}`,
   },
   dangerTitle: {
     fontSize: '11px',
-    fontWeight: 600,
-    color: '#b3271e',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
     marginBottom: '8px',
   },
-  dangerButton: {
-    padding: '6px 14px',
-    borderRadius: '4px',
-    border: '1px solid #e0483d',
-    background: '#fff',
-    color: '#b3271e',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
-  dangerPanel: {
-    border: '1px solid #e0483d',
-    background: '#fdecea',
-    borderRadius: '4px',
-    padding: '12px',
-  },
-  dangerList: {
-    marginBottom: '10px',
-    fontSize: '12px',
-    color: '#5c1a15',
-    lineHeight: 1.5,
-  },
+  dangerList: { marginBottom: '10px', lineHeight: 1.5 },
   dangerItem: { marginBottom: '4px' },
   strong: { fontWeight: 700 },
-  mono: { fontFamily: 'ui-monospace, monospace' },
-  confirmInput: {
-    width: '100%',
-    padding: '6px 8px',
-    border: '1px solid #e0483d',
-    borderRadius: '4px',
-    fontSize: '13px',
-    boxSizing: 'border-box',
-    marginBottom: '8px',
-  },
-  dangerConfirm: {
-    padding: '6px 14px',
-    borderRadius: '4px',
-    border: 'none',
-    background: '#e0483d',
-    color: '#fff',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
-  cancelButton: {
-    padding: '6px 14px',
-    borderRadius: '4px',
-    border: '1px solid #d6d5db',
-    background: '#fff',
-    color: '#1b1b1f',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
+  mono: { fontFamily: 'ui-monospace, monospace', color: TOKENS.fontColorPrimary },
+  confirmLabel: { marginBottom: '6px' },
+  confirmInput: { width: '100%', marginBottom: '8px', boxSizing: 'border-box' },
 };
 
 export const FORMULA_DEFINITION_EDITOR_UNIVERSAL_IDENTIFIER =

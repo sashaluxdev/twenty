@@ -15,6 +15,16 @@ import {
   type OutputFormat,
   serializeTargetFieldSettings,
 } from 'src/front-components/lib/formula-field-formats';
+import {
+  ErrText,
+  HintText,
+  MutedText,
+  OkText,
+  PrimaryButton,
+  SectionTitle,
+  TextInput,
+} from 'src/front-components/lib/ui';
+import { TOKENS } from 'src/front-components/lib/ui-tokens';
 
 // Persistent, safely-editable configuration for a completed formula's value
 // field, shown as a collapsible section on the FormulaDefinition record page.
@@ -212,36 +222,46 @@ export const FieldSettingsEditor = ({
   const canSave = loaded && !saving && areFormatOptionsValid(format, options);
 
   return (
-    <div style={s.section}>
-      <button
+    <div style={layout.section}>
+      <SectionTitle
+        as="button"
         type="button"
-        style={s.sectionHeader}
+        style={layout.sectionHeader}
         onClick={() => setOpen((previous) => !previous)}
       >
-        <span style={s.caret}>{open ? '▾' : '▸'}</span> Field settings
-      </button>
+        <HintText
+          as="span"
+          style={{
+            ...layout.caret,
+            transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+          }}
+        >
+          ▸
+        </HintText>{' '}
+        Field settings
+      </SectionTitle>
 
       {open ? (
-        <div style={s.body}>
+        <div style={layout.body}>
           {loading && !loaded ? (
-            <div style={s.muted}>Loading field settings…</div>
+            <MutedText as="div">Loading field settings…</MutedText>
           ) : (
             <>
-              <div style={s.field}>
-                <div style={s.fieldLabel}>Target object</div>
-                <div style={s.readonly}>{targetObject}</div>
+              <div style={layout.field}>
+                <MutedText as="div">Target object</MutedText>
+                <div style={layout.readonly}>{targetObject}</div>
               </div>
-              <div style={s.field}>
-                <div style={s.fieldLabel}>Field API name</div>
-                <div style={s.readonly}>{targetField}</div>
-                <div style={s.lock}>
+              <div style={layout.field}>
+                <MutedText as="div">Field API name</MutedText>
+                <div style={layout.readonly}>{targetField}</div>
+                <HintText as="div">
                   API name is locked — formulas reference it.
-                </div>
+                </HintText>
               </div>
-              <div style={s.field}>
-                <div style={s.fieldLabel}>Field label</div>
-                <input
-                  style={s.input}
+              <div style={layout.field}>
+                <MutedText as="div">Field label</MutedText>
+                <TextInput
+                  style={layout.input}
                   value={label}
                   placeholder={targetField}
                   onChange={(event) => {
@@ -250,10 +270,10 @@ export const FieldSettingsEditor = ({
                   }}
                 />
                 {labelSynced ? (
-                  <div style={s.lock}>
+                  <HintText as="div">
                     The API name currently follows the label — saving unlinks
                     them so the API name stays fixed.
-                  </div>
+                  </HintText>
                 ) : null}
               </div>
 
@@ -269,18 +289,13 @@ export const FieldSettingsEditor = ({
                 />
               ) : null}
 
-              <div style={s.actions}>
-                <button
-                  type="button"
-                  style={{ ...s.save, ...(canSave ? {} : s.saveDisabled) }}
-                  disabled={!canSave}
-                  onClick={save}
-                >
+              <div style={layout.actions}>
+                <PrimaryButton type="button" disabled={!canSave} onClick={save}>
                   {saving ? 'Saving…' : 'Save field settings'}
-                </button>
-                {saved ? <span style={s.ok}>Saved</span> : null}
+                </PrimaryButton>
+                {saved ? <OkText>Saved</OkText> : null}
               </div>
-              {error ? <div style={s.err}>{error}</div> : null}
+              {error ? <ErrText as="div">{error}</ErrText> : null}
             </>
           )}
         </div>
@@ -289,56 +304,26 @@ export const FieldSettingsEditor = ({
   );
 };
 
-const s: Record<string, React.CSSProperties> = {
+// Layout-only values (padding, gaps, margins) — every color/font-family-for-
+// body-text/background/border comes from the archetypes in lib/ui.tsx or
+// lib/ui-tokens instead (spec: docs/superpowers/specs/
+// 2026-07-04-formula-field-ui-polish-design.md).
+const layout: Record<string, React.CSSProperties> = {
   section: {
     marginTop: '18px',
     paddingTop: '12px',
-    borderTop: '1px solid #eeedf0',
+    borderTop: `1px solid ${TOKENS.borderLight}`,
   },
-  sectionHeader: {
-    background: 'none',
-    border: 'none',
-    padding: 0,
-    fontSize: '12px',
-    fontWeight: 600,
-    color: '#474451',
-    cursor: 'pointer',
-  },
-  caret: { color: '#908e99' },
+  // Button-reset styles preserved on top of SectionTitle per the mapping.
+  sectionHeader: { background: 'none', border: 'none', padding: 0, cursor: 'pointer' },
+  // Accordion caret: 150ms ease transform rotate (spec §Motion) — a single
+  // glyph rotates rather than swapping characters on toggle.
+  caret: { display: 'inline-block', transition: 'transform 150ms ease' },
   body: { marginTop: '10px' },
   field: { marginBottom: '10px' },
-  fieldLabel: { fontSize: '11px', color: '#908e99', marginBottom: '4px' },
-  readonly: {
-    fontFamily: 'ui-monospace, monospace',
-    fontSize: '13px',
-    color: '#1b1b1f',
-  },
-  lock: { fontSize: '11px', color: '#b0aeb8', marginTop: '2px' },
-  input: {
-    width: '100%',
-    padding: '6px 8px',
-    border: '1px solid #d6d5db',
-    borderRadius: '4px',
-    fontSize: '13px',
-    boxSizing: 'border-box',
-  },
-  actions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    marginTop: '8px',
-  },
-  save: {
-    padding: '6px 14px',
-    borderRadius: '4px',
-    border: 'none',
-    background: '#1961ed',
-    color: '#fff',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
-  saveDisabled: { background: '#c3c2c9', cursor: 'default' },
-  muted: { color: '#908e99', fontSize: '12px' },
-  ok: { color: '#3ba55d', fontSize: '12px' },
-  err: { color: '#e0483d', fontSize: '12px', marginTop: '6px' },
+  // "readonly" is a mono readonly display, not a form control — spec: "mono/
+  // readonly → keep ui-monospace, color primary".
+  readonly: { fontFamily: 'ui-monospace, monospace', color: TOKENS.fontColorPrimary },
+  input: { width: '100%', boxSizing: 'border-box' },
+  actions: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' },
 };

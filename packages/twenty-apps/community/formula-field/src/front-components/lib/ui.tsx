@@ -75,6 +75,7 @@ export const SecondaryButton = styled.button`
   }
   &:disabled {
     cursor: not-allowed;
+    opacity: 0.24;
   }
 `;
 
@@ -93,8 +94,11 @@ export const DangerButton = styled.button`
   &:hover:not(:disabled) {
     background: var(--t-color-red8);
   }
+  // Core's danger-accent disabled treatment is opacity dimming (IconButton
+  // precedent) — without it a locked destructive confirm reads as armed.
   &:disabled {
     cursor: not-allowed;
+    opacity: 0.24;
   }
 `;
 
