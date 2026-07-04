@@ -26,6 +26,7 @@ export const FORMULA_DEFINITION_FIELDS = {
   lastError: 'b4d168a8-bb76-4c32-b431-be862934dcbd',
   status: 'e3e1fcbf-c19d-4d24-a7cd-b7b1c7ad3c70',
   statusReason: '0e500f2b-30c2-489a-aee6-0d717e1e0418',
+  order: '4f4cabaa-9983-4967-91f7-ef2367aa8b3c',
 } as const;
 
 export default defineObject({
@@ -193,6 +194,14 @@ export default defineObject({
         'What broke: the missing input (OFFLINE) or where in the chain the ' +
         'break is (UPSTREAM). System-managed.',
       icon: 'IconInfoCircle',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.order,
+      type: FieldType.NUMBER,
+      name: 'order',
+      label: 'Order',
+      description: 'Display position in the record-page Formula tab (managed by drag-to-reorder).',
+      icon: 'IconArrowsSort',
     },
   ],
 });
