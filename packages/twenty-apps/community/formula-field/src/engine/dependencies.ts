@@ -246,3 +246,27 @@ export const extractDependenciesFromAst = (
 
 export const extractDependencies = (source: string): FormulaDependencies =>
   extractDependenciesFromAst(parse(source));
+
+// A whole-field reference the entire expression reduces to — the sole shape a
+// mirror definition may take (design 2026-07-06). Kept engine-side (pure, no
+// target-kind knowledge) so both the mirror detector and the save-time validator
+// build on one source of truth.
+export type BareReference =
+  | { kind: 'same'; field: string }
+  | { kind: 'cross'; ref: CrossRefValue };
+
+// Non-null iff the ENTIRE AST is a single whole-field reference: a same-record
+// field with no dotted subpath (`status`, not `amount.amountMicros`) or a
+// cross-record ref to a whole field. Any operator, function, literal, IF, or
+// subpath yields null (it is an engine expression, not a mirror). Pure.
+export const bareReferenceOf = (node: AstNode): BareReference | null => {
+  if (node.type === 'field') {
+    return node.path.includes('.') ? null : { kind: 'same', field: node.path };
+  }
+  if (node.type === 'crossref') {
+    return node.ref.fieldPath.includes('.')
+      ? null
+      : { kind: 'cross', ref: node.ref };
+  }
+  return null;
+};

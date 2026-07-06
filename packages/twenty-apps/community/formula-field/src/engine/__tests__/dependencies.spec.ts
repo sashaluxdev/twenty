@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bareReferenceOf,
   collectStringComparisonRefs,
   extractDependencies,
   usesToday,
@@ -206,5 +207,43 @@ describe('collectStringComparisonRefs', () => {
       parse('IF(tier = "gold", IF(stage = "NEW", 1, IF(tier = "gold", 2, 3)), 0)'),
     );
     expect(refs.sameRecordPaths).toEqual(['stage', 'tier']);
+  });
+});
+
+describe('bareReferenceOf', () => {
+  it('matches a bare same-record field', () => {
+    expect(bareReferenceOf(parse('status'))).toEqual({
+      kind: 'same',
+      field: 'status',
+    });
+  });
+
+  it('matches a bare whole-field cross-record ref', () => {
+    expect(bareReferenceOf(parse(`[company:${UUID}:status]`))).toEqual({
+      kind: 'cross',
+      ref: { object: 'company', recordId: UUID, fieldPath: 'status' },
+    });
+  });
+
+  it('rejects a dotted same-record subpath', () => {
+    expect(bareReferenceOf(parse('amount.amountMicros'))).toBeNull();
+  });
+
+  it('rejects a dotted cross-record subpath', () => {
+    expect(
+      bareReferenceOf(parse(`[company:${UUID}:amount.amountMicros]`)),
+    ).toBeNull();
+  });
+
+  it('rejects an arithmetic expression', () => {
+    expect(bareReferenceOf(parse('inputA + 0'))).toBeNull();
+  });
+
+  it('rejects an IF expression', () => {
+    expect(bareReferenceOf(parse('IF(inputA > 1, 1, 0)'))).toBeNull();
+  });
+
+  it('rejects a bare numeric literal', () => {
+    expect(bareReferenceOf(parse('5'))).toBeNull();
   });
 });

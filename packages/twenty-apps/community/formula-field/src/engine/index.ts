@@ -8,10 +8,12 @@ export {
   type FormulaTarget,
 } from 'src/engine/cycle-detection';
 export {
+  bareReferenceOf,
   collectStringComparisonRefs,
   extractDependencies,
   extractDependenciesFromAst,
   usesToday,
+  type BareReference,
   type CrossRecordDependency,
   type FormulaDependencies,
   type StringComparisonRefs,

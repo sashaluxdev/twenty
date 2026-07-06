@@ -26,10 +26,13 @@ export const validateExpression = (
   hostObject: string,
   targetField: string,
   allDefinitions: ValidatableDefinition[],
-  // Field name -> metadata type for the host object. When present, a string
-  // comparison against a same-record field that cannot hold a string is
-  // rejected (parity with the server save-validation). Omitted -> skipped.
-  targetObjectFieldKinds?: Map<string, string>,
+  // Sync accessor over caller-preloaded field-kind maps: objectName -> (field
+  // name -> metadata type), or undefined when not preloaded. The editors close
+  // it over their single host-object map. When it resolves the host object, a
+  // string comparison against a same-record field that cannot hold a string is
+  // rejected (parity with the server save-validation). Omitted, or a miss on the
+  // host object, degrades gracefully — the check is skipped.
+  fieldKinds?: (objectName: string) => Map<string, string> | undefined,
 ): string | null => {
   let ast;
   let dependencies;
@@ -43,6 +46,7 @@ export const validateExpression = (
   }
 
   // String-comparison field-kind check — mirrors validateFormula's step 1b.
+  const targetObjectFieldKinds = fieldKinds?.(hostObject);
   if (targetObjectFieldKinds) {
     for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
       const rootField = path.split('.')[0];

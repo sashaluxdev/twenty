@@ -176,6 +176,82 @@ describe('handleFormulaChange (save-time validation)', () => {
     expect(client.get('formulaDefinition', 'f1')!.enabled).not.toBe(false);
   });
 
+  it('disables a mirror whose non-mirrorable target kind cannot be mirrored', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'm1',
+      targetObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'RELATION',
+      expression: 'sourceField',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'm1')!;
+    expect(stored.enabled).toBe(false);
+    expect(stored.lastError).toBe('Field kind RELATION cannot be mirrored');
+  });
+
+  it('disables a mirror whose same-record source kind differs from the target', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'm1',
+      targetObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'SELECT',
+      expression: 'sourceField',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('opportunity', { sourceField: 'TEXT' });
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'm1')!;
+    expect(stored.enabled).toBe(false);
+    expect(stored.lastError).toBe(
+      'Cannot mirror TEXT field "sourceField" onto a SELECT field (kinds must match)',
+    );
+  });
+
+  it('preloads the cross-ref source object kinds to reject a cross-record mirror mismatch', async () => {
+    const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    const def: FormulaDefinitionRecord = {
+      id: 'm1',
+      targetObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'SELECT',
+      expression: `[company:${companyId}:name]`,
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('company', { name: 'TEXT' });
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'm1')!;
+    expect(stored.enabled).toBe(false);
+    expect(stored.lastError).toBe(
+      'Cannot mirror TEXT field "name" onto a SELECT field (kinds must match)',
+    );
+  });
+
   it('ignores its own bookkeeping-only writes (no re-processing loop)', async () => {
     const def: FormulaDefinitionRecord = {
       id: 'f1',
@@ -210,7 +286,7 @@ describe('validateFormula string-comparison field-kind validation', () => {
     const result = validateFormula({
       candidate: candidate('IF(stage = "QUALIFIED", 1, 0)'),
       existingFormulas: [],
-      targetObjectFieldKinds: new Map([['stage', 'SELECT']]),
+      fieldKinds: () => new Map([['stage', 'SELECT']]),
     });
     expect(result.valid).toBe(true);
   });
@@ -219,7 +295,7 @@ describe('validateFormula string-comparison field-kind validation', () => {
     const result = validateFormula({
       candidate: candidate('IF(tier = "gold", 1, 0)'),
       existingFormulas: [],
-      targetObjectFieldKinds: new Map([['tier', 'TEXT']]),
+      fieldKinds: () => new Map([['tier', 'TEXT']]),
     });
     expect(result.valid).toBe(true);
   });
@@ -228,7 +304,7 @@ describe('validateFormula string-comparison field-kind validation', () => {
     const result = validateFormula({
       candidate: candidate('IF(amount = "big", 1, 0)'),
       existingFormulas: [],
-      targetObjectFieldKinds: new Map([['amount', 'NUMBER']]),
+      fieldKinds: () => new Map([['amount', 'NUMBER']]),
     });
     expect(result.valid).toBe(false);
     expect((result as { valid: false; error: string }).error).toBe(
@@ -236,7 +312,7 @@ describe('validateFormula string-comparison field-kind validation', () => {
     );
   });
 
-  it('is valid when the kinds map is omitted (backward compatible)', () => {
+  it('is valid when the kinds accessor is omitted (backward compatible)', () => {
     const result = validateFormula({
       candidate: candidate('IF(amount = "big", 1, 0)'),
       existingFormulas: [],
@@ -248,7 +324,7 @@ describe('validateFormula string-comparison field-kind validation', () => {
     const result = validateFormula({
       candidate: candidate('IF(mystery = "x", 1, 0)'),
       existingFormulas: [],
-      targetObjectFieldKinds: new Map([['amount', 'NUMBER']]),
+      fieldKinds: () => new Map([['amount', 'NUMBER']]),
     });
     expect(result.valid).toBe(true);
   });
@@ -258,7 +334,159 @@ describe('validateFormula string-comparison field-kind validation', () => {
     const result = validateFormula({
       candidate: candidate(`IF([company:${companyId}:employees] = "x", 1, 0)`),
       existingFormulas: [],
-      targetObjectFieldKinds: new Map([['amount', 'NUMBER']]),
+      fieldKinds: () => new Map([['amount', 'NUMBER']]),
+    });
+    expect(result.valid).toBe(true);
+  });
+});
+
+describe('validateFormula mirror validation', () => {
+  const COMPANY_ID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+
+  const mirror = (expression: string, targetFieldType: string) => ({
+    id: 'm1',
+    targetObject: 'opportunity',
+    targetField: 'mirrorField',
+    expression,
+    targetFieldType,
+  });
+
+  const errorOf = (result: ReturnType<typeof validateFormula>) =>
+    (result as { valid: false; error: string }).error;
+
+  // (a) target kind is not in the mirror allowlist at all.
+  it('rejects a non-mirrorable target kind with the exact message', () => {
+    const result = validateFormula({
+      candidate: mirror('status', 'RELATION'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe('Field kind RELATION cannot be mirrored');
+  });
+
+  // (b) allowlisted target but the expression is not a bare whole-field ref.
+  it('rejects an operator expression onto a mirrorable target', () => {
+    const result = validateFormula({
+      candidate: mirror('status + otherField', 'SELECT'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe(
+      'Only a plain field reference can be mirrored onto a SELECT field',
+    );
+  });
+
+  it('rejects a dotted subpath ref onto a mirrorable target', () => {
+    const result = validateFormula({
+      candidate: mirror('amount.amountMicros', 'SELECT'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe(
+      'Only a plain field reference can be mirrored onto a SELECT field',
+    );
+  });
+
+  // (c) source kind known via accessor and different from target kind.
+  it('rejects a same-record source of a different kind with the exact message', () => {
+    const result = validateFormula({
+      candidate: mirror('sourceField', 'SELECT'),
+      existingFormulas: [],
+      fieldKinds: (object) =>
+        object === 'opportunity'
+          ? new Map([['sourceField', 'TEXT']])
+          : undefined,
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe(
+      'Cannot mirror TEXT field "sourceField" onto a SELECT field (kinds must match)',
+    );
+  });
+
+  it('rejects a cross-record source of a different kind (preloaded source object)', () => {
+    const result = validateFormula({
+      candidate: mirror(`[company:${COMPANY_ID}:name]`, 'SELECT'),
+      existingFormulas: [],
+      fieldKinds: (object) =>
+        object === 'company' ? new Map([['name', 'TEXT']]) : undefined,
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe(
+      'Cannot mirror TEXT field "name" onto a SELECT field (kinds must match)',
+    );
+  });
+
+  it('accepts a same-kind same-record mirror', () => {
+    const result = validateFormula({
+      candidate: mirror('sourceField', 'SELECT'),
+      existingFormulas: [],
+      fieldKinds: () => new Map([['sourceField', 'SELECT']]),
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts a same-kind cross-record mirror', () => {
+    const result = validateFormula({
+      candidate: mirror(`[company:${COMPANY_ID}:name]`, 'SELECT'),
+      existingFormulas: [],
+      fieldKinds: (object) =>
+        object === 'company' ? new Map([['name', 'SELECT']]) : undefined,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('leaves an engine-family target (NUMBER) on the engine path (bare ref valid)', () => {
+    const result = validateFormula({
+      candidate: mirror('sourceField', 'NUMBER'),
+      existingFormulas: [],
+      fieldKinds: () => new Map([['sourceField', 'SELECT']]),
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('leaves an engine-family target (NUMBER) unaffected for a subpath expression', () => {
+    const result = validateFormula({
+      candidate: mirror('amount.amountMicros', 'NUMBER'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  // Accessor omitted: only (a)/(b) run — (c) degrades gracefully (passes).
+  it('degrades gracefully with no accessor: unknown source kind passes', () => {
+    const result = validateFormula({
+      candidate: mirror('sourceField', 'SELECT'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('still runs (a) with no accessor', () => {
+    const result = validateFormula({
+      candidate: mirror('status', 'ACTOR'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe('Field kind ACTOR cannot be mirrored');
+  });
+
+  it('still runs (b) with no accessor', () => {
+    const result = validateFormula({
+      candidate: mirror('a + b', 'LINKS'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe(
+      'Only a plain field reference can be mirrored onto a LINKS field',
+    );
+  });
+
+  // Accessor gap: source object present but the field is absent from the map.
+  it('passes when the accessor lacks the source field (accessor gap)', () => {
+    const result = validateFormula({
+      candidate: mirror('sourceField', 'SELECT'),
+      existingFormulas: [],
+      fieldKinds: () => new Map([['otherField', 'TEXT']]),
     });
     expect(result.valid).toBe(true);
   });

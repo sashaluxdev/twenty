@@ -1,3 +1,4 @@
+import { bareReferenceOf, parse } from 'src/engine';
 import {
   loadAllEnabledFormulas,
   updateFormulaBookkeeping,
@@ -82,24 +83,44 @@ export const handleFormulaChange = async ({
   }
 
   const existing = await loadAllEnabledFormulas(client);
-  // Preload the target object's field kinds so save-time validation can reject a
-  // string comparison against a field type that can never hold a string. The
-  // resolver is optional — absent (or a client without it) degrades to no kind
-  // check, keeping the save path working without metadata.
-  // A rejecting fieldKinds impl must not abort save handling before cycle
-  // detection — degrade to no kind check (same posture as a client without it).
-  let targetObjectFieldKinds: Map<string, string> | undefined;
-  try {
-    targetObjectFieldKinds = after.targetObject
-      ? await client.fieldKinds?.(after.targetObject)
-      : undefined;
-  } catch {
-    targetObjectFieldKinds = undefined;
+  // Preload field kinds so save-time validation can run its kind-dependent
+  // checks: the target object (string-comparison check + a same-record mirror's
+  // source) and, when the expression is a whole-field cross-ref, that referenced
+  // object (a cross-record mirror's source, step 1c). Each fetch is guarded — a
+  // client without fieldKinds, or a rejecting impl, degrades to no kind check for
+  // that object (it must NOT abort save handling before cycle detection).
+  const kindsByObject = new Map<string, Map<string, string>>();
+  const preloadKinds = async (objectName: string): Promise<void> => {
+    if (!objectName || kindsByObject.has(objectName)) {
+      return;
+    }
+    try {
+      const map = await client.fieldKinds?.(objectName);
+      if (map) {
+        kindsByObject.set(objectName, map);
+      }
+    } catch {
+      // Degrade to no kind check for this object.
+    }
+  };
+
+  if (after.targetObject) {
+    await preloadKinds(after.targetObject);
   }
+  // Also preload the cross-referenced object's kinds for a cross-record mirror.
+  try {
+    const bare = bareReferenceOf(parse(after.expression ?? ''));
+    if (bare?.kind === 'cross') {
+      await preloadKinds(bare.ref.object);
+    }
+  } catch {
+    // A parse failure surfaces through validateFormula; nothing to preload.
+  }
+
   const result = validateFormula({
     candidate: after,
     existingFormulas: existing,
-    targetObjectFieldKinds,
+    fieldKinds: (objectName) => kindsByObject.get(objectName),
   });
 
   if (!result.valid) {

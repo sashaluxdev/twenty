@@ -1,5 +1,6 @@
 import {
   type AstNode,
+  bareReferenceOf,
   collectStringComparisonRefs,
   detectCycle,
   extractDependenciesFromAst,
@@ -8,6 +9,10 @@ import {
   isFormulaError,
   parse,
 } from 'src/engine';
+import {
+  ENGINE_FAMILY_KINDS,
+  isMirrorTargetKind,
+} from 'src/logic-functions/lib/mirror-kinds';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 
 // Validates a formula at save time (ADR 0005): parse the expression, extract its
@@ -67,15 +72,17 @@ export const isValidTargetName = (name: string): boolean =>
 export type ValidateArgs = {
   candidate: Pick<
     FormulaDefinitionRecord,
-    'id' | 'targetObject' | 'targetField' | 'expression'
+    'id' | 'targetObject' | 'targetField' | 'targetFieldType' | 'expression'
   >;
   // All OTHER enabled formulas (the candidate is added on top).
   existingFormulas: FormulaDefinitionRecord[];
-  // Field name -> metadata type (e.g. 'SELECT') for the candidate's target
-  // object. When present, a string comparison against a same-record field whose
-  // kind cannot hold a string is rejected. Omitted (or a field absent from the
-  // map) -> that check is skipped, so validation is fully backward compatible.
-  targetObjectFieldKinds?: Map<string, string>;
+  // Sync accessor over caller-preloaded field-kind maps: objectName -> (field
+  // name -> metadata type), or undefined when that object's kinds were not
+  // preloaded. Feeds the string-comparison check (target object) and the mirror
+  // source-kind check (which may be a cross-referenced object). Omitted, or a
+  // gap in the map, degrades gracefully — the affected check is skipped, keeping
+  // validation backward compatible.
+  fieldKinds?: (objectName: string) => Map<string, string> | undefined;
 };
 
 // Runtime safety net (ADR 0004/0005): given the current set of enabled
@@ -118,11 +125,12 @@ export const isCyclicTarget = (
 export const validateFormula = ({
   candidate,
   existingFormulas,
-  targetObjectFieldKinds,
+  fieldKinds,
 }: ValidateArgs): SaveValidationResult => {
   const object = candidate.targetObject ?? '';
   const field = candidate.targetField ?? '';
   const expression = candidate.expression ?? '';
+  const targetFieldType = candidate.targetFieldType;
 
   if (!object) {
     return { valid: false, error: 'targetObject is required' };
@@ -162,7 +170,8 @@ export const validateFormula = ({
   //     same-record field whose kind cannot hold a string (anything but SELECT /
   //     TEXT) is rejected here — between dependency extraction and cycle
   //     detection. Unknown fields and cross-refs pass (they resolve to null at
-  //     runtime). Skipped entirely when the kinds map is unavailable.
+  //     runtime). Skipped entirely when the target object's kinds are absent.
+  const targetObjectFieldKinds = fieldKinds?.(object);
   if (targetObjectFieldKinds) {
     for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
       const rootField = path.split('.')[0];
@@ -173,6 +182,45 @@ export const validateFormula = ({
           error: `String comparison against "${rootField}" is not supported (field type ${kind}; only SELECT and TEXT fields)`,
         };
       }
+    }
+  }
+
+  // 1c. Mirror validation. A non-engine-family target field is in "mirror mode":
+  //     its value is a typed raw passthrough of a single bare whole-field ref,
+  //     not an engine expression. A null/blank target kind defaults to NUMBER
+  //     (engine family, same rule as value-io's targetFieldKind), so it keeps
+  //     today's engine path and skips these checks.
+  if (
+    targetFieldType != null &&
+    targetFieldType !== '' &&
+    !ENGINE_FAMILY_KINDS.has(targetFieldType)
+  ) {
+    // (a) The target kind is not mirrorable at all.
+    if (!isMirrorTargetKind(targetFieldType)) {
+      return {
+        valid: false,
+        error: `Field kind ${targetFieldType} cannot be mirrored`,
+      };
+    }
+    // (b) Mirrorable target, but the expression is not a bare whole-field ref
+    //     (an operator, function, literal, IF, or dotted subpath).
+    const bare = bareReferenceOf(ast);
+    if (bare === null) {
+      return {
+        valid: false,
+        error: `Only a plain field reference can be mirrored onto a ${targetFieldType} field`,
+      };
+    }
+    // (c) Source kind known via the accessor and different from the target kind
+    //     (v1 is strict same-kind). An unknown source kind (accessor gap) passes.
+    const sourceObject = bare.kind === 'same' ? object : bare.ref.object;
+    const sourceField = bare.kind === 'same' ? bare.field : bare.ref.fieldPath;
+    const sourceKind = fieldKinds?.(sourceObject)?.get(sourceField);
+    if (sourceKind !== undefined && sourceKind !== targetFieldType) {
+      return {
+        valid: false,
+        error: `Cannot mirror ${sourceKind} field "${sourceField}" onto a ${targetFieldType} field (kinds must match)`,
+      };
     }
   }
 

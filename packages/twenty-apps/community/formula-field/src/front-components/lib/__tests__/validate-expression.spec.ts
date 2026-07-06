@@ -44,14 +44,14 @@ describe('validateExpression', () => {
     expect(result).toContain('Dependency cycle');
   });
 
-  it('accepts a SELECT field string comparison via the optional kinds param', () => {
+  it('accepts a SELECT field string comparison via the optional kinds accessor', () => {
     expect(
       validateExpression(
         'IF(stage = "QUALIFIED", 1, 0)',
         'opportunity',
         'formulaScore',
         [],
-        new Map([['stage', 'SELECT']]),
+        () => new Map([['stage', 'SELECT']]),
       ),
     ).toBeNull();
   });
@@ -63,7 +63,7 @@ describe('validateExpression', () => {
         'opportunity',
         'formulaScore',
         [],
-        new Map([['tier', 'TEXT']]),
+        () => new Map([['tier', 'TEXT']]),
       ),
     ).toBeNull();
   });
@@ -75,7 +75,7 @@ describe('validateExpression', () => {
         'opportunity',
         'formulaScore',
         [],
-        new Map([['amount', 'NUMBER']]),
+        () => new Map([['amount', 'NUMBER']]),
       ),
     ).toBe(
       'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
@@ -89,14 +89,29 @@ describe('validateExpression', () => {
         'opportunity',
         'formulaScore',
         [],
-        new Map([['tags', 'MULTI_SELECT']]),
+        () => new Map([['tags', 'MULTI_SELECT']]),
       ),
     ).toBe(
       'String comparison against "tags" is not supported (field type MULTI_SELECT; only SELECT and TEXT fields)',
     );
   });
 
-  it('is null when the kinds map is omitted (backward compatible)', () => {
+  it('only applies the kinds accessor to the host object', () => {
+    // The accessor returns kinds for a different object; the host lookup misses,
+    // so the string-comparison check is skipped (degrades gracefully).
+    expect(
+      validateExpression(
+        'IF(amount = "big", 1, 0)',
+        'opportunity',
+        'formulaScore',
+        [],
+        (object) =>
+          object === 'company' ? new Map([['amount', 'NUMBER']]) : undefined,
+      ),
+    ).toBeNull();
+  });
+
+  it('is null when the kinds accessor is omitted (backward compatible)', () => {
     expect(
       validateExpression('IF(amount = "big", 1, 0)', 'opportunity', 'formulaScore', []),
     ).toBeNull();
@@ -109,7 +124,7 @@ describe('validateExpression', () => {
         'opportunity',
         'formulaScore',
         [],
-        new Map([['amount', 'NUMBER']]),
+        () => new Map([['amount', 'NUMBER']]),
       ),
     ).toBeNull();
   });

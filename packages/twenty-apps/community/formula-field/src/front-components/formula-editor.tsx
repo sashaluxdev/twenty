@@ -230,6 +230,15 @@ const FormulaEditor = () => {
   const hostObject = definitions[0]?.targetObject;
   const { kindsByName: hostFieldKinds } = useObjectFields(hostObject);
 
+  // validateExpression takes a kinds accessor (objectName -> map). Every rendered
+  // definition targets the host object, so close the one host map over it.
+  const hostFieldKindsAccessor = useMemo(
+    () =>
+      (objectName: string): Map<string, string> | undefined =>
+        objectName === hostObject ? hostFieldKinds : undefined,
+    [hostObject, hostFieldKinds],
+  );
+
   const disarmSave = useCallback(() => {
     if (armTimer.current) {
       clearTimeout(armTimer.current);
@@ -539,7 +548,7 @@ const FormulaEditor = () => {
         definition.targetObject,
         definition.targetField,
         definitions,
-        hostFieldKinds,
+        hostFieldKindsAccessor,
       );
       if (error) {
         setDefinitions((prev) =>
@@ -574,7 +583,7 @@ const FormulaEditor = () => {
         setTimeout(load, 1500);
       }
     },
-    [drafts, definitions, load, armedSaveId, disarmSave, hostFieldKinds],
+    [drafts, definitions, load, armedSaveId, disarmSave, hostFieldKindsAccessor],
   );
 
   const toggleOverride = useCallback(
@@ -694,7 +703,7 @@ const FormulaEditor = () => {
         definition.targetObject,
         definition.targetField,
         definitions,
-        hostFieldKinds,
+        hostFieldKindsAccessor,
       );
       const overrideEntry = overrides[definition.targetField];
       const isOverridden = overrideEntry?.active ?? false;
