@@ -33,6 +33,13 @@ export type VariableResolver = (
   reference: VariableReference,
 ) => number | null | undefined;
 
+// Raw resolver for string-mode comparisons. Returns the field's underlying
+// value untyped: string mode keeps a result only when it is actually a string,
+// treating anything else (number, null, undefined, object) as "no string here".
+// Kept separate from the numeric VariableResolver so the numeric contract is
+// untouched — string support is purely additive via EvaluateOptions.resolveRaw.
+export type RawVariableResolver = (reference: VariableReference) => unknown;
+
 const DEFAULT_MAX_DEPTH = 64;
 
 export type EvaluateOptions = {
@@ -42,6 +49,36 @@ export type EvaluateOptions = {
   // pure function of its arguments. Required only when the AST contains a
   // TODAY() node.
   todayEpochDay?: number;
+  // Resolves a field/crossref to its raw value for string-mode = / !=
+  // comparisons. Optional: when absent, string comparisons against a field
+  // operand resolve to null (null-propagates to an empty IF result).
+  resolveRaw?: RawVariableResolver;
+};
+
+// Resolves one operand of a string-mode comparison to `string | null`. A string
+// literal is its own value; a field/crossref yields its raw value only when that
+// value is actually a string (else null, incl. a missing resolveRaw); any other
+// node shape (number, binary, unary, if, today) is a runtime type mismatch in
+// string mode and resolves to null. Null on either side null-propagates the IF.
+const resolveStringOperand = (
+  node: AstNode,
+  resolveRaw: RawVariableResolver | undefined,
+): string | null => {
+  if (node.type === 'string') {
+    return node.value;
+  }
+
+  if (node.type === 'field') {
+    const raw = resolveRaw?.({ kind: 'same', path: node.path });
+    return typeof raw === 'string' ? raw : null;
+  }
+
+  if (node.type === 'crossref') {
+    const raw = resolveRaw?.({ kind: 'cross', ref: node.ref });
+    return typeof raw === 'string' ? raw : null;
+  }
+
+  return null;
 };
 
 // Comparison truth, internal only: booleans stay confined to IF's condition
@@ -53,10 +90,27 @@ const evaluateConditionTruth = (
   depth: number,
   maxDepth: number,
   todayEpochDay: number | undefined,
+  resolveRaw: RawVariableResolver | undefined,
 ): boolean | null => {
   if (node.type === 'comparison') {
-    const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay);
-    const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay);
+    // String mode: entered iff either operand is a string literal. The parser
+    // only ever pairs a string literal with = / != (never an ordering op), so
+    // this branch handles equality alone. Numeric mode below is unchanged.
+    if (node.left.type === 'string' || node.right.type === 'string') {
+      const leftString = resolveStringOperand(node.left, resolveRaw);
+      const rightString = resolveStringOperand(node.right, resolveRaw);
+
+      if (leftString === null || rightString === null) {
+        return null;
+      }
+
+      return node.operator === '!='
+        ? leftString !== rightString
+        : leftString === rightString;
+    }
+
+    const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+    const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
 
     if (left === null || right === null) {
       return null;
@@ -78,7 +132,7 @@ const evaluateConditionTruth = (
     }
   }
 
-  const value = evaluateNode(node, resolve, depth, maxDepth, todayEpochDay);
+  const value = evaluateNode(node, resolve, depth, maxDepth, todayEpochDay, resolveRaw);
 
   if (value === null) {
     return null;
@@ -94,6 +148,7 @@ const evaluateNode = (
   depth: number,
   maxDepth: number,
   todayEpochDay: number | undefined,
+  resolveRaw: RawVariableResolver | undefined,
 ): number | null => {
   if (depth > maxDepth) {
     throw new FormulaError(
@@ -142,7 +197,7 @@ const evaluateNode = (
     }
 
     case 'unary': {
-      const operand = evaluateNode(node.operand, resolve, depth + 1, maxDepth, todayEpochDay);
+      const operand = evaluateNode(node.operand, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
       if (operand === null) {
         return null;
       }
@@ -150,8 +205,8 @@ const evaluateNode = (
     }
 
     case 'binary': {
-      const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay);
-      const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay);
+      const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+      const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
 
       // Null propagation: any null operand makes the result null.
       if (left === null || right === null) {
@@ -200,6 +255,7 @@ const evaluateNode = (
         depth + 1,
         maxDepth,
         todayEpochDay,
+        resolveRaw,
       );
 
       // Null condition (or null in a comparison operand) nulls the whole IF.
@@ -215,8 +271,18 @@ const evaluateNode = (
         depth + 1,
         maxDepth,
         todayEpochDay,
+        resolveRaw,
       );
     }
+
+    case 'string':
+      // Unreachable via parse(): the parser confines string literals to = / !=
+      // comparison operands, handled in string mode by evaluateConditionTruth,
+      // so one never reaches a numeric value slot. Guard for hand-built ASTs.
+      throw new FormulaError(
+        'NON_NUMERIC_VALUE',
+        `String literal "${node.value}" is not a numeric value`,
+      );
 
     case 'comparison':
       // Unreachable via parse(): the parser confines comparisons to IF's
@@ -224,6 +290,15 @@ const evaluateNode = (
       throw new FormulaError(
         'PARSE_ERROR',
         'Comparison is only allowed in the condition of IF(condition, then, else)',
+      );
+
+    default:
+      // Exhaustiveness guard: every known node type is handled above, so a
+      // StringNode/ComparisonNode in a value slot fails loud rather than
+      // returning undefined. A future node type lands here for the same reason.
+      throw new FormulaError(
+        'NON_NUMERIC_VALUE',
+        `Unsupported node type "${(node as AstNode).type}"`,
       );
   }
 };
@@ -234,7 +309,7 @@ export const evaluate = (
   options: EvaluateOptions = {},
 ): number | null => {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
-  const result = evaluateNode(node, resolve, 0, maxDepth, options.todayEpochDay);
+  const result = evaluateNode(node, resolve, 0, maxDepth, options.todayEpochDay, options.resolveRaw);
 
   if (result !== null && !Number.isFinite(result)) {
     throw new FormulaError(

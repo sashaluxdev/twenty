@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import { type AstNode } from 'src/engine/ast';
 import { FormulaError } from 'src/engine/errors';
-import { evaluate, type VariableResolver } from 'src/engine/evaluator';
+import {
+  evaluate,
+  type VariableReference,
+  type VariableResolver,
+} from 'src/engine/evaluator';
 import { parse } from 'src/engine/parser';
 
 const resolverFor =
@@ -18,6 +23,24 @@ const run = (
   source: string,
   values: Record<string, number | null | undefined> = {},
 ) => evaluate(parse(source), resolverFor(values));
+
+// Raw resolver used for string-mode comparisons. Mirrors resolverFor's keying
+// but returns unknown, so a field can resolve to a string, a non-string, or
+// nothing at all.
+const rawResolverFor =
+  (values: Record<string, unknown>) =>
+  (reference: VariableReference): unknown => {
+    if (reference.kind === 'same') {
+      return values[reference.path];
+    }
+    const key = `[${reference.ref.object}:${reference.ref.recordId}:${reference.ref.fieldPath}]`;
+    return values[key];
+  };
+
+// String-mode runner: fields resolve through resolveRaw, never the numeric
+// resolver, so an empty numeric resolver is correct here.
+const runStr = (source: string, raw: Record<string, unknown> = {}) =>
+  evaluate(parse(source), resolverFor({}), { resolveRaw: rawResolverFor(raw) });
 
 describe('evaluator arithmetic', () => {
   it('evaluates the a + b * 2 acceptance formula', () => {
@@ -208,6 +231,100 @@ describe('evaluator errors', () => {
       throw new Error('should have thrown');
     } catch (error) {
       expect((error as FormulaError).code).toBe('MAX_DEPTH_EXCEEDED');
+    }
+  });
+});
+
+describe('evaluator string comparisons (resolveRaw)', () => {
+  it('takes the then-branch when a field raw string equals the literal', () => {
+    expect(runStr('IF(status = "active", 1, 0)', { status: 'active' })).toBe(1);
+  });
+
+  it('takes the else-branch when a field raw string differs from the literal', () => {
+    expect(runStr('IF(status = "active", 1, 0)', { status: 'inactive' })).toBe(0);
+  });
+
+  it('handles != in both directions', () => {
+    expect(runStr('IF(status != "active", 1, 0)', { status: 'inactive' })).toBe(1);
+    expect(runStr('IF(status != "active", 1, 0)', { status: 'active' })).toBe(0);
+  });
+
+  it('yields null when a field raw is null (IF result null)', () => {
+    expect(runStr('IF(status = "active", 1, 0)', { status: null })).toBeNull();
+  });
+
+  it('yields null when a field raw is a number, not a string', () => {
+    expect(runStr('IF(status = "active", 1, 0)', { status: 42 })).toBeNull();
+  });
+
+  it('yields null when a literal is compared against an arithmetic operand', () => {
+    // "a" makes it string mode; the 1 + 2 side is not a string -> null -> IF null.
+    expect(runStr('IF("a" = 1 + 2, 1, 0)')).toBeNull();
+  });
+
+  it('compares two string literals directly', () => {
+    expect(runStr('IF("A" = "A", 1, 0)')).toBe(1);
+    expect(runStr('IF("A" = "B", 1, 0)')).toBe(0);
+  });
+
+  it('resolves a cross-record raw string via resolveRaw', () => {
+    const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    expect(
+      runStr(`IF([company:${uuid}:name] = "Acme", 1, 0)`, {
+        [`[company:${uuid}:name]`]: 'Acme',
+      }),
+    ).toBe(1);
+    expect(
+      runStr(`IF([company:${uuid}:name] = "Acme", 1, 0)`, {
+        [`[company:${uuid}:name]`]: 'Other',
+      }),
+    ).toBe(0);
+  });
+
+  it('yields null when resolveRaw is omitted entirely', () => {
+    // No resolveRaw in options -> field operand resolves to null -> IF null.
+    expect(evaluate(parse('IF(status = "active", 1, 0)'), resolverFor({}))).toBeNull();
+  });
+
+  it('regression: numeric comparisons behave identically when resolveRaw is present but unused', () => {
+    const raw = rawResolverFor({ status: 'active' });
+    expect(
+      evaluate(parse('IF(inputA > 9, inputA + inputB, inputA)'), resolverFor({ inputA: 10, inputB: 5 }), {
+        resolveRaw: raw,
+      }),
+    ).toBe(15);
+    expect(
+      evaluate(parse('IF(inputA > 9, inputA + inputB, inputA)'), resolverFor({ inputA: 3, inputB: 5 }), {
+        resolveRaw: raw,
+      }),
+    ).toBe(3);
+    expect(
+      evaluate(parse('IF(1 = 1, 1, 0)'), resolverFor({}), { resolveRaw: raw }),
+    ).toBe(1);
+  });
+});
+
+describe('evaluator exhaustiveness guard (hand-built ASTs)', () => {
+  it('throws NON_NUMERIC_VALUE when a string node reaches a value position', () => {
+    // The parser can never produce this: a StringNode only appears beside = / !=.
+    const stringInValueSlot: AstNode = { type: 'string', value: 'x' };
+    try {
+      evaluate(stringInValueSlot, resolverFor({}));
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('NON_NUMERIC_VALUE');
+    }
+  });
+
+  it('throws NON_NUMERIC_VALUE for an unknown/future node type', () => {
+    const unknownNode = { type: 'bogus' } as unknown as AstNode;
+    try {
+      evaluate(unknownNode, resolverFor({}));
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('NON_NUMERIC_VALUE');
     }
   });
 });
