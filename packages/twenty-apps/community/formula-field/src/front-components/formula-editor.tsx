@@ -11,6 +11,10 @@ import {
 } from 'src/front-components/lib/format-relative-past';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
 import {
+  refreshStaleTodayFormulas,
+  type RefreshThrottleState,
+} from 'src/front-components/lib/refresh-stale-formulas';
+import {
   computeDropWrite,
   movePreview,
   sortByOrder,
@@ -178,11 +182,16 @@ const FormulaEditor = () => {
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The record id never changes for a mounted widget — resolve its object once.
   const resolvedHost = useRef<string | null>(null);
-  // Self-heal throttle (ADR 0015): mirrors convergeFormulaFieldLayout's 60s
-  // pattern. A dead sweep means the FRONT runtime is the only thing left to
-  // recompute a stale TODAY() formula for a viewed record — this bounds how
-  // often that recompute fires per mounted widget.
-  const lastSelfHealAtRef = useRef(0);
+  // Refresh-on-view throttle/in-flight state (ADR 0015), held in a ref so it
+  // survives across polls without itself triggering a re-render — see
+  // refreshTick below for how the widget re-renders when it changes.
+  const refreshStateRef = useRef<RefreshThrottleState>({
+    lastRefreshAt: 0,
+    inFlight: false,
+  });
+  // Bumped by refreshStaleTodayFormulas' onStateChange so the memoized
+  // `content` below re-evaluates refreshStateRef.current.inFlight.
+  const [refreshTick, setRefreshTick] = useState(0);
   // Drag-to-reorder (ADR 0014, pointer events): pointerdown only records a
   // pending gesture (id + start coordinates) in pendingDragRef — it does NOT
   // arm the drag. A row's onPointerMove arms it once the pointer has moved
@@ -367,47 +376,26 @@ const FormulaEditor = () => {
       }
       setOverrides(nextOverrides);
 
-      // Self-heal (ADR 0015): a stale TODAY() formula on this record means the
-      // sweep/worker isn't converging it — recompute it here in the front
-      // runtime, throttled so a persistently-stale record doesn't re-trigger
-      // on every 4s poll. With a LIVE worker the resulting write round-trips
-      // through the record-update handler, refreshing lastEvaluatedAt and
-      // clearing staleness. With a DEAD worker (this feature's primary case)
-      // lastEvaluatedAt stays frozen, so the note persists and this re-fires
-      // every 60s while the widget is open — deliberate: each pass is an
-      // idempotent, write-avoidant recompute that keeps the viewed record
-      // correct, and the persisting note truthfully reports pipeline health.
-      const now = Date.now();
-      const staleDefs = defs.filter(
-        (definition) =>
-          definition.enabled &&
-          definition.usesTodayFlag &&
-          isStaleTimestamp(definition.lastEvaluatedAt, now),
-      );
-      if (staleDefs.length > 0 && now - lastSelfHealAtRef.current > 60_000) {
-        lastSelfHealAtRef.current = now;
-        Promise.all(
-          staleDefs.map((definition) =>
-            recomputeForRecord({
-              client,
-              formula: {
-                id: definition.id,
-                targetObject: definition.targetObject,
-                targetField: definition.targetField,
-                targetFieldType: definition.targetFieldType,
-                currencyCode: definition.currencyCode,
-                expression: definition.expression,
-                enabled: definition.enabled,
-              },
-              targetRecordId: recordId,
-            }),
-          ),
-        )
-          .catch(() => {})
-          .finally(() => {
-            setTimeout(load, 1500);
-          });
-      }
+      // Refresh-on-view (ADR 0015): a stale TODAY() formula on this record
+      // means the sweep/worker isn't converging it — recompute it here in the
+      // front runtime. The orchestrator recomputes the viewed record first,
+      // then runs the honest full recomputeAllRecords (write-avoidant), which
+      // also advances lastEvaluatedAt and clears the stale note. Throttled/
+      // in-flight-guarded internally so a persistently-stale record doesn't
+      // re-trigger on every 4s poll; onStateChange bumps refreshTick so the
+      // row can show "Refreshing formula…" while it runs.
+      refreshStaleTodayFormulas({
+        client,
+        definitions: defs,
+        now: Date.now(),
+        state: refreshStateRef.current,
+        recordId,
+        onStateChange: () => setRefreshTick((tick) => tick + 1),
+      }).then((refreshedIds) => {
+        if (refreshedIds.length > 0) {
+          setTimeout(load, 1500);
+        }
+      });
     }
 
     setLoading(false);
@@ -737,12 +725,17 @@ const FormulaEditor = () => {
             </span>
             <span style={layout.value}>{displayValue(definition, value)}</span>
           </div>
-          {stale && definition.lastEvaluatedAt ? (
+          {stale && refreshStateRef.current.inFlight ? (
+            // A refresh is actively running for this (stale) definition —
+            // supersedes the passive note below for as long as it's in flight.
+            <MutedText as="div" style={layout.staleNote}>
+              Refreshing formula…
+            </MutedText>
+          ) : stale && definition.lastEvaluatedAt ? (
             // Definition-level framing on purpose: the DEFINITION's heartbeat
             // is old (always true when this renders), whereas this row's
-            // value may have just been verified correct by the self-heal —
-            // and "refreshing…" would over-claim during the 60s throttle
-            // window when nothing is actively running.
+            // value may have just been verified correct by the refresh —
+            // and "refreshing…" would over-claim outside an active run.
             <WarnText as="div" style={layout.staleNote}>
               Formula last evaluated{' '}
               {formatRelativePast(definition.lastEvaluatedAt, Date.now())}
@@ -823,6 +816,9 @@ const FormulaEditor = () => {
     disarmSave,
     saveExpression,
     toggleOverride,
+    // Not read directly — bumped by refreshStaleTodayFormulas' onStateChange
+    // so this memo re-reads refreshStateRef.current.inFlight.
+    refreshTick,
   ]);
 
   return (

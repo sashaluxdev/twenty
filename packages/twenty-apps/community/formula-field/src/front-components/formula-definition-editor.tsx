@@ -10,6 +10,7 @@ import {
   type FormulaTarget,
   isFormulaError,
   parse,
+  usesToday,
 } from 'src/engine';
 import {
   type DeleteDefinitionPlan,
@@ -19,6 +20,10 @@ import {
 import { FieldSettingsEditor } from 'src/front-components/lib/field-settings-editor';
 import { formatRelativePast } from 'src/front-components/lib/format-relative-past';
 import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
+import {
+  refreshStaleTodayFormulas,
+  type RefreshThrottleState,
+} from 'src/front-components/lib/refresh-stale-formulas';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
 import {
@@ -65,6 +70,20 @@ type Definition = {
   status: string;
   statusReason: string;
   lastEvaluatedAt: string | null;
+  // Parsed once at load time (staleness scoping, ADR 0015) — checking it at
+  // render/refresh time would re-parse the expression every 4s poll.
+  usesTodayFlag: boolean;
+};
+
+// Safe usesToday() over a possibly-invalid expression — an unparseable
+// formula has no TODAY() dependency to track (same guard as
+// formula-editor.tsx's local expressionUsesToday).
+const expressionUsesToday = (expression: string): boolean => {
+  try {
+    return usesToday(parse(expression));
+  } catch {
+    return false;
+  }
 };
 
 const validate = (
@@ -266,6 +285,16 @@ const FormulaDefinitionEditor = () => {
   // Tracks which record's draft we have already seeded, so the 4s refresh below
   // never overwrites the expression the user is actively editing.
   const seededRecordId = useRef<string | null>(null);
+  // Refresh-on-view throttle/in-flight state (ADR 0015) — own ref per widget,
+  // since this widget refreshes only its own definition (no viewed record).
+  const refreshStateRef = useRef<RefreshThrottleState>({
+    lastRefreshAt: 0,
+    inFlight: false,
+  });
+  // Bumped by refreshStaleTodayFormulas' onStateChange to re-render and show
+  // "Refreshing formula…" — this component isn't memoized, so a plain re-
+  // render is enough (unlike formula-editor.tsx's memoized row list).
+  const [, setRefreshTick] = useState(0);
 
   const load = useCallback(async () => {
     if (!recordId) return;
@@ -313,6 +342,7 @@ const FormulaDefinitionEditor = () => {
         status: edge.node.status ?? '',
         statusReason: edge.node.statusReason ?? '',
         lastEvaluatedAt: edge.node.lastEvaluatedAt ?? null,
+        usesTodayFlag: expressionUsesToday(edge.node.expression ?? ''),
       }),
     );
 
@@ -326,6 +356,20 @@ const FormulaDefinitionEditor = () => {
         objectNameSingular: current.targetObject,
         targetField: current.targetField,
         statusVisible: current.status !== '',
+      });
+      // Refresh-on-view (ADR 0015): this widget IS the definition's own page
+      // (no viewed record) — the honest recomputeAllRecords refresh fixes
+      // every record and advances lastEvaluatedAt, clearing the stale note.
+      refreshStaleTodayFormulas({
+        client,
+        definitions: [current],
+        now: Date.now(),
+        state: refreshStateRef.current,
+        onStateChange: () => setRefreshTick((tick) => tick + 1),
+      }).then((refreshedIds) => {
+        if (refreshedIds.length > 0) {
+          setTimeout(load, 1500);
+        }
       });
     }
     // Seed the editable draft only once per record — subsequent refreshes update
@@ -461,6 +505,9 @@ const FormulaDefinitionEditor = () => {
           Last evaluated{' '}
           {formatRelativePast(definition.lastEvaluatedAt, Date.now())}
         </HintText>
+      ) : null}
+      {refreshStateRef.current.inFlight ? (
+        <MutedText as="div">Refreshing formula…</MutedText>
       ) : null}
 
       <MutedText as="div">Formula expression</MutedText>
