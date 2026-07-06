@@ -1,4 +1,5 @@
 import {
+  collectStringComparisonRefs,
   detectCycle,
   extractDependenciesFromAst,
   type FormulaTarget,
@@ -25,14 +26,31 @@ export const validateExpression = (
   hostObject: string,
   targetField: string,
   allDefinitions: ValidatableDefinition[],
+  // Field name -> metadata type for the host object. When present, a string
+  // comparison against a same-record field that cannot hold a string is
+  // rejected (parity with the server save-validation). Omitted -> skipped.
+  targetObjectFieldKinds?: Map<string, string>,
 ): string | null => {
+  let ast;
   let dependencies;
   try {
-    dependencies = extractDependenciesFromAst(parse(expression));
+    ast = parse(expression);
+    dependencies = extractDependenciesFromAst(ast);
   } catch (error) {
     return isFormulaError(error)
       ? `${error.code}: ${error.message}`
       : String(error);
+  }
+
+  // String-comparison field-kind check — mirrors validateFormula's step 1b.
+  if (targetObjectFieldKinds) {
+    for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
+      const rootField = path.split('.')[0];
+      const kind = targetObjectFieldKinds.get(rootField);
+      if (kind !== undefined && kind !== 'SELECT' && kind !== 'TEXT') {
+        return `String comparison against "${rootField}" is not supported (field type ${kind}; only SELECT and TEXT fields)`;
+      }
+    }
   }
 
   const others: FormulaTarget[] = allDefinitions

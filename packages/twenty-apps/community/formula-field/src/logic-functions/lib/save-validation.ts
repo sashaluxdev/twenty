@@ -1,4 +1,6 @@
 import {
+  type AstNode,
+  collectStringComparisonRefs,
   detectCycle,
   extractDependenciesFromAst,
   type FormulaDependencies,
@@ -69,6 +71,11 @@ export type ValidateArgs = {
   >;
   // All OTHER enabled formulas (the candidate is added on top).
   existingFormulas: FormulaDefinitionRecord[];
+  // Field name -> metadata type (e.g. 'SELECT') for the candidate's target
+  // object. When present, a string comparison against a same-record field whose
+  // kind cannot hold a string is rejected. Omitted (or a field absent from the
+  // map) -> that check is skipped, so validation is fully backward compatible.
+  targetObjectFieldKinds?: Map<string, string>;
 };
 
 // Runtime safety net (ADR 0004/0005): given the current set of enabled
@@ -111,6 +118,7 @@ export const isCyclicTarget = (
 export const validateFormula = ({
   candidate,
   existingFormulas,
+  targetObjectFieldKinds,
 }: ValidateArgs): SaveValidationResult => {
   const object = candidate.targetObject ?? '';
   const field = candidate.targetField ?? '';
@@ -136,9 +144,11 @@ export const validateFormula = ({
   }
 
   // 1. Parse + dependency extraction.
+  let ast: AstNode;
   let dependencies: FormulaDependencies;
   try {
-    dependencies = extractDependenciesFromAst(parse(expression));
+    ast = parse(expression);
+    dependencies = extractDependenciesFromAst(ast);
   } catch (error) {
     return {
       valid: false,
@@ -146,6 +156,24 @@ export const validateFormula = ({
         ? `${error.code}: ${error.message}`
         : String(error),
     };
+  }
+
+  // 1b. String-comparison field-kind check. A string comparison against a
+  //     same-record field whose kind cannot hold a string (anything but SELECT /
+  //     TEXT) is rejected here — between dependency extraction and cycle
+  //     detection. Unknown fields and cross-refs pass (they resolve to null at
+  //     runtime). Skipped entirely when the kinds map is unavailable.
+  if (targetObjectFieldKinds) {
+    for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
+      const rootField = path.split('.')[0];
+      const kind = targetObjectFieldKinds.get(rootField);
+      if (kind !== undefined && kind !== 'SELECT' && kind !== 'TEXT') {
+        return {
+          valid: false,
+          error: `String comparison against "${rootField}" is not supported (field type ${kind}; only SELECT and TEXT fields)`,
+        };
+      }
+    }
   }
 
   // 2. Cycle detection over the full graph (existing formulas + candidate).

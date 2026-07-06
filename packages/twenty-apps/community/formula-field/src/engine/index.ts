@@ -8,11 +8,13 @@ export {
   type FormulaTarget,
 } from 'src/engine/cycle-detection';
 export {
+  collectStringComparisonRefs,
   extractDependencies,
   extractDependenciesFromAst,
   usesToday,
   type CrossRecordDependency,
   type FormulaDependencies,
+  type StringComparisonRefs,
 } from 'src/engine/dependencies';
 export { FormulaError, isFormulaError, type FormulaErrorCode } from 'src/engine/errors';
 export {

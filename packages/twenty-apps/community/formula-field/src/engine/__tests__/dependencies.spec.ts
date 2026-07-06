@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractDependencies, usesToday } from 'src/engine/dependencies';
+import {
+  collectStringComparisonRefs,
+  extractDependencies,
+  usesToday,
+} from 'src/engine/dependencies';
 import { parse } from 'src/engine/parser';
 
 const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
@@ -151,5 +155,56 @@ describe('usesToday', () => {
 
   it('detects TODAY() nested under unary negation', () => {
     expect(usesToday(parse('-(TODAY())'))).toBe(true);
+  });
+});
+
+describe('collectStringComparisonRefs', () => {
+  it('collects a same-record field compared against a string literal', () => {
+    const refs = collectStringComparisonRefs(parse('IF(status = "active", 1, 0)'));
+    expect(refs.sameRecordPaths).toEqual(['status']);
+    expect(refs.crossRefs).toEqual([]);
+  });
+
+  it('collects a cross-record ref compared against a string literal', () => {
+    const refs = collectStringComparisonRefs(
+      parse(`IF([company:${UUID}:name] = "Acme", 1, 0)`),
+    );
+    expect(refs.sameRecordPaths).toEqual([]);
+    expect(refs.crossRefs).toEqual([
+      { object: 'company', recordId: UUID, fieldPath: 'name' },
+    ]);
+  });
+
+  it('ignores two string literals compared directly (no field operand)', () => {
+    const refs = collectStringComparisonRefs(parse('IF("A" = "B", 1, 0)'));
+    expect(refs.sameRecordPaths).toEqual([]);
+    expect(refs.crossRefs).toEqual([]);
+  });
+
+  it('ignores a purely numeric comparison (not string mode)', () => {
+    const refs = collectStringComparisonRefs(parse('IF(amount > 5, amount, 0)'));
+    expect(refs.sameRecordPaths).toEqual([]);
+    expect(refs.crossRefs).toEqual([]);
+  });
+
+  it('does not collect the IF branches, only the compared operand', () => {
+    const refs = collectStringComparisonRefs(
+      parse('IF(stage = "QUALIFIED", branchA, branchB)'),
+    );
+    expect(refs.sameRecordPaths).toEqual(['stage']);
+  });
+
+  it('finds a string comparison nested inside an operand sub-IF', () => {
+    const refs = collectStringComparisonRefs(
+      parse('IF(IF(status = "x", 1, 0) = 1, tier, 0)'),
+    );
+    expect(refs.sameRecordPaths).toEqual(['status']);
+  });
+
+  it('deduplicates and sorts collected same-record paths', () => {
+    const refs = collectStringComparisonRefs(
+      parse('IF(tier = "gold", IF(stage = "NEW", 1, IF(tier = "gold", 2, 3)), 0)'),
+    );
+    expect(refs.sameRecordPaths).toEqual(['stage', 'tier']);
   });
 });

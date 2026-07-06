@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { handleFormulaChange } from 'src/logic-functions/lib/handle-formula-change';
 import { handleRecordUpdate } from 'src/logic-functions/lib/handle-record-update';
+import { validateFormula } from 'src/logic-functions/lib/save-validation';
 import {
   activateOverride,
   deactivateOverride,
@@ -126,6 +127,55 @@ describe('handleFormulaChange (save-time validation)', () => {
     expect(String(stored.lastError)).toMatch(/Invalid target field name/);
   });
 
+  it('disables a formula whose string comparison targets a non-SELECT/TEXT field', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'f1',
+      targetObject: 'opportunity',
+      targetField: 'formulaScore',
+      expression: 'IF(amount = "big", 1, 0)',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('opportunity', { amount: 'NUMBER' });
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'f1')!;
+    expect(stored.enabled).toBe(false);
+    expect(stored.lastError).toBe(
+      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
+    );
+  });
+
+  it('accepts a string comparison against a SELECT field (preloaded kinds)', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'f1',
+      targetObject: 'opportunity',
+      targetField: 'formulaScore',
+      expression: 'IF(stage = "QUALIFIED", 1, 0)',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('opportunity', { stage: 'SELECT' });
+    client.seed('opportunity', [
+      { id: 'o1', stage: 'QUALIFIED', formulaScore: null },
+    ]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(true);
+    expect(client.get('formulaDefinition', 'f1')!.enabled).not.toBe(false);
+  });
+
   it('ignores its own bookkeeping-only writes (no re-processing loop)', async () => {
     const def: FormulaDefinitionRecord = {
       id: 'f1',
@@ -145,6 +195,72 @@ describe('handleFormulaChange (save-time validation)', () => {
 
     expect(result.handled).toBe(false);
     expect(client.mutations).toBe(before);
+  });
+});
+
+describe('validateFormula string-comparison field-kind validation', () => {
+  const candidate = (expression: string) => ({
+    id: 'f1',
+    targetObject: 'opportunity',
+    targetField: 'formulaScore',
+    expression,
+  });
+
+  it('accepts a string comparison against a SELECT field', () => {
+    const result = validateFormula({
+      candidate: candidate('IF(stage = "QUALIFIED", 1, 0)'),
+      existingFormulas: [],
+      targetObjectFieldKinds: new Map([['stage', 'SELECT']]),
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts a string comparison against a TEXT field', () => {
+    const result = validateFormula({
+      candidate: candidate('IF(tier = "gold", 1, 0)'),
+      existingFormulas: [],
+      targetObjectFieldKinds: new Map([['tier', 'TEXT']]),
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects a string comparison against a NUMBER field with the exact message', () => {
+    const result = validateFormula({
+      candidate: candidate('IF(amount = "big", 1, 0)'),
+      existingFormulas: [],
+      targetObjectFieldKinds: new Map([['amount', 'NUMBER']]),
+    });
+    expect(result.valid).toBe(false);
+    expect((result as { valid: false; error: string }).error).toBe(
+      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
+    );
+  });
+
+  it('is valid when the kinds map is omitted (backward compatible)', () => {
+    const result = validateFormula({
+      candidate: candidate('IF(amount = "big", 1, 0)'),
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('passes an unknown field that is not in the kinds map', () => {
+    const result = validateFormula({
+      candidate: candidate('IF(mystery = "x", 1, 0)'),
+      existingFormulas: [],
+      targetObjectFieldKinds: new Map([['amount', 'NUMBER']]),
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('passes a cross-record string comparison (runtime-null semantics)', () => {
+    const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    const result = validateFormula({
+      candidate: candidate(`IF([company:${companyId}:employees] = "x", 1, 0)`),
+      existingFormulas: [],
+      targetObjectFieldKinds: new Map([['amount', 'NUMBER']]),
+    });
+    expect(result.valid).toBe(true);
   });
 });
 

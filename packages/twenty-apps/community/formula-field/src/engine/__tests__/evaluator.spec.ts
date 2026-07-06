@@ -249,6 +249,13 @@ describe('evaluator string comparisons (resolveRaw)', () => {
     expect(runStr('IF(status != "active", 1, 0)', { status: 'active' })).toBe(0);
   });
 
+  it('yields null for != when the field raw is null (null-propagation beats != intuition)', () => {
+    // A naive reading of `status != "active"` on an empty field might expect
+    // "true" (null is not "active"); the app's null-propagation policy overrides
+    // that — a null operand nulls the whole IF regardless of the operator.
+    expect(runStr('IF(status != "active", 1, 0)', { status: null })).toBeNull();
+  });
+
   it('yields null when a field raw is null (IF result null)', () => {
     expect(runStr('IF(status = "active", 1, 0)', { status: null })).toBeNull();
   });

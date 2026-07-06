@@ -35,6 +35,17 @@ const ALPHABET = [
 describe('tokenizer fuzzing', () => {
   it('never throws a non-FormulaError and always terminates', () => {
     const rng = makeRng(0xc0ffee);
+    // Deterministic raw resolver on a SEPARATE stream, so the source-generation
+    // sequence above is byte-identical to before. String-mode comparisons in a
+    // parsed AST resolve through a mix of strings, numbers, and null — exercising
+    // the string resolution paths under fuzz without touching seeds/determinism.
+    const rawRng = makeRng(0x5eed5);
+    const resolveRaw = () => {
+      const draw = rawRng();
+      if (draw < 0.34) return 'active';
+      if (draw < 0.67) return draw * 100;
+      return null;
+    };
 
     for (let iteration = 0; iteration < 5000; iteration += 1) {
       const length = Math.floor(rng() * 40);
@@ -47,8 +58,9 @@ describe('tokenizer fuzzing', () => {
         // The whole pipeline must be safe on arbitrary input: either it parses
         // to an AST or it throws a typed FormulaError. Nothing else, ever.
         const ast = parse(source);
-        // If it parsed, evaluating with an all-null resolver must also be safe.
-        evaluate(ast, () => null);
+        // If it parsed, evaluating with an all-null resolver (plus a mixed raw
+        // resolver for string comparisons) must also be safe.
+        evaluate(ast, () => null, { resolveRaw });
       } catch (error) {
         expect(
           error,

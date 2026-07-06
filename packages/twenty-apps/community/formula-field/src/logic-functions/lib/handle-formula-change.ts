@@ -82,7 +82,18 @@ export const handleFormulaChange = async ({
   }
 
   const existing = await loadAllEnabledFormulas(client);
-  const result = validateFormula({ candidate: after, existingFormulas: existing });
+  // Preload the target object's field kinds so save-time validation can reject a
+  // string comparison against a field type that can never hold a string. The
+  // resolver is optional — absent (or a client without it) degrades to no kind
+  // check, keeping the save path working without metadata.
+  const targetObjectFieldKinds = after.targetObject
+    ? await client.fieldKinds?.(after.targetObject)
+    : undefined;
+  const result = validateFormula({
+    candidate: after,
+    existingFormulas: existing,
+    targetObjectFieldKinds,
+  });
 
   if (!result.valid) {
     // Post-save rejection: disable + record the error (the front component

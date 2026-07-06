@@ -44,6 +44,62 @@ describe('validateExpression', () => {
     expect(result).toContain('Dependency cycle');
   });
 
+  it('accepts a SELECT field string comparison via the optional kinds param', () => {
+    expect(
+      validateExpression(
+        'IF(stage = "QUALIFIED", 1, 0)',
+        'opportunity',
+        'formulaScore',
+        [],
+        new Map([['stage', 'SELECT']]),
+      ),
+    ).toBeNull();
+  });
+
+  it('accepts a TEXT field string comparison', () => {
+    expect(
+      validateExpression(
+        'IF(tier = "gold", 1, 0)',
+        'opportunity',
+        'formulaScore',
+        [],
+        new Map([['tier', 'TEXT']]),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects a NUMBER field string comparison with the exact message', () => {
+    expect(
+      validateExpression(
+        'IF(amount = "big", 1, 0)',
+        'opportunity',
+        'formulaScore',
+        [],
+        new Map([['amount', 'NUMBER']]),
+      ),
+    ).toBe(
+      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
+    );
+  });
+
+  it('is null when the kinds map is omitted (backward compatible)', () => {
+    expect(
+      validateExpression('IF(amount = "big", 1, 0)', 'opportunity', 'formulaScore', []),
+    ).toBeNull();
+  });
+
+  it('passes a cross-record string comparison', () => {
+    expect(
+      validateExpression(
+        `IF([company:${COMPANY_ID}:name] = "Acme", 1, 0)`,
+        'opportunity',
+        'formulaScore',
+        [],
+        new Map([['amount', 'NUMBER']]),
+      ),
+    ).toBeNull();
+  });
+
   it('does not report a cycle for same-named fields with no dependency loop', () => {
     const definitions: ValidatableDefinition[] = [
       {

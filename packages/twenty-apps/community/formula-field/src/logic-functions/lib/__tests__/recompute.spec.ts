@@ -151,6 +151,117 @@ describe('recomputeForRecord', () => {
   });
 });
 
+describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+  });
+
+  it('computes the then-branch when a SELECT field equals the string literal', async () => {
+    client.setFieldKinds('opportunity', {
+      stage: 'SELECT',
+      branchA: 'NUMBER',
+      branchB: 'NUMBER',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', stage: 'QUALIFIED', branchA: 1, branchB: 2, formulaScore: null },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'IF(stage = "QUALIFIED", branchA, branchB)' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toBe(1);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(1);
+  });
+
+  it('computes the else-branch when a SELECT field differs from the literal', async () => {
+    client.setFieldKinds('opportunity', {
+      stage: 'SELECT',
+      branchA: 'NUMBER',
+      branchB: 'NUMBER',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', stage: 'NEW', branchA: 1, branchB: 2, formulaScore: null },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'IF(stage = "QUALIFIED", branchA, branchB)' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toBe(2);
+  });
+
+  it('null-propagates (no write) when the compared SELECT field is null', async () => {
+    client.setFieldKinds('opportunity', {
+      stage: 'SELECT',
+      branchA: 'NUMBER',
+      branchB: 'NUMBER',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', stage: null, branchA: 1, branchB: 2, formulaScore: null },
+    ]);
+    const before = client.mutations;
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'IF(stage = "QUALIFIED", branchA, branchB)' }),
+      targetRecordId: 'o1',
+    });
+
+    // null stage -> null string operand -> null IF -> null result. Stored value
+    // is already null, so no write (no-op suppression path).
+    expect(outcome.value).toBeNull();
+    expect(outcome.changed).toBe(false);
+    expect(client.mutations).toBe(before);
+  });
+
+  it('compares against a TEXT field', async () => {
+    client.setFieldKinds('opportunity', {
+      tier: 'TEXT',
+      branchA: 'NUMBER',
+      branchB: 'NUMBER',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', tier: 'gold', branchA: 10, branchB: 20, formulaScore: null },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'IF(tier = "gold", branchA, branchB)' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toBe(10);
+  });
+
+  it('resolves a cross-record string comparison', async () => {
+    const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    client.setFieldKinds('opportunity', { branchA: 'NUMBER', branchB: 'NUMBER' });
+    client.setFieldKinds('company', { name: 'TEXT' });
+    client.seed('opportunity', [
+      { id: 'o1', branchA: 10, branchB: 20, formulaScore: null },
+    ]);
+    client.seed('company', [{ id: companyId, name: 'Acme' }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({
+        expression: `IF([company:${companyId}:name] = "Acme", branchA, branchB)`,
+      }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toBe(10);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(10);
+  });
+});
+
 describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
   let client: FakeClient;
 

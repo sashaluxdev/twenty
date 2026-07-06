@@ -1,7 +1,11 @@
 import { compileFormula } from 'src/engine';
 import { type FormulaDependencies, usesToday } from 'src/engine/dependencies';
 import { FormulaError, isFormulaError } from 'src/engine/errors';
-import { evaluate, type VariableResolver } from 'src/engine/evaluator';
+import {
+  evaluate,
+  type RawVariableResolver,
+  type VariableResolver,
+} from 'src/engine/evaluator';
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
 import { currentEpochDay } from 'src/logic-functions/lib/date-serial';
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
@@ -190,6 +194,32 @@ const buildResolver = (
   };
 };
 
+// Raw (untyped) resolver for string-mode = / != comparisons. Same navigation as
+// buildResolver — same-record navigatePath, cross-record map lookup — but WITHOUT
+// coerceToNumber: a value is kept only when it is actually a string, so a string
+// comparison matches on the field's raw string (anything else -> null, which
+// null-propagates the IF). A missing cross record -> null (silent-null parity).
+const buildRawResolver = (
+  sameRecord: Record<string, unknown>,
+  crossRecords: Map<string, Record<string, unknown> | null>,
+): RawVariableResolver => {
+  return (reference) => {
+    if (reference.kind === 'same') {
+      const raw = navigatePath(sameRecord, reference.path);
+      return typeof raw === 'string' ? raw : null;
+    }
+
+    const record = crossRecords.get(
+      crossKey(reference.ref.object, reference.ref.recordId),
+    );
+    if (record === undefined || record === null) {
+      return null;
+    }
+    const raw = navigatePath(record, reference.ref.fieldPath);
+    return typeof raw === 'string' ? raw : null;
+  };
+};
+
 const valuesEqual = (a: number | null, b: number | null): boolean => {
   if (a === null || b === null) {
     return a === b;
@@ -301,7 +331,11 @@ export const computeFormulaValueForRecord = async ({
     const value = evaluate(
       compiled.ast,
       buildResolver(sameRecord, crossRecords),
-      { maxDepth: MAX_EVAL_DEPTH, todayEpochDay: currentEpochDay() },
+      {
+        maxDepth: MAX_EVAL_DEPTH,
+        todayEpochDay: currentEpochDay(),
+        resolveRaw: buildRawResolver(sameRecord, crossRecords),
+      },
     );
     return { value, sameRecord, error: null };
   } catch (error) {

@@ -133,6 +133,99 @@ export const usesToday = (node: AstNode): boolean => {
   }
 };
 
+// The refs that appear as the non-literal operand of a STRING-MODE comparison
+// (one where either operand is a string literal — the parser confines string
+// literals to = / != operands). These are the fields whose runtime value is
+// compared as a string, so save-time validation can reject a comparison against
+// a field kind that can never hold a string (only SELECT / TEXT are supported).
+export type StringComparisonRefs = {
+  sameRecordPaths: string[];
+  crossRefs: CrossRefValue[];
+};
+
+// A direct field / cross-record operand of a string comparison contributes a
+// kind constraint; anything else (a string literal, a nested arithmetic
+// expression, another IF) resolves to null in string mode at runtime, so it
+// carries no constraint and is skipped.
+const collectStringOperand = (
+  node: AstNode,
+  sameRecordPaths: Set<string>,
+  crossRefs: Map<string, CrossRefValue>,
+): void => {
+  if (node.type === 'field') {
+    sameRecordPaths.add(node.path);
+    return;
+  }
+  if (node.type === 'crossref') {
+    const ref = node.ref;
+    const key = `${ref.object}:${ref.recordId}:${ref.fieldPath}`;
+    if (!crossRefs.has(key)) {
+      crossRefs.set(key, ref);
+    }
+  }
+};
+
+const walkStringComparisons = (
+  node: AstNode,
+  sameRecordPaths: Set<string>,
+  crossRefs: Map<string, CrossRefValue>,
+): void => {
+  switch (node.type) {
+    case 'number':
+    case 'string':
+    case 'today':
+    case 'field':
+    case 'crossref':
+      return;
+
+    case 'unary':
+      walkStringComparisons(node.operand, sameRecordPaths, crossRefs);
+      return;
+
+    case 'binary':
+      walkStringComparisons(node.left, sameRecordPaths, crossRefs);
+      walkStringComparisons(node.right, sameRecordPaths, crossRefs);
+      return;
+
+    case 'comparison':
+      // String mode iff either operand is a string literal — collect the
+      // non-literal operand(s) that are a direct field / crossref.
+      if (node.left.type === 'string' || node.right.type === 'string') {
+        collectStringOperand(node.left, sameRecordPaths, crossRefs);
+        collectStringOperand(node.right, sameRecordPaths, crossRefs);
+      }
+      // Recurse regardless, so a string comparison nested inside an operand's
+      // sub-IF is still reached.
+      walkStringComparisons(node.left, sameRecordPaths, crossRefs);
+      walkStringComparisons(node.right, sameRecordPaths, crossRefs);
+      return;
+
+    case 'if':
+      walkStringComparisons(node.condition, sameRecordPaths, crossRefs);
+      walkStringComparisons(node.then, sameRecordPaths, crossRefs);
+      walkStringComparisons(node.else, sameRecordPaths, crossRefs);
+      return;
+  }
+};
+
+export const collectStringComparisonRefs = (
+  node: AstNode,
+): StringComparisonRefs => {
+  const sameRecordPaths = new Set<string>();
+  const crossRefs = new Map<string, CrossRefValue>();
+
+  walkStringComparisons(node, sameRecordPaths, crossRefs);
+
+  return {
+    sameRecordPaths: Array.from(sameRecordPaths).sort(),
+    crossRefs: Array.from(crossRefs.values()).sort((a, b) =>
+      `${a.object}:${a.recordId}:${a.fieldPath}`.localeCompare(
+        `${b.object}:${b.recordId}:${b.fieldPath}`,
+      ),
+    ),
+  };
+};
+
 export const extractDependenciesFromAst = (
   node: AstNode,
 ): FormulaDependencies => {
