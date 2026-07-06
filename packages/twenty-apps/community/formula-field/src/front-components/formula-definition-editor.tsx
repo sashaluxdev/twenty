@@ -5,6 +5,7 @@ import { defineFrontComponent } from 'twenty-sdk/define';
 import { useRecordId } from 'twenty-sdk/front-component';
 
 import {
+  collectStringComparisonRefs,
   detectCycle,
   extractDependenciesFromAst,
   type FormulaTarget,
@@ -19,7 +20,10 @@ import {
 } from 'src/front-components/lib/delete-definition-completely';
 import { FieldSettingsEditor } from 'src/front-components/lib/field-settings-editor';
 import { formatRelativePast } from 'src/front-components/lib/format-relative-past';
-import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
+import {
+  FormulaFieldInput,
+  useObjectFields,
+} from 'src/front-components/lib/formula-field-input';
 import {
   refreshStaleTodayFormulas,
   type RefreshThrottleState,
@@ -91,14 +95,31 @@ const validate = (
   candidate: Definition,
   expression: string,
   all: Definition[],
+  // Host field kinds (name -> metadata type). When present, a string comparison
+  // against a same-record field that can't hold a string is rejected inline —
+  // parity with the server save-time check and formula-editor.tsx. Omitted or a
+  // field absent from the map -> that check is skipped (backward compatible).
+  fieldKinds?: Map<string, string>,
 ): string | null => {
+  let ast;
   let dependencies;
   try {
-    dependencies = extractDependenciesFromAst(parse(expression));
+    ast = parse(expression);
+    dependencies = extractDependenciesFromAst(ast);
   } catch (error) {
     return isFormulaError(error)
       ? `${error.code}: ${error.message}`
       : String(error);
+  }
+
+  if (fieldKinds) {
+    for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
+      const rootField = path.split('.')[0];
+      const kind = fieldKinds.get(rootField);
+      if (kind !== undefined && kind !== 'SELECT' && kind !== 'TEXT') {
+        return `String comparison against "${rootField}" is not supported (field type ${kind}; only SELECT and TEXT fields)`;
+      }
+    }
   }
 
   const others: FormulaTarget[] = all
@@ -297,6 +318,15 @@ const FormulaDefinitionEditor = () => {
   // render is enough (unlike formula-editor.tsx's memoized row list).
   const [, setRefreshTick] = useState(0);
 
+  // Target object's field kinds (name -> metadata type), so pre-save validation
+  // rejects a string comparison against a field that can't hold a string —
+  // shown inline before Save, matching the server's save-time check.
+  const targetFields = useObjectFields(definition?.targetObject);
+  const targetFieldKinds = useMemo(
+    () => new Map(targetFields.map((field) => [field.name, field.type])),
+    [targetFields],
+  );
+
   const load = useCallback(async () => {
     if (!recordId) return;
     const client = new CoreApiClient();
@@ -397,7 +427,7 @@ const FormulaDefinitionEditor = () => {
 
   const save = useCallback(async () => {
     if (!definition) return;
-    const error = validate(definition, draft, allDefinitions);
+    const error = validate(definition, draft, allDefinitions, targetFieldKinds);
     if (error) {
       setDefinition({ ...definition, lastError: error });
       return;
@@ -421,11 +451,14 @@ const FormulaDefinitionEditor = () => {
       setSaving(false);
       setTimeout(load, 1500);
     }
-  }, [definition, draft, allDefinitions, load]);
+  }, [definition, draft, allDefinitions, targetFieldKinds, load]);
 
   const liveError = useMemo(
-    () => (definition ? validate(definition, draft, allDefinitions) : null),
-    [definition, draft, allDefinitions],
+    () =>
+      definition
+        ? validate(definition, draft, allDefinitions, targetFieldKinds)
+        : null,
+    [definition, draft, allDefinitions, targetFieldKinds],
   );
 
   if (deleted) {

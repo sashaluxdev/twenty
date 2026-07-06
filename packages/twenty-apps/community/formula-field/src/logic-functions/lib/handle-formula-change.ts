@@ -86,9 +86,16 @@ export const handleFormulaChange = async ({
   // string comparison against a field type that can never hold a string. The
   // resolver is optional — absent (or a client without it) degrades to no kind
   // check, keeping the save path working without metadata.
-  const targetObjectFieldKinds = after.targetObject
-    ? await client.fieldKinds?.(after.targetObject)
-    : undefined;
+  // A rejecting fieldKinds impl must not abort save handling before cycle
+  // detection — degrade to no kind check (same posture as a client without it).
+  let targetObjectFieldKinds: Map<string, string> | undefined;
+  try {
+    targetObjectFieldKinds = after.targetObject
+      ? await client.fieldKinds?.(after.targetObject)
+      : undefined;
+  } catch {
+    targetObjectFieldKinds = undefined;
+  }
   const result = validateFormula({
     candidate: after,
     existingFormulas: existing,

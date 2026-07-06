@@ -23,6 +23,9 @@ export type FieldOption = {
   type: string;
   // Text to insert when picked, when it differs from the API name (functions).
   insertText?: string;
+  // SELECT/MULTI_SELECT option set — drives quoted value suggestions after a
+  // `=` / `!=` comparison against this field.
+  options?: Array<{ value: string; label: string }>;
 };
 
 // Static keyword suggestions alongside the metadata-driven field options. IF
@@ -43,19 +46,22 @@ const FUNCTION_SUGGESTIONS: FieldOption[] = [
   },
 ];
 
-// Field types whose values the engine can coerce to a number (see coercion.ts).
-// DATE / DATE_TIME parse to epoch-days (Excel serial-date model, ADR 0011), so
-// they are usable in arithmetic (e.g. `closeDate + 30`) and IF comparisons.
-const NUMERIC_FIELD_TYPES = new Set([
+// Field types worth suggesting. The numeric-coercible set (see coercion.ts;
+// DATE / DATE_TIME parse to epoch-days per the Excel serial model, ADR 0011, so
+// they work in arithmetic and IF comparisons) plus the string-comparable SELECT
+// and TEXT kinds — the ones that engine string comparisons (`= "..."`) target.
+const SUGGESTIBLE_FIELD_TYPES = new Set([
   'NUMBER',
   'NUMERIC',
   'CURRENCY',
   'BOOLEAN',
   'DATE',
   'DATE_TIME',
+  'SELECT',
+  'TEXT',
 ]);
 
-// Fetches the numeric-usable fields of an object (by nameSingular) via metadata.
+// Fetches the suggestible fields of an object (by nameSingular) via metadata.
 export const useObjectFields = (
   targetObject: string | undefined,
 ): FieldOption[] => {
@@ -83,6 +89,9 @@ export const useObjectFields = (
                       type: true,
                       isActive: true,
                       isSystem: true,
+                      // JSON scalar: a SELECT/MULTI_SELECT field's option set
+                      // (array of { value, label, color, ... }).
+                      options: true,
                     },
                   },
                 },
@@ -101,13 +110,23 @@ export const useObjectFields = (
             (node: any) =>
               node?.isActive &&
               !node?.isSystem &&
-              NUMERIC_FIELD_TYPES.has(node?.type),
+              SUGGESTIBLE_FIELD_TYPES.has(node?.type),
           )
-          .map((node: any) => ({
-            name: node.name as string,
-            label: (node.label as string) ?? node.name,
-            type: node.type as string,
-          }))
+          .map((node: any) => {
+            const rawOptions = Array.isArray(node.options) ? node.options : [];
+            const options = rawOptions
+              .filter((option: any) => typeof option?.value === 'string')
+              .map((option: any) => ({
+                value: option.value as string,
+                label: (option.label as string) ?? option.value,
+              }));
+            return {
+              name: node.name as string,
+              label: (node.label as string) ?? node.name,
+              type: node.type as string,
+              ...(options.length > 0 ? { options } : {}),
+            };
+          })
           .sort((a: FieldOption, b: FieldOption) =>
             a.label.localeCompare(b.label),
           );
@@ -147,9 +166,52 @@ const identifierBeforeCaret = (
   return { token: match[0], start: match.index! };
 };
 
+// Text-before-caret shape of a value comparison: `field = ` / `field != `
+// optionally trailed by a partial value (with or without an opening quote).
+// Group 1 is the compared field name; group 3 the partial (incl. any `"`).
+// Shared by computeSuggestions (to offer options) and computeInsertRange (to
+// replace the partial on accept) so both agree on where the partial starts.
+const COMPARISON_CONTEXT_RE =
+  /([A-Za-z_][A-Za-z0-9_]*)\s*(=|!=)\s*("?[^"]*)?$/;
+
+// SELECT-option suggestions when the caret sits after a `=` / `!=` comparison
+// against a SELECT field that carries options. Returns null when NOT in a
+// comparison context (so callers fall through to field completion), or an
+// (possibly empty) option list when in one — a comparison against a non-SELECT
+// or unknown field yields [] rather than field names, since a bare value token
+// is being typed, not an identifier.
+const computeOptionSuggestions = (
+  before: string,
+  fields: FieldOption[],
+): FieldOption[] | null => {
+  const match = before.match(COMPARISON_CONTEXT_RE);
+  if (!match) return null;
+  const fieldName = match[1];
+  const field = fields.find((candidate) => candidate.name === fieldName);
+  if (!field || field.type !== 'SELECT' || !field.options?.length) return [];
+  const rawPartial = match[3] ?? '';
+  const partial = (
+    rawPartial.startsWith('"') ? rawPartial.slice(1) : rawPartial
+  ).toLowerCase();
+  return field.options
+    .filter(
+      (option) =>
+        option.value.toLowerCase().includes(partial) ||
+        option.label.toLowerCase().includes(partial),
+    )
+    .slice(0, 8)
+    .map((option) => ({
+      name: option.value,
+      label: option.label,
+      type: 'OPTION',
+      insertText: `"${option.value}"`,
+    }));
+};
+
 // Pure suggestion computation (value + caret + fields -> ordered options).
-// Extracted from the component's useMemo so it can be unit-tested in isolation;
-// behavior is unchanged. Suppressed inside a [...] cross-record reference.
+// Extracted from the component's useMemo so it can be unit-tested in isolation.
+// Suppressed inside a [...] cross-record reference. A `=` / `!=` comparison
+// against a SELECT field takes precedence over bare-identifier completion.
 export const computeSuggestions = (
   value: string,
   caret: number,
@@ -157,6 +219,8 @@ export const computeSuggestions = (
 ): FieldOption[] => {
   const before = value.slice(0, caret);
   if (isInsideCrossRef(before)) return [];
+  const optionSuggestions = computeOptionSuggestions(before, fields);
+  if (optionSuggestions !== null) return optionSuggestions;
   const identifier = identifierBeforeCaret(before);
   if (!identifier || identifier.token.length < 1) return [];
   const query = identifier.token.toLowerCase();
@@ -175,6 +239,29 @@ export const computeSuggestions = (
       return aPrefix - bPrefix;
     })
     .slice(0, 8);
+};
+
+// Where an accepted suggestion is spliced in, and the text to splice. For an
+// OPTION suggestion the range starts at the comparison partial — INCLUDING an
+// already-typed opening quote — so accepting never doubles the quote; for a
+// field/function suggestion it starts at the identifier being typed. Pure and
+// exported so the replace-range rule is directly testable.
+export const computeInsertRange = (
+  value: string,
+  caret: number,
+  field: FieldOption,
+): { start: number; insertText: string } => {
+  const before = value.slice(0, caret);
+  const insertText = field.insertText ?? field.name;
+  if (field.type === 'OPTION') {
+    const match = before.match(COMPARISON_CONTEXT_RE);
+    if (match) {
+      const partial = match[3] ?? '';
+      return { start: before.length - partial.length, insertText };
+    }
+  }
+  const identifier = identifierBeforeCaret(before);
+  return { start: identifier ? identifier.start : caret, insertText };
 };
 
 type FormulaFieldInputProps = {
@@ -236,10 +323,7 @@ export const FormulaFieldInput = ({
 
   const insert = useCallback(
     (field: FieldOption) => {
-      const before = value.slice(0, caret);
-      const identifier = identifierBeforeCaret(before);
-      const start = identifier ? identifier.start : caret;
-      const insertText = field.insertText ?? field.name;
+      const { start, insertText } = computeInsertRange(value, caret, field);
       const next = value.slice(0, start) + insertText + value.slice(caret);
       onChange(next);
       setPendingCaret(start + insertText.length);

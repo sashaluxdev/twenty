@@ -9,7 +9,10 @@ import {
   formatRelativePast,
   isStaleTimestamp,
 } from 'src/front-components/lib/format-relative-past';
-import { FormulaFieldInput } from 'src/front-components/lib/formula-field-input';
+import {
+  FormulaFieldInput,
+  useObjectFields,
+} from 'src/front-components/lib/formula-field-input';
 import {
   refreshStaleTodayFormulas,
   type RefreshThrottleState,
@@ -219,6 +222,17 @@ const FormulaEditor = () => {
     startX: number;
     startY: number;
   } | null>(null);
+
+  // Host object's field kinds (name -> metadata type), so pre-save validation
+  // rejects a string comparison against a field that can't hold a string —
+  // parity with the server's save-time check, shown inline before Save. Every
+  // rendered definition targets the same host object, so one lookup covers all.
+  const hostObject = definitions[0]?.targetObject;
+  const hostFields = useObjectFields(hostObject);
+  const hostFieldKinds = useMemo(
+    () => new Map(hostFields.map((field) => [field.name, field.type])),
+    [hostFields],
+  );
 
   const disarmSave = useCallback(() => {
     if (armTimer.current) {
@@ -529,6 +543,7 @@ const FormulaEditor = () => {
         definition.targetObject,
         definition.targetField,
         definitions,
+        hostFieldKinds,
       );
       if (error) {
         setDefinitions((prev) =>
@@ -563,7 +578,7 @@ const FormulaEditor = () => {
         setTimeout(load, 1500);
       }
     },
-    [drafts, definitions, load, armedSaveId, disarmSave],
+    [drafts, definitions, load, armedSaveId, disarmSave, hostFieldKinds],
   );
 
   const toggleOverride = useCallback(
@@ -683,6 +698,7 @@ const FormulaEditor = () => {
         definition.targetObject,
         definition.targetField,
         definitions,
+        hostFieldKinds,
       );
       const overrideEntry = overrides[definition.targetField];
       const isOverridden = overrideEntry?.active ?? false;
@@ -866,6 +882,7 @@ const FormulaEditor = () => {
     disarmSave,
     saveExpression,
     toggleOverride,
+    hostFieldKinds,
     // Not read directly — bumped by refreshStaleTodayFormulas' onStateChange
     // so this memo re-reads refreshStateRef.current.inFlight.
     refreshTick,
