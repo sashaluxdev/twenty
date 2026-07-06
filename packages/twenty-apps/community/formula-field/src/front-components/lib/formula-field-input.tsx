@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 
+import { caretFromDiff } from 'src/front-components/lib/caret-from-diff';
 import {
   DropdownOption,
   DropdownPanel,
@@ -146,6 +147,36 @@ const identifierBeforeCaret = (
   return { token: match[0], start: match.index! };
 };
 
+// Pure suggestion computation (value + caret + fields -> ordered options).
+// Extracted from the component's useMemo so it can be unit-tested in isolation;
+// behavior is unchanged. Suppressed inside a [...] cross-record reference.
+export const computeSuggestions = (
+  value: string,
+  caret: number,
+  fields: FieldOption[],
+): FieldOption[] => {
+  const before = value.slice(0, caret);
+  if (isInsideCrossRef(before)) return [];
+  const identifier = identifierBeforeCaret(before);
+  if (!identifier || identifier.token.length < 1) return [];
+  const query = identifier.token.toLowerCase();
+  const normalizedLabel = (label: string) =>
+    label.toLowerCase().replace(/\s+/g, '');
+  return [...FUNCTION_SUGGESTIONS, ...fields]
+    .filter(
+      (field) =>
+        field.name.toLowerCase().includes(query) ||
+        normalizedLabel(field.label).includes(query),
+    )
+    .sort((a, b) => {
+      // Prefix matches on the API name rank first.
+      const aPrefix = a.name.toLowerCase().startsWith(query) ? 0 : 1;
+      const bPrefix = b.name.toLowerCase().startsWith(query) ? 0 : 1;
+      return aPrefix - bPrefix;
+    })
+    .slice(0, 8);
+};
+
 type FormulaFieldInputProps = {
   value: string;
   onChange: (next: string) => void;
@@ -193,28 +224,10 @@ export const FormulaFieldInput = ({
     setPendingCaret(null);
   }, [pendingCaret, value]);
 
-  const suggestions = useMemo(() => {
-    const before = value.slice(0, caret);
-    if (isInsideCrossRef(before)) return [];
-    const identifier = identifierBeforeCaret(before);
-    if (!identifier || identifier.token.length < 1) return [];
-    const query = identifier.token.toLowerCase();
-    const normalizedLabel = (label: string) =>
-      label.toLowerCase().replace(/\s+/g, '');
-    return [...FUNCTION_SUGGESTIONS, ...fields]
-      .filter(
-        (field) =>
-          field.name.toLowerCase().includes(query) ||
-          normalizedLabel(field.label).includes(query),
-      )
-      .sort((a, b) => {
-        // Prefix matches on the API name rank first.
-        const aPrefix = a.name.toLowerCase().startsWith(query) ? 0 : 1;
-        const bPrefix = b.name.toLowerCase().startsWith(query) ? 0 : 1;
-        return aPrefix - bPrefix;
-      })
-      .slice(0, 8);
-  }, [value, caret, fields]);
+  const suggestions = useMemo(
+    () => computeSuggestions(value, caret, fields),
+    [value, caret, fields],
+  );
 
   useEffect(() => {
     setActiveIndex(0);
@@ -235,6 +248,10 @@ export const FormulaFieldInput = ({
     [value, caret, onChange],
   );
 
+  // Click/keyup caret sync. selectionStart is unavailable in the remote-dom
+  // sandbox, so caret-only moves (arrow keys, clicks) stay invisible here and
+  // fall back to end-of-text — accepted limitation: the next keystroke recovers
+  // the true caret via caretFromDiff in onChange.
   const syncCaret = useCallback(() => {
     if (inputRef.current) {
       setCaret(inputRef.current.selectionStart ?? value.length);
@@ -269,8 +286,15 @@ export const FormulaFieldInput = ({
     onChange: (
       event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
     ) => {
-      onChange(event.target.value);
-      setCaret(event.target.selectionStart ?? event.target.value.length);
+      const nextValue = event.target.value;
+      onChange(nextValue);
+      // remote-dom never mirrors host selectionStart into the app worker, so it
+      // is almost always undefined here; deriving the caret from the value diff
+      // is the reliable signal that makes mid-string autocomplete work.
+      // selectionStart stays as an opportunistic first choice so native hosts
+      // keep exact-click behavior.
+      const diffCaret = caretFromDiff(value, nextValue);
+      setCaret(event.target.selectionStart ?? diffCaret);
     },
     onKeyDown: handleKeyDown,
     onKeyUp: syncCaret,
