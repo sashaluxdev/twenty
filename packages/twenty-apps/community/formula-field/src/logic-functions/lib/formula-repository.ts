@@ -1,4 +1,6 @@
+import { compileFormula } from 'src/engine';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
+import { isMirrorDefinition } from 'src/logic-functions/lib/mirror-kinds';
 import {
   type FormulaClient,
   type FormulaDefinitionRecord,
@@ -20,6 +22,7 @@ const FORMULA_FIELDS = {
   expression: true,
   enabled: true,
   lastValue: true,
+  lastValueText: true,
   lastError: true,
   lastEvaluatedAt: true,
   status: true,
@@ -154,6 +157,8 @@ export const loadTrashedFormulas = async (
 
 export type BookkeepingUpdate = {
   lastValue?: number | null;
+  // Mirror diagnostic value (JSON-stringified, truncated) — see FormulaDefinition.
+  lastValueText?: string | null;
   lastError?: string | null;
   lastEvaluatedAt?: string | null;
   // Set to persist the parsed dependency index (JSON).
@@ -204,16 +209,56 @@ export const updateFormulaBookkeeping = async (
 // only these formulas, and only once per hour (sweep cadence), so
 // `lastEvaluatedAt` becomes truthful ("last evaluation") for TODAY formulas
 // while every other formula keeps the original zero-write guarantee.
+// JSON-stringifies a mirror's raw value for the lastValueText heartbeat,
+// truncated to 500 chars (display/diagnostic only). A nullish value -> null text.
+const MIRROR_VALUE_TEXT_MAX = 500;
+const mirrorValueText = (rawValue: unknown): string | null =>
+  rawValue === null || rawValue === undefined
+    ? null
+    : JSON.stringify(rawValue).slice(0, MIRROR_VALUE_TEXT_MAX);
+
+// True when the definition is a mirror (bare ref + non-engine target kind), so
+// the heartbeat records lastValueText instead of the NUMBER-typed lastValue.
+const isMirrorHeartbeat = (formula: FormulaDefinitionRecord): boolean => {
+  try {
+    return isMirrorDefinition(
+      compileFormula(formula.expression ?? '').ast,
+      formula.targetFieldType,
+    );
+  } catch {
+    return false;
+  }
+};
+
 export const recordEvaluationHeartbeat = async (
   client: FormulaClient,
   formula: FormulaDefinitionRecord,
-  outcome: { value: number | null; error: string | null },
+  outcome: { value: number | null; error: string | null; rawValue?: unknown },
   expressionUsesToday: boolean,
 ): Promise<void> => {
-  const nextValue = outcome.value ?? null;
   const nextError = outcome.error ?? '';
-  const valueChanged = (formula.lastValue ?? null) !== nextValue;
   const errorChanged = (formula.lastError ?? '') !== nextError;
+
+  // Mirror formulas store their diagnostic value in lastValueText (lastValue is
+  // NUMBER-typed and stays null). Write-avoidance intact: text unchanged AND
+  // error unchanged -> zero writes. Mirrors never use TODAY(), so the ADR 0015
+  // stale carve-out below does not apply to them.
+  if (isMirrorHeartbeat(formula)) {
+    const nextValueText = mirrorValueText(outcome.rawValue);
+    const textChanged = (formula.lastValueText ?? null) !== nextValueText;
+    if (!textChanged && !errorChanged) {
+      return;
+    }
+    await updateFormulaBookkeeping(client, formula.id, {
+      lastValueText: nextValueText,
+      lastError: nextError,
+      lastEvaluatedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  const nextValue = outcome.value ?? null;
+  const valueChanged = (formula.lastValue ?? null) !== nextValue;
   if (!valueChanged && !errorChanged) {
     if (expressionUsesToday) {
       const staleMs = 60 * 60 * 1000;

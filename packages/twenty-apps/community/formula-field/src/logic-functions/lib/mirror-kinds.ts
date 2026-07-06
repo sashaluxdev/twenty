@@ -1,5 +1,8 @@
 import { type AstNode, bareReferenceOf } from 'src/engine';
-import { selectionEntryForFieldKind } from 'src/logic-functions/lib/value-io';
+import {
+  ENGINE_FAMILY,
+  selectionEntryForFieldKind,
+} from 'src/logic-functions/lib/value-io';
 
 // Mirror mode (design 2026-07-06): a definition whose expression is a single
 // bare whole-field reference, written onto a target field OUTSIDE the engine's
@@ -25,15 +28,11 @@ export const MIRRORABLE_KINDS: ReadonlySet<string> = new Set([
   'RAW_JSON',
 ]);
 
-// The engine's numeric value family (value-io's TargetFieldKind, kept in lockstep
-// with it). A bare ref onto one of these keeps today's engine path unchanged —
-// it is NOT mirror mode.
-export const ENGINE_FAMILY_KINDS: ReadonlySet<string> = new Set([
-  'NUMBER',
-  'CURRENCY',
-  'DATE',
-  'DATE_TIME',
-]);
+// The engine's numeric value family, DERIVED from value-io's ENGINE_FAMILY (the
+// single source of truth — FM Task 1 rider) so the two can never drift. A bare
+// ref onto one of these keeps today's engine path unchanged — it is NOT mirror
+// mode.
+export const ENGINE_FAMILY_KINDS: ReadonlySet<string> = new Set(ENGINE_FAMILY);
 
 export const isMirrorTargetKind = (kind: string): boolean =>
   MIRRORABLE_KINDS.has(kind);

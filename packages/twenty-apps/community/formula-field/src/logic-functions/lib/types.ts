@@ -43,6 +43,11 @@ export type FormulaDefinitionRecord = {
   expression?: string | null;
   enabled?: boolean | null;
   lastValue?: number | null;
+  // Mirror heartbeat (design 2026-07-06): JSON-stringified, 500-char-truncated
+  // last mirrored raw value. Non-engine (mirror) targets store their diagnostic
+  // last value here since lastValue is NUMBER-typed; lastValue stays null for a
+  // mirror. Display/heartbeat only — never read back for computation.
+  lastValueText?: string | null;
   lastError?: string | null;
   // ISO timestamp of the last evaluation (ADR 0015: for TODAY-using formulas
   // this now means "last evaluation", not just "last value change" — see
@@ -55,8 +60,13 @@ export type RecomputeOutcome = {
   targetRecordId: string;
   // Whether a write to the value field actually happened.
   changed: boolean;
-  // The computed value (null when null-propagation cleared it).
+  // The computed value (null when null-propagation cleared it). Always null for
+  // a mirror passthrough — its raw value rides `rawValue` instead.
   value: number | null;
+  // Mirror passthrough only: the source field's raw value written verbatim
+  // (scalar, array or composite). Undefined for engine-family formulas. Carried
+  // so the column-level heartbeat can derive lastValueText from a sample record.
+  rawValue?: unknown;
   // Non-null when evaluation failed; the value field is left unchanged.
   error: string | null;
   // True when the record was skipped because the user manually overrode it.

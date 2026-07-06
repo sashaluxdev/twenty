@@ -16,16 +16,26 @@ import {
 // normalizeStoredValue) so stored and computed values always compare in one
 // representation.
 
-export type TargetFieldKind = 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME';
+// The engine's numeric value family — the SINGLE source of truth (FM Task 1
+// rider). targetFieldKind derives its family membership from this array, and
+// mirror-kinds' ENGINE_FAMILY_KINDS is built from it, so the two can never drift
+// silently (a drift-guard test asserts they stay equal). A bare ref onto one of
+// these keeps today's engine path unchanged — it is NOT mirror mode.
+export const ENGINE_FAMILY = [
+  'NUMBER',
+  'CURRENCY',
+  'DATE',
+  'DATE_TIME',
+] as const;
+
+export type TargetFieldKind = (typeof ENGINE_FAMILY)[number];
 
 export const targetFieldKind = (
   targetFieldType: string | null | undefined,
-): TargetFieldKind => {
-  if (targetFieldType === 'CURRENCY') return 'CURRENCY';
-  if (targetFieldType === 'DATE') return 'DATE';
-  if (targetFieldType === 'DATE_TIME') return 'DATE_TIME';
-  return 'NUMBER';
-};
+): TargetFieldKind =>
+  (ENGINE_FAMILY as readonly string[]).includes(targetFieldType ?? '')
+    ? (targetFieldType as TargetFieldKind)
+    : 'NUMBER';
 
 // Selection entry for a field of the given metadata type: composite fields
 // need an explicit sub-selection, scalars use `true`. Used for the value field

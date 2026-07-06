@@ -23,6 +23,7 @@ export const FORMULA_DEFINITION_FIELDS = {
   enabled: '64790652-18a3-47d9-a1ac-8883d0830a7a',
   lastEvaluatedAt: '2ec77311-1738-44f0-8179-ba8f11557282',
   lastValue: 'c84ad4eb-709b-4897-aec4-bfcfb9177ff4',
+  lastValueText: 'c24bd9f9-9d3e-4fb1-b799-d501bec3f4af',
   lastError: 'b4d168a8-bb76-4c32-b431-be862934dcbd',
   status: 'e3e1fcbf-c19d-4d24-a7cd-b7b1c7ad3c70',
   statusReason: '0e500f2b-30c2-489a-aee6-0d717e1e0418',
@@ -129,6 +130,19 @@ export default defineObject({
       label: 'Last value',
       description: 'Most recently computed value (diagnostic).',
       icon: 'IconNumber',
+      isUIEditable: false,
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.lastValueText,
+      type: FieldType.TEXT,
+      name: 'lastValueText',
+      label: 'Last value text',
+      description:
+        'Most recently mirrored raw value (JSON-stringified, truncated to 500 ' +
+        'chars) for non-engine mirror targets — lastValue is NUMBER-typed and ' +
+        'stays null for mirrors. Diagnostic only; never read back for ' +
+        'computation. System-managed.',
+      icon: 'IconAbc',
       isUIEditable: false,
     },
     {

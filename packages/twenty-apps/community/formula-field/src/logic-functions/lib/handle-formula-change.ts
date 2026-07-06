@@ -17,6 +17,7 @@ const BOOKKEEPING_FIELDS = new Set([
   'dependencies',
   'lastEvaluatedAt',
   'lastValue',
+  'lastValueText',
   'lastError',
   'status',
   'statusReason',

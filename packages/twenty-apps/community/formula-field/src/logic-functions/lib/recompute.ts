@@ -1,6 +1,11 @@
-import { compileFormula } from 'src/engine';
+import { type BareReference, bareReferenceOf, compileFormula } from 'src/engine';
 import { type FormulaDependencies, usesToday } from 'src/engine/dependencies';
 import { FormulaError, isFormulaError } from 'src/engine/errors';
+import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
+import {
+  isMirrorDefinition,
+  selectionEntryForMirrorKind,
+} from 'src/logic-functions/lib/mirror-kinds';
 import {
   evaluate,
   type RawVariableResolver,
@@ -349,6 +354,145 @@ export const computeFormulaValueForRecord = async ({
   }
 };
 
+// Mirror-mode compute (design 2026-07-06): resolves the definition's single bare
+// whole-field ref to the source field's RAW value (scalar/array/composite),
+// bypassing the engine's numeric domain entirely. Also returns the target record
+// (`sameRecord`) so the caller can read the current target value for the no-op
+// check from the same fetch. Shared by recompute and by FM Task 3's mirror
+// override detection.
+export type ComputeMirrorResult = {
+  rawValue: unknown;
+  error: string | null;
+  sameRecord: Record<string, unknown> | null;
+};
+
+export const computeMirrorValueForRecord = async ({
+  client,
+  formula,
+  targetRecordId,
+  prefetchedRecord,
+}: Omit<RecomputeArgs, 'overriddenRecordIds'>): Promise<ComputeMirrorResult> => {
+  const targetObject = formula.targetObject ?? '';
+  const targetField = formula.targetField ?? '';
+  const targetKind = formula.targetFieldType ?? '';
+
+  let bare: BareReference | null;
+  try {
+    bare = bareReferenceOf(compileFormula(formula.expression ?? '').ast);
+  } catch (error) {
+    return {
+      rawValue: null,
+      sameRecord: null,
+      error: isFormulaError(error) ? error.message : String(error),
+    };
+  }
+  if (bare === null) {
+    return {
+      rawValue: null,
+      sameRecord: null,
+      error: 'Mirror expression is not a bare field reference',
+    };
+  }
+
+  const sourceObject = bare.kind === 'same' ? targetObject : bare.ref.object;
+  const sourceField = bare.kind === 'same' ? bare.field : bare.ref.fieldPath;
+
+  // Resolve the source field's kind to pick its composite sub-selection. An
+  // unresolvable kind fails VISIBLY (null + error naming the field) rather than
+  // silently selecting a composite as a scalar — which the server answers with a
+  // null (no error), the currency-input trap this feature must not reintroduce.
+  const sourceKind = (await resolveFieldKinds(client, sourceObject)).get(
+    sourceField,
+  );
+  if (sourceKind === undefined) {
+    return {
+      rawValue: null,
+      sameRecord: null,
+      error: `Cannot resolve field kind for ${sourceObject}.${sourceField}`,
+    };
+  }
+
+  // The target record always carries the current target value (for the no-op
+  // check); a SAME-record mirror's source lives on it too, so select both.
+  const targetSelectionFields =
+    bare.kind === 'same' ? [sourceField, targetField] : [targetField];
+  const targetOverrides: Record<string, unknown> = {
+    [targetField]: selectionEntryForMirrorKind(targetKind),
+  };
+  if (bare.kind === 'same') {
+    targetOverrides[sourceField] = selectionEntryForMirrorKind(sourceKind);
+  }
+
+  let sameRecord = prefetchedRecord ?? null;
+  const needsFetch =
+    sameRecord === null ||
+    targetSelectionFields.some((field) => !(field in sameRecord!));
+  if (needsFetch) {
+    try {
+      sameRecord = await fetchRecord(
+        client,
+        targetObject,
+        targetRecordId,
+        targetSelectionFields,
+        targetOverrides,
+      );
+    } catch (error) {
+      return {
+        rawValue: null,
+        sameRecord: null,
+        error: `Failed to load ${targetObject} ${targetRecordId}: ${
+          (error as Error).message
+        }`,
+      };
+    }
+  }
+  if (sameRecord === null) {
+    return {
+      rawValue: null,
+      sameRecord: null,
+      error: `Record ${targetRecordId} not found`,
+    };
+  }
+
+  // Same-record mirror: the source value is on the target record itself.
+  if (bare.kind === 'same') {
+    return {
+      rawValue: navigatePath(sameRecord, sourceField) ?? null,
+      sameRecord,
+      error: null,
+    };
+  }
+
+  // Cross-record mirror: fetch the referenced source record. A missing source
+  // record mirrors the engine's silent-null parity — write null, no error.
+  let sourceRecord: Record<string, unknown> | null;
+  try {
+    sourceRecord = await fetchRecord(
+      client,
+      sourceObject,
+      bare.ref.recordId,
+      [sourceField],
+      { [sourceField]: selectionEntryForMirrorKind(sourceKind) },
+    );
+  } catch (error) {
+    return {
+      rawValue: null,
+      sameRecord,
+      error: `Failed to load ${sourceObject} ${bare.ref.recordId}: ${
+        (error as Error).message
+      }`,
+    };
+  }
+  if (sourceRecord === null) {
+    return { rawValue: null, sameRecord, error: null };
+  }
+  return {
+    rawValue: navigatePath(sourceRecord, sourceField) ?? null,
+    sameRecord,
+    error: null,
+  };
+};
+
 // Recomputes a single formula for a single target record. Idempotent and
 // write-avoidant: skips the mutation when the value is unchanged (this is the
 // recursion guard — our own write re-fires the trigger and converges here).
@@ -373,6 +517,63 @@ export const recomputeForRecord = async ({
   // Manual override: this record is pinned by the user — do not recompute it.
   if (overriddenRecordIds?.has(targetRecordId)) {
     return { ...base, overridden: true };
+  }
+
+  // Mirror mode: a bare whole-field ref onto a non-engine target kind performs a
+  // typed RAW passthrough — write the source value verbatim, bypassing
+  // normalizeComputedValue / normalizeStoredValue / buildTargetWriteData
+  // entirely. Engine-family formulas fall through to the unchanged path below.
+  let isMirror = false;
+  try {
+    isMirror = isMirrorDefinition(
+      compileFormula(formula.expression ?? '').ast,
+      formula.targetFieldType,
+    );
+  } catch {
+    // Unparseable expression is not a mirror; the engine path surfaces the error.
+    isMirror = false;
+  }
+
+  if (isMirror) {
+    const mirror = await computeMirrorValueForRecord({
+      client,
+      formula,
+      targetRecordId,
+      prefetchedRecord,
+    });
+    if (mirror.error !== null || mirror.sameRecord === null) {
+      return { ...base, error: mirror.error ?? 'Record not found' };
+    }
+
+    const currentRaw = navigatePath(mirror.sameRecord, targetField);
+    // No-op suppression / recursion guard: deep JSON equality of the current
+    // target value and the source value skips the write.
+    if (deepJsonEqual(currentRaw, mirror.rawValue)) {
+      return { ...base, changed: false, rawValue: mirror.rawValue };
+    }
+
+    const mirrorMutationName = `update${capitalize(targetObject)}`;
+    try {
+      await withRetry(() =>
+        client.mutation({
+          [mirrorMutationName]: {
+            __args: {
+              id: targetRecordId,
+              data: { [targetField]: mirror.rawValue },
+            },
+            id: true,
+          },
+        }),
+      );
+    } catch (error) {
+      return {
+        ...base,
+        rawValue: mirror.rawValue,
+        error: `Failed to write ${targetField}: ${(error as Error).message}`,
+      };
+    }
+
+    return { ...base, changed: true, rawValue: mirror.rawValue };
   }
 
   const computed = await computeFormulaValueForRecord({
@@ -500,12 +701,20 @@ export const recomputeAllRecords = async (
       outcomes.find((o) => !o.error && o.value !== null)?.value ??
       outcomes.find((o) => !o.error)?.value ??
       null;
+    // Mirror heartbeat: sample a representative raw value (the heartbeat itself
+    // detects mirror-ness and derives lastValueText). Undefined for engine
+    // formulas, which the heartbeat ignores in favour of `value`.
+    const sampleRawValue =
+      outcomes.find(
+        (o) => !o.error && o.rawValue !== null && o.rawValue !== undefined,
+      )?.rawValue ?? null;
     await recordEvaluationHeartbeat(
       client,
       formula,
       {
         value: sampleValue,
         error: firstError,
+        rawValue: sampleRawValue,
       },
       expressionUsesTodayOf(formula),
     );
