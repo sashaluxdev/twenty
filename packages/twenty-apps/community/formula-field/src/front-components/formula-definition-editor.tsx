@@ -24,6 +24,7 @@ import {
   refreshStaleTodayFormulas,
   type RefreshThrottleState,
 } from 'src/front-components/lib/refresh-stale-formulas';
+import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
 import {
@@ -361,7 +362,9 @@ const FormulaDefinitionEditor = () => {
       // (no viewed record) — the honest recomputeAllRecords refresh fixes
       // every record and advances lastEvaluatedAt, clearing the stale note.
       refreshStaleTodayFormulas({
-        client,
+        // Dynamic client: the refresh recomputes runtime-created value fields
+        // that aren't in the static genql type map, unlike this load()'s query.
+        client: createDynamicCoreClient(),
         definitions: [current],
         now: Date.now(),
         state: refreshStateRef.current,
