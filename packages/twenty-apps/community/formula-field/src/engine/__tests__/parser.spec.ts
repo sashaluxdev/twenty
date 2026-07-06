@@ -359,6 +359,22 @@ describe('parser string literals (comparison operands only)', () => {
     }
   });
 
+  it('rejects a bare string condition when no comparison operator follows', () => {
+    try {
+      parse('IF("a", 1, 2)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      expect((error as FormulaError).message).toBe(
+        'String literals are only allowed beside = or != inside an IF condition',
+      );
+      // Deliberate: the error points at the literal's opening quote (index 3),
+      // not at the token after it (the comma at index 6).
+      expect((error as FormulaError).position).toBe(3);
+    }
+  });
+
   it('rejects a parenthesised string operand inside an IF condition', () => {
     try {
       parse('IF(("a") = stage, 1, 0)');

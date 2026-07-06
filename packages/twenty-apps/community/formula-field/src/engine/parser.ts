@@ -349,6 +349,9 @@ class Parser {
   // chained comparison, rejected.
   private parseCondition(): AstNode {
     this.enter();
+    // A string operand is exactly one token, so if `left` comes back as a
+    // StringNode this peeked token IS the literal — kept for error positions.
+    const leftToken = this.peek();
     const left = this.parseConditionOperand();
 
     const operatorToken = this.peek();
@@ -356,9 +359,10 @@ class Parser {
 
     if (operator === undefined) {
       // Numeric condition (Excel truthiness): 0 = false, nonzero = true. A lone
-      // string here is not beside = / != (e.g. IF("a", 1, 2)), so it is illegal.
+      // string here is not beside = / != (e.g. IF("a", 1, 2)), so it is
+      // illegal, reported at the literal's opening quote.
       if (left.type === 'string') {
-        throw this.stringOutsideConditionError(operatorToken);
+        throw this.stringOutsideConditionError(leftToken);
       }
       this.leave();
       return left;
