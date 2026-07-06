@@ -6,9 +6,12 @@ import {
 } from 'src/logic-functions/lib/formula-repository';
 import {
   computeFormulaValueForRecord,
+  computeMirrorValueForRecord,
   recomputeAllRecords,
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
+import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
+import { isMirrorDefinition } from 'src/logic-functions/lib/mirror-kinds';
 import {
   findOverride,
   upsertOverride,
@@ -113,6 +116,53 @@ export const handleRecordUpdate = async ({
       // no answer — never turn edits into overrides while broken.
       if (formula.status === 'OFFLINE') continue;
 
+      // Mirror fork: a mirror target stores non-numeric raw values, so the
+      // numeric funnel below cannot decide it. Same compare-value-not-actor rule
+      // as the numeric path, but with deep JSON equality on raw values.
+      let formulaIsMirror = false;
+      try {
+        formulaIsMirror = isMirrorDefinition(
+          compileFormula(formula.expression ?? '').ast,
+          formula.targetFieldType,
+        );
+      } catch {
+        formulaIsMirror = false;
+      }
+
+      if (formulaIsMirror) {
+        // The event value written on this field (its raw form; NOT
+        // sub-selection-guaranteed, so used only as the event's own value).
+        const eventRaw = after?.[field];
+
+        // Fresh, kind-aware read (no prefetch — the event `after` is not
+        // sub-selection-safe for composite mirror kinds): the source raw value
+        // and the CURRENT stored target value.
+        const mirror = await computeMirrorValueForRecord({
+          client,
+          formula,
+          targetRecordId: recordId,
+        });
+        // Can't compute (record vanished / load error) -> never risk a false pin.
+        if (mirror.error !== null || mirror.sameRecord === null) continue;
+
+        const currentRaw = navigatePath(mirror.sameRecord, field);
+
+        // Superseded write in flight: the stored value already moved past the
+        // value this event reports -> a newer write is converging, skip the echo.
+        if (!deepJsonEqual(currentRaw, eventRaw)) continue;
+
+        // Current stored value equals the mirror source -> the app's own
+        // passthrough write, not a human pin.
+        if (deepJsonEqual(mirror.rawValue, currentRaw)) continue;
+
+        // A human pinned a value that differs from the source: store its raw
+        // value as JSON text (overrideValueText); overrideValue stays null.
+        await upsertOverride(client, objectName, field, recordId, {
+          text: JSON.stringify(currentRaw ?? null),
+        });
+        continue;
+      }
+
       // Composite-aware: a CURRENCY value field arrives as
       // { amountMicros, currencyCode } — its numeric value is the micros.
       const eventValue = normalizeStoredValue(after?.[field]);
@@ -149,7 +199,9 @@ export const handleRecordUpdate = async ({
       // the app's own recompute, not a human pin.
       if (numbersEqual(computedStored, currentStored)) continue;
 
-      await upsertOverride(client, objectName, field, recordId, currentStored);
+      await upsertOverride(client, objectName, field, recordId, {
+        numeric: currentStored,
+      });
     }
   }
 
@@ -193,11 +245,17 @@ export const handleRecordUpdate = async ({
         });
         continue;
       }
+      // Mirror formulas do their own kind-aware fetch inside
+      // computeMirrorValueForRecord — the event `after` is NOT
+      // sub-selection-guaranteed for composite mirror kinds, so it must not be
+      // trusted as a prefetch (FM Task 2 carry-forward). The numeric path keeps
+      // trusting `after` (byte-identical behavior).
+      const isMirror = isMirrorDefinition(compiled.ast, formula.targetFieldType);
       const outcome = await recomputeForRecord({
         client,
         formula,
         targetRecordId: recordId,
-        prefetchedRecord: after ?? undefined,
+        prefetchedRecord: isMirror ? undefined : after ?? undefined,
       });
       outcomes.push(outcome);
       await recordEvaluationHeartbeat(
@@ -206,6 +264,9 @@ export const handleRecordUpdate = async ({
         {
           value: outcome.value,
           error: outcome.error,
+          // Mirrors carry their diagnostic value on rawValue so the heartbeat can
+          // derive lastValueText (numeric formulas leave it undefined).
+          rawValue: outcome.rawValue,
         },
         usesToday(compiled.ast),
       );

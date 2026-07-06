@@ -14,7 +14,12 @@ export type OverrideRecord = {
   targetObject: string;
   targetField: string;
   recordId: string;
+  // Engine-family (NUMBER/CURRENCY/DATE/DATE_TIME) targets pin their numeric
+  // value here; mirror targets leave it null and pin overrideValueText instead.
   overrideValue: number | null;
+  // Mirror targets (non-engine kinds) pin their raw value here, JSON-stringified
+  // (scalar, array or composite); engine-family targets leave it null.
+  overrideValueText: string | null;
   active: boolean;
 };
 
@@ -30,6 +35,7 @@ const OVERRIDE_FIELDS = {
   targetField: true,
   recordId: true,
   overrideValue: true,
+  overrideValueText: true,
   active: true,
 } as const;
 
@@ -99,23 +105,40 @@ export const findOverride = async (
   );
 };
 
-// Creates or updates an ACTIVE override pinning `overrideValue`.
+// The pinned value for an override: an engine-family target pins `numeric`
+// (overrideValue); a mirror target pins `text` (overrideValueText, a
+// JSON-stringified raw value). Exactly one is meaningful per call — the other
+// column is written null so the two never disagree.
+export type OverrideValue = {
+  numeric?: number | null;
+  text?: string | null;
+};
+
+// Creates or updates an ACTIVE override pinning the given value. Numeric targets
+// pin overrideValue (overrideValueText null); mirror targets pin overrideValueText
+// (overrideValue null).
 export const upsertOverride = async (
   client: FormulaClient,
   targetObject: string,
   targetField: string,
   recordId: string,
-  overrideValue: number | null,
+  value: OverrideValue,
 ): Promise<void> => {
+  const overrideValue = value.numeric ?? null;
+  const overrideValueText = value.text ?? null;
   const existing = await findOverride(client, targetObject, targetField, recordId);
   if (existing) {
-    if (existing.overrideValue !== overrideValue || existing.active !== true) {
+    if (
+      existing.overrideValue !== overrideValue ||
+      existing.overrideValueText !== overrideValueText ||
+      existing.active !== true
+    ) {
       await withRetry(() =>
         client.mutation({
           updateFormulaOverride: {
             __args: {
               id: existing.id,
-              data: { overrideValue, active: true },
+              data: { overrideValue, overrideValueText, active: true },
             },
             id: true,
           },
@@ -134,6 +157,7 @@ export const upsertOverride = async (
             targetField,
             recordId,
             overrideValue,
+            overrideValueText,
             active: true,
           },
         },
@@ -141,6 +165,22 @@ export const upsertOverride = async (
       },
     }),
   );
+};
+
+// Decodes a mirror override's stored text back to its raw value. A parse failure
+// (corrupted text) or an absent value signals "no restorable value" so the caller
+// pins the CURRENT value instead of a broken one.
+export const decodeMirrorOverrideValue = (
+  text: string | null | undefined,
+): { restorable: boolean; value: unknown } => {
+  if (text === null || text === undefined) {
+    return { restorable: false, value: null };
+  }
+  try {
+    return { restorable: true, value: JSON.parse(text) };
+  } catch {
+    return { restorable: false, value: null };
+  }
 };
 
 // Turns an override off but KEEPS its value, so it can be restored later.

@@ -18,6 +18,7 @@ export const FORMULA_OVERRIDE_FIELDS = {
   recordId: '3a698909-1d0a-4e27-ad60-aa4e439f3171',
   targetField: '04418455-8477-406a-ba43-b85d75cd8d3f',
   overrideValue: '49ad7e7d-14c1-4d68-ad02-047e2f7abac0',
+  overrideValueText: '9c82e1d7-6bda-47d9-8ade-93e5fc3335c4',
   active: 'f50b09d7-a643-4e2b-a93f-68b7bbaae1b6',
 } as const;
 
@@ -69,7 +70,21 @@ export default defineObject({
       type: FieldType.NUMBER,
       name: 'overrideValue',
       label: 'Override value',
-      description: 'The manual value pinned by the user.',
+      description:
+        'The manual value pinned by the user (engine-family targets: NUMBER, ' +
+        'CURRENCY, DATE, DATE_TIME). Null for mirror targets, which pin their ' +
+        'raw value in overrideValueText.',
+      icon: 'IconPencil',
+    },
+    {
+      universalIdentifier: FORMULA_OVERRIDE_FIELDS.overrideValueText,
+      type: FieldType.TEXT,
+      name: 'overrideValueText',
+      label: 'Override value text',
+      description:
+        'The manual value pinned by the user for a non-engine mirror target ' +
+        '(JSON-stringified raw value: scalar, array or composite). Null for ' +
+        'engine-family targets, which pin overrideValue. System-managed.',
       icon: 'IconPencil',
     },
     {

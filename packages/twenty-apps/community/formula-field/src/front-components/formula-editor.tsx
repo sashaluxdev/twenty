@@ -6,6 +6,11 @@ import { useRecordId } from 'twenty-sdk/front-component';
 
 import { parse, usesToday } from 'src/engine';
 import {
+  isMirrorDefinition,
+  isMirrorTargetKind,
+  selectionEntryForMirrorKind,
+} from 'src/logic-functions/lib/mirror-kinds';
+import {
   formatRelativePast,
   isStaleTimestamp,
 } from 'src/front-components/lib/format-relative-past';
@@ -42,6 +47,7 @@ import { validateExpression } from 'src/front-components/lib/validate-expression
 import {
   activateOverride,
   deactivateOverride,
+  decodeMirrorOverrideValue,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
 import {
@@ -109,25 +115,45 @@ const expressionUsesToday = (expression: string): boolean => {
   }
 };
 
+// True when this definition is a mirror (bare whole-field ref onto a non-engine
+// target kind): its value/override are raw passthrough values, not numeric.
+const isMirrorRow = (definition: {
+  expression: string;
+  targetFieldType: string;
+}): boolean => {
+  try {
+    return isMirrorDefinition(parse(definition.expression), definition.targetFieldType);
+  } catch {
+    return false;
+  }
+};
+
 // Values are handled in micros for CURRENCY fields (like the engine); shown to
-// the user in currency units.
-const displayValue = (
-  definition: Definition,
-  value: number | null | undefined,
-): string => {
+// the user in currency units. Mirror targets carry raw non-numeric values.
+const displayValue = (definition: Definition, value: unknown): string => {
   if (value === null || value === undefined) return '—';
+  // Mirror targets: render the raw value directly — string as-is, number/boolean
+  // stringified, object/array as compact JSON (design 2026-07-06).
+  if (isMirrorTargetKind(definition.targetFieldType)) {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    return JSON.stringify(value);
+  }
+  const numericValue = value as number;
   if (definition.targetFieldType === 'CURRENCY') {
-    return `${(value / 1_000_000).toFixed(2)}`;
+    return `${(numericValue / 1_000_000).toFixed(2)}`;
   }
   // DATE / DATE_TIME values are epoch-days (Excel serial model, ADR 0011) —
   // show them as their calendar/ISO scalar rather than a raw day count.
   if (definition.targetFieldType === 'DATE') {
-    return epochDaysToDateString(value);
+    return epochDaysToDateString(numericValue);
   }
   if (definition.targetFieldType === 'DATE_TIME') {
-    return epochDaysToIsoDateTime(value);
+    return epochDaysToIsoDateTime(numericValue);
   }
-  return String(value);
+  return String(numericValue);
 };
 
 const OverrideToggle = ({
@@ -171,11 +197,13 @@ const OverrideToggle = ({
 const FormulaEditor = () => {
   const recordId = useRecordId();
   const [definitions, setDefinitions] = useState<Definition[]>([]);
-  const [values, setValues] = useState<Record<string, number | null>>({});
+  // targetField -> current value. Numeric for engine targets, raw passthrough
+  // (string/boolean/array/object) for mirror targets.
+  const [values, setValues] = useState<Record<string, unknown>>({});
   // targetField -> { value, active }. Rows may exist but be inactive (the value
   // is retained so it can be restored when the toggle is turned back on).
   const [overrides, setOverrides] = useState<
-    Record<string, { value: number | null; active: boolean }>
+    Record<string, { value: unknown; active: boolean }>
   >({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -397,10 +425,12 @@ const FormulaEditor = () => {
     if (host && recordId && defs.length > 0) {
       const selection: Record<string, unknown> = { id: true };
       for (const definition of defs) {
-        // CURRENCY value fields are composite and need a sub-selection.
-        selection[definition.targetField] = selectionEntryForFieldKind(
-          definition.targetFieldType,
-        );
+        // Mirror targets need their composite sub-selection (LINKS/FULL_NAME/…)
+        // or the server silently returns null; engine targets use the CURRENCY
+        // sub-selection where relevant.
+        selection[definition.targetField] = isMirrorRow(definition)
+          ? selectionEntryForMirrorKind(definition.targetFieldType)
+          : selectionEntryForFieldKind(definition.targetFieldType);
       }
       const recordResponse = await client.query({
         [host]: {
@@ -409,11 +439,13 @@ const FormulaEditor = () => {
         },
       });
       const record = recordResponse?.[host] ?? {};
-      const nextValues: Record<string, number | null> = {};
+      const nextValues: Record<string, unknown> = {};
       for (const definition of defs) {
-        nextValues[definition.targetField] = normalizeStoredValue(
-          record[definition.targetField],
-        );
+        // Mirror targets keep the raw value verbatim; engine targets normalize to
+        // a number for numeric display.
+        nextValues[definition.targetField] = isMirrorRow(definition)
+          ? record[definition.targetField] ?? null
+          : normalizeStoredValue(record[definition.targetField]);
       }
       setValues(nextValues);
 
@@ -427,18 +459,32 @@ const FormulaEditor = () => {
             },
           },
           edges: {
-            node: { targetField: true, overrideValue: true, active: true },
+            node: {
+              targetField: true,
+              overrideValue: true,
+              overrideValueText: true,
+              active: true,
+            },
           },
         },
       });
       const nextOverrides: Record<
         string,
-        { value: number | null; active: boolean }
+        { value: unknown; active: boolean }
       > = {};
       for (const edge of overrideResponse?.formulaOverrides?.edges ?? []) {
         if (edge?.node?.targetField) {
+          const definition = defs.find(
+            (candidate) => candidate.targetField === edge.node.targetField,
+          );
+          // Mirror overrides pin a raw value as JSON text; engine overrides pin a
+          // numeric column. A corrupted text decodes to null (harmless display).
+          const overrideValue =
+            definition && isMirrorRow(definition)
+              ? decodeMirrorOverrideValue(edge.node.overrideValueText).value
+              : edge.node.overrideValue ?? null;
           nextOverrides[edge.node.targetField] = {
-            value: edge.node.overrideValue ?? null,
+            value: overrideValue,
             active: edge.node.active ?? false,
           };
         }
@@ -595,6 +641,7 @@ const FormulaEditor = () => {
         // Dynamic client: wizard-created value fields are not in the genql type map.
     const client = createDynamicCoreClient();
         if (turnOn) {
+          const mirror = isMirrorRow(definition);
           // Restore a previously-set override value if one exists, otherwise pin
           // the current value.
           const restored = await activateOverride(
@@ -603,9 +650,43 @@ const FormulaEditor = () => {
             definition.targetField,
             recordId,
           );
-          if (restored) {
-            // Write the retained value back to the field (composite-aware; a
-            // restored CURRENCY value resolves its code as
+          if (restored && mirror) {
+            // Mirror targets restore by parsing the JSON text back to the raw
+            // value and writing it verbatim. A parse failure (corrupted text)
+            // means "no stored value" -> fall back to pinning the current value.
+            const decoded = decodeMirrorOverrideValue(restored.overrideValueText);
+            if (decoded.restorable) {
+              await client.mutation({
+                [`update${capitalize(definition.targetObject)}`]: {
+                  __args: {
+                    id: recordId,
+                    data: { [definition.targetField]: decoded.value },
+                  },
+                  id: true,
+                },
+              });
+              setRestoredHint((prev) => ({ ...prev, [definition.id]: true }));
+              setOverrides((prev) => ({
+                ...prev,
+                [definition.targetField]: { value: decoded.value, active: true },
+              }));
+            } else {
+              const current = values[definition.targetField] ?? null;
+              await upsertOverride(
+                client,
+                definition.targetObject,
+                definition.targetField,
+                recordId,
+                { text: JSON.stringify(current) },
+              );
+              setOverrides((prev) => ({
+                ...prev,
+                [definition.targetField]: { value: current, active: true },
+              }));
+            }
+          } else if (restored) {
+            // Engine target: write the retained numeric value back (composite-
+            // aware; a restored CURRENCY value resolves its code as
             // existing-on-record -> definition.currencyCode -> JPY fallback,
             // per buildTargetWriteData).
             await client.mutation({
@@ -632,13 +713,17 @@ const FormulaEditor = () => {
               },
             }));
           } else {
+            // No prior override row: pin the current value (raw JSON text for a
+            // mirror target, numeric column for an engine target).
             const current = values[definition.targetField] ?? null;
             await upsertOverride(
               client,
               definition.targetObject,
               definition.targetField,
               recordId,
-              current,
+              mirror
+                ? { text: JSON.stringify(current) }
+                : { numeric: current as number | null },
             );
             setOverrides((prev) => ({
               ...prev,

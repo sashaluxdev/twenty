@@ -6,9 +6,11 @@ import { validateFormula } from 'src/logic-functions/lib/save-validation';
 import {
   activateOverride,
   deactivateOverride,
+  decodeMirrorOverrideValue,
   findOverride,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
+import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
@@ -495,7 +497,9 @@ describe('validateFormula mirror validation', () => {
 describe('override restore (deactivate keeps value, activate restores)', () => {
   it('retains the value when deactivated and restores it on re-activate', async () => {
     const client = new FakeClient();
-    await upsertOverride(client, 'opportunity', 'formulaScore', 'o1', 42);
+    await upsertOverride(client, 'opportunity', 'formulaScore', 'o1', {
+      numeric: 42,
+    });
 
     let ov = await findOverride(client, 'opportunity', 'formulaScore', 'o1');
     expect(ov?.active).toBe(true);
@@ -525,6 +529,96 @@ describe('override restore (deactivate keeps value, activate restores)', () => {
       'missing',
     );
     expect(restored).toBeNull();
+  });
+});
+
+describe('mirror override text (overrideValueText round trip)', () => {
+  it('stores a composite value as JSON text with a null numeric column', async () => {
+    const client = new FakeClient();
+    const composite = { firstName: 'Ada', lastName: 'Lovelace' };
+    await upsertOverride(client, 'company', 'mirror', 'c1', {
+      text: JSON.stringify(composite),
+    });
+
+    const ov = await findOverride(client, 'company', 'mirror', 'c1');
+    expect(ov?.active).toBe(true);
+    expect(ov?.overrideValue ?? null).toBeNull();
+    expect(ov?.overrideValueText).toBe(JSON.stringify(composite));
+  });
+
+  it('retains overrideValueText across deactivate and restores it on activate', async () => {
+    const client = new FakeClient();
+    const composite = { firstName: 'Ada', lastName: 'Lovelace' };
+    await upsertOverride(client, 'company', 'mirror', 'c1', {
+      text: JSON.stringify(composite),
+    });
+
+    await deactivateOverride(client, 'company', 'mirror', 'c1');
+    let ov = await findOverride(client, 'company', 'mirror', 'c1');
+    expect(ov?.active).toBe(false);
+    expect(ov?.overrideValueText).toBe(JSON.stringify(composite)); // retained
+
+    const restored = await activateOverride(client, 'company', 'mirror', 'c1');
+    expect(restored?.active).toBe(true);
+    expect(JSON.parse(restored!.overrideValueText!)).toEqual(composite);
+  });
+});
+
+describe('decodeMirrorOverrideValue', () => {
+  it('parses well-formed JSON text into its raw value', () => {
+    expect(decodeMirrorOverrideValue(JSON.stringify('ACTIVE'))).toEqual({
+      restorable: true,
+      value: 'ACTIVE',
+    });
+    expect(decodeMirrorOverrideValue(JSON.stringify({ a: [1, 2] }))).toEqual({
+      restorable: true,
+      value: { a: [1, 2] },
+    });
+  });
+
+  it('treats corrupted text as not restorable (pin-current fallback)', () => {
+    expect(decodeMirrorOverrideValue('{not json')).toEqual({
+      restorable: false,
+      value: null,
+    });
+  });
+
+  it('treats null/undefined text as not restorable', () => {
+    expect(decodeMirrorOverrideValue(null)).toEqual({
+      restorable: false,
+      value: null,
+    });
+    expect(decodeMirrorOverrideValue(undefined)).toEqual({
+      restorable: false,
+      value: null,
+    });
+  });
+});
+
+describe('mirror override toggle-off restores the source value', () => {
+  it('deactivate + mirror recompute writes the source value back', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'PINNED' }]);
+    await upsertOverride(client, 'company', 'mirror', 'c1', {
+      text: JSON.stringify('PINNED'),
+    });
+
+    await deactivateOverride(client, 'company', 'mirror', 'c1');
+    await recomputeForRecord({
+      client,
+      formula: {
+        id: 'm1',
+        targetObject: 'company',
+        targetField: 'mirror',
+        targetFieldType: 'SELECT',
+        expression: 'source',
+        enabled: true,
+      },
+      targetRecordId: 'c1',
+    });
+
+    expect(client.get('company', 'c1')!.mirror).toBe('ACTIVE');
   });
 });
 
@@ -758,6 +852,97 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
     // The converged value is left untouched.
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(29);
+  });
+
+  it('ignores an app echo on a mirror target (event raw equals the source value)', async () => {
+    client = new FakeClient();
+    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.seed('formulaDefinition', [
+      {
+        id: 'm1',
+        targetObject: 'company',
+        targetField: 'mirror',
+        targetFieldType: 'SELECT',
+        expression: 'source',
+        enabled: true,
+      },
+    ]);
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'ACTIVE' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: 'ACTIVE' },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    // Current target equals the mirror source -> app's own write, not a pin.
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+  });
+
+  it('creates a text override when a HUMAN edits a mirror target away from the source', async () => {
+    client = new FakeClient();
+    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.seed('formulaDefinition', [
+      {
+        id: 'm1',
+        targetObject: 'company',
+        targetField: 'mirror',
+        targetFieldType: 'SELECT',
+        expression: 'source',
+        enabled: true,
+      },
+    ]);
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'MANUAL' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: 'MANUAL' },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    const override = client.get('formulaOverride', 'formulaOverride-0');
+    expect(override).toBeDefined();
+    expect(override!.recordId).toBe('c1');
+    expect(override!.targetField).toBe('mirror');
+    expect(override!.overrideValueText).toBe(JSON.stringify('MANUAL'));
+    expect(override!.overrideValue ?? null).toBeNull();
+    // The human's manual value is left in place.
+    expect(client.get('company', 'c1')!.mirror).toBe('MANUAL');
+  });
+
+  it('skips a superseded stale echo on a mirror target (no spurious pin)', async () => {
+    client = new FakeClient();
+    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.seed('formulaDefinition', [
+      {
+        id: 'm1',
+        targetObject: 'company',
+        targetField: 'mirror',
+        targetFieldType: 'SELECT',
+        expression: 'source',
+        enabled: true,
+      },
+    ]);
+    // Already converged to CONVERGED, but a stale echo of an earlier value arrives.
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'CONVERGED' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: 'STALE_ECHO' },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+    expect(client.get('company', 'c1')!.mirror).toBe('CONVERGED');
   });
 
   it('recomputes cross-object formulas when a referenced record changed', async () => {

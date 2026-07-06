@@ -90,14 +90,17 @@ describe('deepJsonEqual', () => {
     return value;
   };
 
-  it('compares equal values nested below the depth cap as equal', () => {
-    expect(deepJsonEqual(nestObject(200), nestObject(200))).toBe(true);
+  it('compares equal values nested at the depth cap as equal', () => {
+    // The fence is exactly 256: the leaf of a 256-deep nest compares as a scalar
+    // at depth 256 (scalars are compared before the depth gate), so it stays equal.
+    expect(deepJsonEqual(nestObject(256), nestObject(256))).toBe(true);
   });
 
-  it('treats values nested beyond the depth cap as changed without throwing', () => {
-    // ~20k levels: structurally identical, but too deep — the cap makes it
-    // compare unequal (losing only no-op suppression) instead of a RangeError.
-    expect(deepJsonEqual(nestObject(20000), nestObject(20000))).toBe(false);
+  it('treats values nested one past the depth cap as changed without throwing', () => {
+    // 257 levels: the 256th object hits the depth gate (depth >= 256) and returns
+    // false, so a structurally identical but too-deep value compares unequal
+    // (losing only no-op suppression) instead of a RangeError.
+    expect(deepJsonEqual(nestObject(257), nestObject(257))).toBe(false);
   });
 });
 
