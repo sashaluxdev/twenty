@@ -228,11 +228,7 @@ const FormulaEditor = () => {
   // parity with the server's save-time check, shown inline before Save. Every
   // rendered definition targets the same host object, so one lookup covers all.
   const hostObject = definitions[0]?.targetObject;
-  const hostFields = useObjectFields(hostObject);
-  const hostFieldKinds = useMemo(
-    () => new Map(hostFields.map((field) => [field.name, field.type])),
-    [hostFields],
-  );
+  const { kindsByName: hostFieldKinds } = useObjectFields(hostObject);
 
   const disarmSave = useCallback(() => {
     if (armTimer.current) {

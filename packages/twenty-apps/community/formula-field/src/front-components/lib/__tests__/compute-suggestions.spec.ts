@@ -20,6 +20,16 @@ const stage: FieldOption = {
 };
 const tier: FieldOption = { name: 'tier', label: 'Tier', type: 'TEXT' };
 const amount: FieldOption = { name: 'amount', label: 'Amount', type: 'NUMBER' };
+const closeDate: FieldOption = {
+  name: 'closeDate',
+  label: 'Close Date',
+  type: 'DATE',
+};
+const textField: FieldOption = {
+  name: 'textField',
+  label: 'Text Field',
+  type: 'TEXT',
+};
 
 describe('computeSuggestions — SELECT option context', () => {
   it('returns a SELECT field options with quoted insertText after `= `', () => {
@@ -67,6 +77,37 @@ describe('computeSuggestions — SELECT option context', () => {
 
   it('returns nothing inside a cross-record reference', () => {
     expect(computeSuggestions('[stage = QU', 11, [stage])).toEqual([]);
+  });
+});
+
+describe('computeSuggestions — option context yields to field completion', () => {
+  // Regression: a comparison whose LHS is NOT a SELECT-with-options must not
+  // claim (and swallow) the RHS completion — normal field completion proceeds
+  // on the partial identifier being typed.
+  it('completes a field on the RHS of a non-SELECT comparison (`amount = clo`)', () => {
+    const suggestions = computeSuggestions('amount = clo', 12, [
+      amount,
+      closeDate,
+    ]);
+    expect(suggestions.map((option) => option.name)).toContain('closeDate');
+  });
+
+  it('completes fields on the RHS of a TEXT comparison (`textField = fo`)', () => {
+    const foo: FieldOption = { name: 'foo', label: 'Foo', type: 'NUMBER' };
+    const suggestions = computeSuggestions('textField = fo', 14, [
+      textField,
+      foo,
+    ]);
+    expect(suggestions.map((option) => option.name)).toContain('foo');
+  });
+
+  it('claims the RHS as a value slot for a SELECT-with-options, empty when nothing matches (`stage = ZZZ`)', () => {
+    expect(computeSuggestions('stage = ZZZ', 11, [stage])).toEqual([]);
+  });
+
+  it('offers matching options for a SELECT-with-options (`stage = QU`)', () => {
+    const suggestions = computeSuggestions('stage = QU', 10, [stage]);
+    expect(suggestions.map((option) => option.name)).toEqual(['QUALIFIED']);
   });
 });
 

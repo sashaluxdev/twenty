@@ -61,11 +61,24 @@ const SUGGESTIBLE_FIELD_TYPES = new Set([
   'TEXT',
 ]);
 
+// The full-object field data: the narrowed suggestible `fields` for the
+// autocomplete dropdown, plus `kindsByName` — the metadata type of EVERY active
+// field pre-filter (name -> type). kindsByName drives the pre-save string-
+// comparison kind check, which must see non-suggestible kinds (e.g. MULTI_SELECT)
+// to reject them, so it cannot be derived from the narrowed `fields`.
+export type ObjectFields = {
+  fields: FieldOption[];
+  kindsByName: Map<string, string>;
+};
+
 // Fetches the suggestible fields of an object (by nameSingular) via metadata.
 export const useObjectFields = (
   targetObject: string | undefined,
-): FieldOption[] => {
+): ObjectFields => {
   const [fields, setFields] = useState<FieldOption[]>([]);
+  const [kindsByName, setKindsByName] = useState<Map<string, string>>(
+    () => new Map(),
+  );
 
   useEffect(() => {
     if (!targetObject) return;
@@ -104,17 +117,28 @@ export const useObjectFields = (
           .map((edge: any) => edge.node)
           .find((node: any) => node?.nameSingular === targetObject);
 
-        const options: FieldOption[] = (objectNode?.fields?.edges ?? [])
+        const activeNodes: any[] = (objectNode?.fields?.edges ?? [])
           .map((edge: any) => edge.node)
-          .filter(
-            (node: any) =>
-              node?.isActive &&
-              !node?.isSystem &&
-              SUGGESTIBLE_FIELD_TYPES.has(node?.type),
-          )
+          .filter((node: any) => node?.isActive && !node?.isSystem);
+
+        // Full kind map (name -> type) over every active field, unfiltered by
+        // suggestibility — the validate-expression kind check needs the true
+        // kind of fields it will never suggest (e.g. MULTI_SELECT) to reject
+        // string comparisons against them.
+        const kinds = new Map<string, string>(
+          activeNodes
+            .filter(
+              (node: any) =>
+                typeof node?.name === 'string' && typeof node?.type === 'string',
+            )
+            .map((node: any) => [node.name as string, node.type as string]),
+        );
+
+        const options: FieldOption[] = activeNodes
+          .filter((node: any) => SUGGESTIBLE_FIELD_TYPES.has(node?.type))
           .map((node: any) => {
             const rawOptions = Array.isArray(node.options) ? node.options : [];
-            const options = rawOptions
+            const fieldOptions = rawOptions
               .filter((option: any) => typeof option?.value === 'string')
               .map((option: any) => ({
                 value: option.value as string,
@@ -124,16 +148,22 @@ export const useObjectFields = (
               name: node.name as string,
               label: (node.label as string) ?? node.name,
               type: node.type as string,
-              ...(options.length > 0 ? { options } : {}),
+              ...(fieldOptions.length > 0 ? { options: fieldOptions } : {}),
             };
           })
           .sort((a: FieldOption, b: FieldOption) =>
             a.label.localeCompare(b.label),
           );
 
-        if (!cancelled) setFields(options);
+        if (!cancelled) {
+          setFields(options);
+          setKindsByName(kinds);
+        }
       } catch {
-        if (!cancelled) setFields([]);
+        if (!cancelled) {
+          setFields([]);
+          setKindsByName(new Map());
+        }
       }
     })();
 
@@ -142,7 +172,7 @@ export const useObjectFields = (
     };
   }, [targetObject]);
 
-  return fields;
+  return { fields, kindsByName };
 };
 
 // True when the caret sits inside an unclosed "[" — i.e. within a cross-record
@@ -175,11 +205,12 @@ const COMPARISON_CONTEXT_RE =
   /([A-Za-z_][A-Za-z0-9_]*)\s*(=|!=)\s*("?[^"]*)?$/;
 
 // SELECT-option suggestions when the caret sits after a `=` / `!=` comparison
-// against a SELECT field that carries options. Returns null when NOT in a
-// comparison context (so callers fall through to field completion), or an
-// (possibly empty) option list when in one — a comparison against a non-SELECT
-// or unknown field yields [] rather than field names, since a bare value token
-// is being typed, not an identifier.
+// against a SELECT field that carries options. The option context CLAIMS the
+// completion (returns a possibly-empty option list) only when the LHS identifier
+// resolves to a SELECT field with options — the RHS is then a value slot, so an
+// empty result stays empty rather than falling back to field names. Otherwise it
+// yields (returns null) so the caller runs normal field completion on the RHS
+// identifier — e.g. `amount = clo` still completes to `closeDate`.
 const computeOptionSuggestions = (
   before: string,
   fields: FieldOption[],
@@ -188,7 +219,7 @@ const computeOptionSuggestions = (
   if (!match) return null;
   const fieldName = match[1];
   const field = fields.find((candidate) => candidate.name === fieldName);
-  if (!field || field.type !== 'SELECT' || !field.options?.length) return [];
+  if (!field || field.type !== 'SELECT' || !field.options?.length) return null;
   const rawPartial = match[3] ?? '';
   const partial = (
     rawPartial.startsWith('"') ? rawPartial.slice(1) : rawPartial
@@ -249,11 +280,11 @@ export const computeSuggestions = (
 export const computeInsertRange = (
   value: string,
   caret: number,
-  field: FieldOption,
+  suggestion: FieldOption,
 ): { start: number; insertText: string } => {
   const before = value.slice(0, caret);
-  const insertText = field.insertText ?? field.name;
-  if (field.type === 'OPTION') {
+  const insertText = suggestion.insertText ?? suggestion.name;
+  if (suggestion.type === 'OPTION') {
     const match = before.match(COMPARISON_CONTEXT_RE);
     if (match) {
       const partial = match[3] ?? '';
@@ -280,7 +311,7 @@ export const FormulaFieldInput = ({
   placeholder,
   multiline,
 }: FormulaFieldInputProps) => {
-  const fields = useObjectFields(targetObject);
+  const { fields } = useObjectFields(targetObject);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [caret, setCaret] = useState(0);
   const [open, setOpen] = useState(false);

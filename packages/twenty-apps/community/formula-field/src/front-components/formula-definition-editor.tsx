@@ -321,10 +321,8 @@ const FormulaDefinitionEditor = () => {
   // Target object's field kinds (name -> metadata type), so pre-save validation
   // rejects a string comparison against a field that can't hold a string —
   // shown inline before Save, matching the server's save-time check.
-  const targetFields = useObjectFields(definition?.targetObject);
-  const targetFieldKinds = useMemo(
-    () => new Map(targetFields.map((field) => [field.name, field.type])),
-    [targetFields],
+  const { kindsByName: targetFieldKinds } = useObjectFields(
+    definition?.targetObject,
   );
 
   const load = useCallback(async () => {

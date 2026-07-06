@@ -82,6 +82,20 @@ describe('validateExpression', () => {
     );
   });
 
+  it('rejects a MULTI_SELECT field string comparison with the exact message', () => {
+    expect(
+      validateExpression(
+        'IF(tags = "vip", 1, 0)',
+        'opportunity',
+        'formulaScore',
+        [],
+        new Map([['tags', 'MULTI_SELECT']]),
+      ),
+    ).toBe(
+      'String comparison against "tags" is not supported (field type MULTI_SELECT; only SELECT and TEXT fields)',
+    );
+  });
+
   it('is null when the kinds map is omitted (backward compatible)', () => {
     expect(
       validateExpression('IF(amount = "big", 1, 0)', 'opportunity', 'formulaScore', []),
