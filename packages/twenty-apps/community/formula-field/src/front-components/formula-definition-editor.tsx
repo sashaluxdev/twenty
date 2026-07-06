@@ -350,6 +350,10 @@ const FormulaDefinitionEditor = () => {
     setAllDefinitions(list);
     const current = list.find((entry) => entry.id === recordId) ?? null;
     setDefinition(current);
+    // Trashed-definition field hiding is NOT done here: this widget's own record
+    // being trashed drops it from the (non-withDeleted) list above, so `current`
+    // is null and the target object/field are unknown — the record-page
+    // formula-editor is the convergence surface that hides trashed fields.
     if (current?.targetObject && current?.targetField) {
       // Converge chip visibility/position in the target object's record-page
       // layout (throttled; view mutations require this user-token context).

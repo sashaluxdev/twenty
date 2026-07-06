@@ -180,6 +180,9 @@ export const ensureFieldLayoutVisibility = async ({
       (await resolveFallbackGroupId(metadata, viewId));
 
     if (!own) {
+      // A missing viewField row is already invisible — never create one just to
+      // hide a field (that is exactly the trashed-definition convergence path).
+      if (!visible) continue;
       await metadata.mutation({
         createViewField: {
           __args: {
@@ -311,6 +314,14 @@ export const syncCompanionStatusField = async (
 const layoutConvergedAt = new Map<string, number>();
 const LAYOUT_CONVERGE_TTL_MS = 60_000;
 
+// Test-only: reset / inspect the convergence throttle map so unit tests can
+// assert the key-clearing interaction without waiting out the 60s TTL.
+export const resetLayoutConvergenceThrottle = (): void => {
+  layoutConvergedAt.clear();
+};
+export const getLayoutConvergenceKeys = (): string[] =>
+  Array.from(layoutConvergedAt.keys());
+
 export const convergeFormulaFieldLayout = async ({
   objectNameSingular,
   targetField,
@@ -324,6 +335,10 @@ export const convergeFormulaFieldLayout = async ({
   const last = layoutConvergedAt.get(signature);
   if (last && Date.now() - last < LAYOUT_CONVERGE_TTL_MS) return;
   layoutConvergedAt.set(signature, Date.now());
+  // A live definition is being converged VISIBLE — drop any stale trashed-hide
+  // throttle for this field so a delete -> restore round trip within the TTL
+  // re-shows the field on the very next widget render.
+  layoutConvergedAt.delete(`${objectNameSingular}.${targetField}:trashed`);
 
   try {
     const index = await loadObjectFieldIndex();
@@ -345,6 +360,56 @@ export const convergeFormulaFieldLayout = async ({
         fieldMetadataId: companion.id,
         visible: statusVisible,
         anchorFieldMetadataId: valueField?.id,
+      });
+    }
+  } catch {
+    // Layout is cosmetic; permission or transport failures must not break
+    // the widget. Allow a retry after the TTL.
+  }
+};
+
+// Front-component layout convergence for a TRASHED (soft-deleted) definition
+// whose field this app owns and that no live definition still targets: hide the
+// value field AND its FX-Status companion. A naive delete performs NO field
+// mutation (the value column stays ACTIVE), so this layout flip is the only
+// thing that removes the orphaned field from the record page. Inactive fields
+// (legacy deletes that DID deactivate) are skipped — they already left the
+// views. Same throttle/no-op-on-error posture as convergeFormulaFieldLayout.
+export const convergeTrashedDefinitionLayout = async ({
+  objectNameSingular,
+  targetField,
+}: {
+  objectNameSingular: string;
+  targetField: string;
+}): Promise<void> => {
+  const signature = `${objectNameSingular}.${targetField}:trashed`;
+  const last = layoutConvergedAt.get(signature);
+  if (last && Date.now() - last < LAYOUT_CONVERGE_TTL_MS) return;
+  layoutConvergedAt.set(signature, Date.now());
+  // Drop the live-converge throttles for this field so a restore -> re-delete
+  // (or delete -> restore) round trip within the TTL re-converges both ways.
+  layoutConvergedAt.delete(`${objectNameSingular}.${targetField}:true`);
+  layoutConvergedAt.delete(`${objectNameSingular}.${targetField}:false`);
+
+  try {
+    const index = await loadObjectFieldIndex();
+    const objectIndex = index.get(objectNameSingular);
+    if (!objectIndex) return;
+    const valueField = objectIndex.fields.get(targetField);
+    const companion = objectIndex.fields.get(companionFieldName(targetField));
+
+    if (valueField?.isActive) {
+      await ensureFieldLayoutVisibility({
+        objectMetadataId: objectIndex.objectMetadataId,
+        fieldMetadataId: valueField.id,
+        visible: false,
+      });
+    }
+    if (companion?.isActive) {
+      await ensureFieldLayoutVisibility({
+        objectMetadataId: objectIndex.objectMetadataId,
+        fieldMetadataId: companion.id,
+        visible: false,
       });
     }
   } catch {

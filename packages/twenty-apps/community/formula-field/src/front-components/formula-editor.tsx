@@ -46,7 +46,12 @@ import {
   epochDaysToIsoDateTime,
 } from 'src/logic-functions/lib/date-serial';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
-import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
+import {
+  convergeFormulaFieldLayout,
+  convergeTrashedDefinitionLayout,
+} from 'src/logic-functions/lib/fx-status-field';
+import { anotherDefinitionTargets } from 'src/logic-functions/lib/handle-definition-lifecycle';
+import { loadTrashedFormulas } from 'src/logic-functions/lib/formula-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import {
   buildTargetWriteData,
@@ -314,6 +319,37 @@ const FormulaEditor = () => {
         objectNameSingular: definition.targetObject,
         targetField: definition.targetField,
         statusVisible: definition.status !== '',
+      });
+    }
+
+    // Hide the fields of TRASHED definitions on this object. A naive delete no
+    // longer deactivates the value field pair (it stays ACTIVE so the column
+    // survives), so this front-side layout flip is the only thing that removes
+    // the orphaned field from the record page. Fire-and-forget and throttled,
+    // exactly like the live convergence above; trashed defs never enter the
+    // rendered list. Guarded to app-created fields no live definition still
+    // targets (same shared-target check the "delete completely" flow uses).
+    if (host) {
+      loadTrashedFormulas(client, host).then((trashed) => {
+        for (const definition of trashed) {
+          const targetObject = definition.targetObject;
+          const targetField = definition.targetField;
+          if (definition.createdField !== true || !targetObject || !targetField) {
+            continue;
+          }
+          anotherDefinitionTargets(client, {
+            id: definition.id,
+            targetObject,
+            targetField,
+          }).then((shared) => {
+            if (!shared) {
+              convergeTrashedDefinitionLayout({
+                objectNameSingular: targetObject,
+                targetField,
+              });
+            }
+          });
+        }
       });
     }
 
