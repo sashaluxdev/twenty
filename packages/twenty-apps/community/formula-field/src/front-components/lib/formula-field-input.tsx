@@ -295,6 +295,17 @@ export const computeInsertRange = (
   return { start: identifier ? identifier.start : caret, insertText };
 };
 
+// Caret decision for a selection-based sync (click / arrow key). Returns the
+// host's selectionStart when it exposes one; otherwise keeps the current caret
+// untouched. The remote-dom sandbox never mirrors selectionStart into the app
+// worker, so falling back to end-of-string here would stomp the diff-derived
+// caret set by onChange (caretFromDiff) and break mid-string autocomplete.
+// Pure and exported so both branches are directly testable.
+export const nextCaretFromSelection = (
+  selectionStart: number | null | undefined,
+  currentCaret: number,
+): number => selectionStart ?? currentCaret;
+
 type FormulaFieldInputProps = {
   value: string;
   onChange: (next: string) => void;
@@ -363,15 +374,19 @@ export const FormulaFieldInput = ({
     [value, caret, onChange],
   );
 
-  // Click/keyup caret sync. selectionStart is unavailable in the remote-dom
-  // sandbox, so caret-only moves (arrow keys, clicks) stay invisible here and
-  // fall back to end-of-text — accepted limitation: the next keystroke recovers
-  // the true caret via caretFromDiff in onChange.
+  // Click/keyup caret sync. Native hosts expose selectionStart, so clicks and
+  // arrow keys sync the caret exactly. The remote-dom sandbox never mirrors
+  // selectionStart into the app worker (it is always undefined there), so this
+  // NO-OPs and leaves the onChange-derived caret (caretFromDiff) intact —
+  // accepted limitation: a caret-only move (arrow keys, click) is invisible in
+  // the sandbox, but the next keystroke recovers the true caret via caretFromDiff.
   const syncCaret = useCallback(() => {
     if (inputRef.current) {
-      setCaret(inputRef.current.selectionStart ?? value.length);
+      setCaret((current) =>
+        nextCaretFromSelection(inputRef.current?.selectionStart, current),
+      );
     }
-  }, [value.length]);
+  }, []);
 
   const handleKeyDown = (
     event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
