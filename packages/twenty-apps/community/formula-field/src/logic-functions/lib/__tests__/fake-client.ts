@@ -83,15 +83,35 @@ export class FakeClient implements FormulaClient {
     return { [key]: record ? this.project(record, node) : null };
   }
 
+  private matchesCondition(value: unknown, cond: any): boolean {
+    if (cond == null) return true;
+    if (cond.eq !== undefined) return value === cond.eq;
+    // `is` is a FilterIs enum; the dynamic client wraps it as a raw enum
+    // literal ({ __graphqlEnum }) but a plain string is accepted too.
+    if (cond.is !== undefined) {
+      const target =
+        typeof cond.is === 'object' && cond.is !== null
+          ? (cond.is as { __graphqlEnum?: string }).__graphqlEnum
+          : cond.is;
+      if (target === 'NOT_NULL') return value != null;
+      if (target === 'NULL') return value == null;
+    }
+    return true;
+  }
+
   private connection(object: string, node: any) {
     const filter = node?.__args?.filter;
     let records = Array.from(this.store.get(object)?.values() ?? []);
+    // The record API returns soft-deleted rows only when the filter carries a
+    // deletedAt key (mirrors the server's withDeleted() gate).
+    if (!filter || !('deletedAt' in filter)) {
+      records = records.filter((record) => record.deletedAt == null);
+    }
     if (filter) {
       records = records.filter((record) =>
-        Object.entries(filter).every(([field, cond]: [string, any]) => {
-          if (cond?.eq !== undefined) return record[field] === cond.eq;
-          return true;
-        }),
+        Object.entries(filter).every(([field, cond]: [string, any]) =>
+          this.matchesCondition(record[field], cond),
+        ),
       );
     }
     const nodeSelection = node?.edges?.node ?? { id: true };

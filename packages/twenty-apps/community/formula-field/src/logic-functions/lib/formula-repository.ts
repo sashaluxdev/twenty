@@ -1,3 +1,4 @@
+import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import {
   type FormulaClient,
   type FormulaDefinitionRecord,
@@ -79,6 +80,77 @@ export const loadEnabledFormulas = async (
 export const loadAllEnabledFormulas = (
   client: FormulaClient,
 ): Promise<FormulaDefinitionRecord[]> => loadEnabledFormulas(client);
+
+// Minimal projection of a soft-deleted (trashed) FormulaDefinition — enough to
+// decide field liveness and, for the front hide convergence, which fields to
+// hide. Task 3 reuses this exact loader.
+export type TrashedFormulaRecord = {
+  id: string;
+  targetObject?: string | null;
+  targetField?: string | null;
+  createdField?: boolean | null;
+};
+
+const TRASHED_FORMULA_FIELDS = {
+  id: true,
+  targetObject: true,
+  targetField: true,
+  createdField: true,
+} as const;
+
+// Loads soft-deleted (trashed) FormulaDefinitions, optionally scoped to one
+// target object. The record API returns soft-deleted rows ONLY when the filter
+// carries a deletedAt key (the server applies withDeleted() solely then), so the
+// `deletedAt: { is: NOT_NULL }` clause is load-bearing. NOT_NULL is a FilterIs
+// enum value, emitted unquoted via graphqlEnum. Paginates fully.
+export const loadTrashedFormulas = async (
+  client: FormulaClient,
+  targetObject?: string,
+  pageSize = 200,
+): Promise<TrashedFormulaRecord[]> => {
+  const filter: Record<string, unknown> = {
+    deletedAt: { is: graphqlEnum('NOT_NULL') },
+  };
+  if (targetObject) {
+    filter.targetObject = { eq: targetObject };
+  }
+
+  const trashed: TrashedFormulaRecord[] = [];
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        formulaDefinitions: {
+          __args: {
+            first: pageSize,
+            filter,
+            ...(after ? { after } : {}),
+          },
+          edges: { node: TRASHED_FORMULA_FIELDS },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+
+    const connection = response?.formulaDefinitions;
+    const edges: Array<{ node?: TrashedFormulaRecord }> =
+      connection?.edges ?? [];
+
+    for (const edge of edges) {
+      if (edge?.node) {
+        trashed.push(edge.node);
+      }
+    }
+
+    if (!connection?.pageInfo?.hasNextPage) {
+      break;
+    }
+    after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  return trashed;
+};
 
 export type BookkeepingUpdate = {
   lastValue?: number | null;

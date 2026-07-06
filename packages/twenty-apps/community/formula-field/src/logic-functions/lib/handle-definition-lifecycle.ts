@@ -9,12 +9,15 @@ import {
 } from 'src/logic-functions/lib/types';
 import { withRetry } from 'src/logic-functions/lib/with-retry';
 
-// Definition lifecycle (ADR 0009): deleting a definition deactivates its
-// APP-OWNED value field pair (the column disappears but its data survives —
-// "formula columns are holy": no orphaned pseudo-regular fields), restoring
-// reactivates and recomputes, destroying additionally cleans up override rows.
-// After any of these the operational statuses (OFFLINE/UPSTREAM) are
-// recomputed from scratch so dependents get flagged / unflagged.
+// Definition lifecycle (ADR 0009): naive-trashing a definition performs NO
+// field-metadata mutation — the app-owned value field pair stays active so the
+// column and its data survive untouched ("formula columns are holy"); dependents
+// are re-flagged OFFLINE purely by the trashed-target liveness rule. Restoring
+// reactivates any legacy-deactivated field (healing pre-change trashes) and
+// recomputes; destroying deactivates the owned pair (a purge must never drop a
+// data column) and cleans up override rows. After any of these the operational
+// statuses (OFFLINE/UPSTREAM) are recomputed from scratch so dependents get
+// flagged / unflagged.
 
 type FieldMetadataInfo = {
   id: string;
@@ -148,12 +151,15 @@ const deactivateOwnedFields = async (
 
 export const handleDefinitionDeleted = async (
   client: FormulaClient,
-  before: FormulaDefinitionRecord,
+  _before: FormulaDefinitionRecord,
 ): Promise<Record<string, unknown>> => {
-  const deactivated = await deactivateOwnedFields(client, before);
+  // Naive trash performs NO field-metadata mutation: the wizard-created field
+  // pair stays active so its column and data survive untouched ("formula
+  // columns are holy"). Dependents of this now-trashed definition are re-flagged
+  // OFFLINE purely by the trashed-target liveness rule inside
+  // refreshFormulaStatuses (buildTrashDeadFieldKeys) — no deactivation needed.
   const statuses = await refreshFormulaStatuses(client);
   return {
-    deactivated,
     offline: statuses.offline,
     upstream: statuses.upstream,
   };

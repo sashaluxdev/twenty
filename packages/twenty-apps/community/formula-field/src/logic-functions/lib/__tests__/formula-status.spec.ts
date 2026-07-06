@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeFormulaStatuses } from 'src/logic-functions/lib/formula-status';
+import {
+  buildTrashDeadFieldKeys,
+  computeFormulaStatuses,
+  type FieldLiveness,
+} from 'src/logic-functions/lib/formula-status';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 
 // Pure status graph: OFFLINE = an input field is deactivated/missing;
@@ -95,5 +99,82 @@ describe('computeFormulaStatuses', () => {
       () => true,
     );
     expect(statuses.get('a')?.status).toBe('');
+  });
+});
+
+describe('trashed-target liveness (trash-dead fields)', () => {
+  // A field is trash-dead iff a trashed definition created it (createdField:
+  // true) AND no live definition still targets it. Trash-dead keys are
+  // subtracted from the live-field set, so dependents go OFFLINE through the
+  // existing dead-input path — no new status.
+  const livenessExcludingTrashDead =
+    (trashDead: Set<string>, base: FieldLiveness = () => true): FieldLiveness =>
+    (object, field) =>
+      base(object, field) && !trashDead.has(`${object}.${field}`);
+
+  it('marks dependent OFFLINE when its input field is targeted by a trashed created-field definition', () => {
+    // B reads field x on company; D (trashed) created company.x; no live def
+    // still targets company.x -> x is trash-dead -> B goes OFFLINE naming x.
+    const dependent = definition({
+      id: 'b',
+      targetField: 'fb',
+      expression: 'x + 1',
+    });
+    const trashed = [
+      { targetObject: 'company', targetField: 'x', createdField: true },
+    ];
+    const trashDead = buildTrashDeadFieldKeys(trashed, [dependent]);
+    const statuses = computeFormulaStatuses(
+      [dependent],
+      livenessExcludingTrashDead(trashDead),
+    );
+    expect(statuses.get('b')).toEqual({
+      status: 'OFFLINE',
+      reason: 'input company.x is deactivated or missing',
+    });
+  });
+
+  it('field stays live when another live definition still targets it', () => {
+    // Same as above, but live def E still targets company.x -> not trash-dead.
+    const dependent = definition({
+      id: 'b',
+      targetField: 'fb',
+      expression: 'x + 1',
+    });
+    const stillLive = definition({
+      id: 'e',
+      targetField: 'x',
+      expression: '1',
+    });
+    const trashed = [
+      { targetObject: 'company', targetField: 'x', createdField: true },
+    ];
+    const trashDead = buildTrashDeadFieldKeys(trashed, [dependent, stillLive]);
+    expect(trashDead.size).toBe(0);
+    const statuses = computeFormulaStatuses(
+      [dependent, stillLive],
+      livenessExcludingTrashDead(trashDead),
+    );
+    expect(statuses.get('b')).toEqual({ status: '', reason: '' });
+  });
+
+  it('field stays live when the trashed definition did not create the field', () => {
+    // D targeted company.x but did NOT create it (createdField: false), so the
+    // column is a pre-existing regular field the app must not treat as dead.
+    const dependent = definition({
+      id: 'b',
+      targetField: 'fb',
+      expression: 'x + 1',
+    });
+    const trashed = [
+      { targetObject: 'company', targetField: 'x', createdField: false },
+    ];
+    const trashDead = buildTrashDeadFieldKeys(trashed, [dependent]);
+    expect(trashDead.size).toBe(0);
+    const statuses = computeFormulaStatuses(
+      [dependent],
+      livenessExcludingTrashDead(trashDead),
+    );
+    expect(statuses.get('b')).toEqual({ status: '', reason: '' });
   });
 });

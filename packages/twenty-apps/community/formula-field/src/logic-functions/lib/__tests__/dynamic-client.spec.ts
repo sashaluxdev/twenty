@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  graphqlEnum,
   serializeArgumentValue,
   serializeSelection,
 } from 'src/logic-functions/lib/dynamic-client';
@@ -32,6 +33,19 @@ describe('serializeArgumentValue', () => {
       '{ keep: 1 }',
     );
     expect(serializeArgumentValue(Number.NaN)).toBe('null');
+  });
+
+  it('emits an enum literal unquoted (FilterIs on a deletedAt filter)', () => {
+    expect(serializeArgumentValue(graphqlEnum('NOT_NULL'))).toBe('NOT_NULL');
+    expect(
+      serializeArgumentValue({ deletedAt: { is: graphqlEnum('NOT_NULL') } }),
+    ).toBe('{ deletedAt: { is: NOT_NULL } }');
+  });
+
+  it('guards an injection-shaped enum literal (finding M1)', () => {
+    expect(() =>
+      serializeArgumentValue(graphqlEnum('NULL } evil { id')),
+    ).toThrow(/Unsafe GraphQL identifier/);
   });
 });
 

@@ -1,6 +1,8 @@
 import { compileFormula } from 'src/engine';
 import {
   loadAllEnabledFormulas,
+  loadTrashedFormulas,
+  type TrashedFormulaRecord,
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
 import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
@@ -59,6 +61,47 @@ const dependencyRefs = (
     // already disables it and records the parse error).
     return [];
   }
+};
+
+// Trashed-target liveness (ADR 0009 refinement): a field is "trash-dead" iff a
+// trashed definition CREATED it (createdField: true) AND no live definition
+// still targets the same object+field. Naive-trashing a definition no longer
+// deactivates its wizard-created field, so this is what keeps a dependent of a
+// trashed formula OFFLINE — it is subtracted from the live-field set, routing
+// the dependent through the existing dead-input path (same reason wording).
+//
+// The "still shared" check is derived from the already-loaded live formulas
+// list (no extra query, no third copy of anotherDefinitionTargets).
+export const buildTrashDeadFieldKeys = (
+  trashed: ReadonlyArray<
+    Pick<TrashedFormulaRecord, 'targetObject' | 'targetField' | 'createdField'>
+  >,
+  liveDefinitions: ReadonlyArray<
+    Pick<FormulaDefinitionRecord, 'targetObject' | 'targetField'>
+  >,
+): Set<string> => {
+  const liveTargets = new Set<string>();
+  for (const definition of liveDefinitions) {
+    if (definition.targetObject && definition.targetField) {
+      liveTargets.add(fieldKey(definition.targetObject, definition.targetField));
+    }
+  }
+
+  const trashDead = new Set<string>();
+  for (const definition of trashed) {
+    if (
+      definition.createdField !== true ||
+      !definition.targetObject ||
+      !definition.targetField
+    ) {
+      continue;
+    }
+    const key = fieldKey(definition.targetObject, definition.targetField);
+    if (!liveTargets.has(key)) {
+      trashDead.add(key);
+    }
+  }
+  return trashDead;
 };
 
 export const computeFormulaStatuses = (
@@ -164,7 +207,14 @@ export const refreshFormulaStatuses = async (
   byId: Map<string, ComputedStatus>;
 }> => {
   const definitions = await loadAllEnabledFormulas(client);
-  const liveness = isFieldLive ?? (await loadFieldLiveness());
+  // Trashed definitions whose created field no live definition still targets
+  // make that field dead (its column persists but the formula that fed it is
+  // gone), so dependents go OFFLINE. Loaded once and folded into liveness.
+  const trashed = await loadTrashedFormulas(client);
+  const trashDeadKeys = buildTrashDeadFieldKeys(trashed, definitions);
+  const baseLiveness = isFieldLive ?? (await loadFieldLiveness());
+  const liveness: FieldLiveness = (object, field) =>
+    baseLiveness(object, field) && !trashDeadKeys.has(fieldKey(object, field));
   const statuses = computeFormulaStatuses(definitions, liveness);
   const objectFieldIndex = await loadObjectFieldIndex();
 

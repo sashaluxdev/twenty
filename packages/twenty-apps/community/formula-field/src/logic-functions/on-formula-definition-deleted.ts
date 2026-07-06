@@ -8,9 +8,10 @@ import {
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { handleDefinitionDeleted } from 'src/logic-functions/lib/handle-definition-lifecycle';
 
-// Soft delete of a definition (trash): deactivate its app-owned value field
-// pair and re-flag dependents (OFFLINE/UPSTREAM). Fully reversible via
-// restore. ADR 0009.
+// Soft delete of a definition (trash): performs no field-metadata mutation —
+// the app-owned value field pair stays active (its column/data survive). Only
+// re-flags dependents (OFFLINE/UPSTREAM) via the trashed-target liveness rule.
+// Fully reversible via restore. ADR 0009.
 const handler = async (
   payload: DatabaseEventPayload<
     ObjectRecordDeleteEvent<CoreSchema.FormulaDefinition>
@@ -30,7 +31,7 @@ export default defineLogicFunction({
   universalIdentifier: '2112e28b-3dd1-4cb8-8dc7-a816a91ed4af',
   name: 'on-formula-definition-deleted',
   description:
-    'Deactivate the deleted formula’s app-owned field and flag dependents.',
+    'Flag dependents of the trashed formula (OFFLINE/UPSTREAM); no field mutation.',
   timeoutSeconds: 120,
   handler,
   databaseEventTriggerSettings: { eventName: 'formulaDefinition.deleted' },

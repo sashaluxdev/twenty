@@ -25,9 +25,23 @@ type RawGraphqlTransport = {
   }>;
 };
 
+// Marks a value as a GraphQL enum literal so it serializes UNQUOTED (a Name
+// token), e.g. the FilterIs `NOT_NULL` on a `deletedAt` filter. Enum input
+// values are never StringValues: quoting one (`"NOT_NULL"`) is rejected by the
+// server against the enum type. The name is still run through the M1 identifier
+// guard at serialization time, so it cannot smuggle GraphQL syntax.
+const GRAPHQL_ENUM_TAG = '__graphqlEnum';
+export type GraphqlEnumLiteral = { [GRAPHQL_ENUM_TAG]: string };
+export const graphqlEnum = (name: string): GraphqlEnumLiteral => ({
+  [GRAPHQL_ENUM_TAG]: name,
+});
+const isGraphqlEnumLiteral = (value: object): value is GraphqlEnumLiteral =>
+  GRAPHQL_ENUM_TAG in value &&
+  typeof (value as GraphqlEnumLiteral)[GRAPHQL_ENUM_TAG] === 'string';
+
 // GraphQL value literal from a plain JS value. Strings JSON-stringify (valid
 // GraphQL StringValue); objects/arrays recurse (also valid for JSON scalars
-// like the dependencies field). Enums are not used by the engine's queries.
+// like the dependencies field). Enum literals (graphqlEnum(...)) emit unquoted.
 export const serializeArgumentValue = (value: unknown): string => {
   if (value === null || value === undefined) {
     return 'null';
@@ -43,6 +57,9 @@ export const serializeArgumentValue = (value: unknown): string => {
   }
   if (Array.isArray(value)) {
     return `[${value.map(serializeArgumentValue).join(', ')}]`;
+  }
+  if (typeof value === 'object' && isGraphqlEnumLiteral(value)) {
+    return assertSafeGraphqlIdentifier(value[GRAPHQL_ENUM_TAG]);
   }
   if (typeof value === 'object') {
     // Argument-object keys (e.g. the `data` payload's field names, filter keys)
