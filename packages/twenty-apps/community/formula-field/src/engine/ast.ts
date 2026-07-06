@@ -3,7 +3,8 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 // AST for the arithmetic grammar. Deliberately tiny: numbers, variable
 // references (same-record field or cross-record), unary +/-, binary + - * / %,
 // comparisons (confined to IF conditions by the parser), and IF conditionals.
-// There is still no general call node, no member-access node, no string node —
+// There is still no general call node and no member-access node; the one string
+// node is inert data confined to = / != comparison operands, never a callable.
 // IF is static dispatch over three fixed sub-expressions, not code execution,
 // so the grammar still cannot express running arbitrary code.
 
@@ -15,6 +16,14 @@ export type ComparisonOperator = '>' | '<' | '>=' | '<=' | '=' | '!=';
 export type NumberNode = {
   type: 'number';
   value: number;
+};
+
+// A double-quoted string literal. The parser only ever produces one as a direct
+// operand of an = / != comparison inside an IF condition (enforced structurally,
+// see parser.ts), so, like ComparisonNode, it never reaches a numeric value slot.
+export type StringNode = {
+  type: 'string';
+  value: string;
 };
 
 export type FieldNode = {
@@ -68,6 +77,7 @@ export type TodayNode = {
 
 export type AstNode =
   | NumberNode
+  | StringNode
   | FieldNode
   | CrossRefNode
   | UnaryNode

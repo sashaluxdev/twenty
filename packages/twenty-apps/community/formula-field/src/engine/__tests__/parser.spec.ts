@@ -249,6 +249,130 @@ describe('parser comparison confinement (transient comparisons)', () => {
   });
 });
 
+describe('parser string literals (comparison operands only)', () => {
+  it('parses a string on the right of an equality inside an IF condition', () => {
+    const ast = parse('IF(stage = "QUALIFIED", 1, 0)');
+    if (ast.type === 'if' && ast.condition.type === 'comparison') {
+      expect(ast.condition.operator).toBe('=');
+      expect(ast.condition.left).toEqual({ type: 'field', path: 'stage' });
+      expect(ast.condition.right).toEqual({
+        type: 'string',
+        value: 'QUALIFIED',
+      });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
+  });
+
+  it('parses a string on the left of the comparison', () => {
+    const ast = parse('IF("QUALIFIED" = stage, 1, 0)');
+    if (ast.type === 'if' && ast.condition.type === 'comparison') {
+      expect(ast.condition.left).toEqual({ type: 'string', value: 'QUALIFIED' });
+      expect(ast.condition.right).toEqual({ type: 'field', path: 'stage' });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
+  });
+
+  it('parses a string with the != operator', () => {
+    const ast = parse('IF(stage != "LOST", 1, 0)');
+    if (ast.type === 'if' && ast.condition.type === 'comparison') {
+      expect(ast.condition.operator).toBe('!=');
+      expect(ast.condition.right).toEqual({ type: 'string', value: 'LOST' });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
+  });
+
+  it('parses a condition with a string literal on both sides', () => {
+    const ast = parse('IF("a" = "b", 1, 0)');
+    if (ast.type === 'if' && ast.condition.type === 'comparison') {
+      expect(ast.condition.left).toEqual({ type: 'string', value: 'a' });
+      expect(ast.condition.right).toEqual({ type: 'string', value: 'b' });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
+  });
+
+  it('rejects a string beside an ordering operator', () => {
+    try {
+      parse('IF(stage < "X", 1, 0)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      expect((error as FormulaError).message).toBe(
+        'Strings support only = and != comparisons',
+      );
+    }
+  });
+
+  it('rejects a string used in arithmetic', () => {
+    try {
+      parse('1 + "a"');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      expect((error as FormulaError).message).toBe(
+        'String literals are only allowed beside = or != inside an IF condition',
+      );
+    }
+  });
+
+  it('rejects a string in an IF branch', () => {
+    try {
+      parse('IF(c, "a", 0)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      expect((error as FormulaError).message).toBe(
+        'String literals are only allowed beside = or != inside an IF condition',
+      );
+    }
+  });
+
+  it('rejects a bare string at the top level', () => {
+    try {
+      parse('"a"');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      expect((error as FormulaError).message).toBe(
+        'String literals are only allowed beside = or != inside an IF condition',
+      );
+    }
+  });
+
+  it('rejects a parenthesised string even beside equality', () => {
+    try {
+      parse('("a") = stage');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      expect((error as FormulaError).message).toBe(
+        'String literals are only allowed beside = or != inside an IF condition',
+      );
+    }
+  });
+
+  it('rejects a parenthesised string operand inside an IF condition', () => {
+    try {
+      parse('IF(("a") = stage, 1, 0)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      expect((error as FormulaError).message).toBe(
+        'String literals are only allowed beside = or != inside an IF condition',
+      );
+    }
+  });
+});
+
 describe('parser errors', () => {
   it('rejects trailing tokens', () => {
     expect(() => parse('1 2')).toThrow(FormulaError);

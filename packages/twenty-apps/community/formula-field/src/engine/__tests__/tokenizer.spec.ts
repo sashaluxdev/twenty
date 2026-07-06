@@ -108,6 +108,74 @@ describe('tokenizer', () => {
     });
   });
 
+  describe('string literals', () => {
+    it('tokenizes a double-quoted literal into one STRING token with the quotes stripped from stringValue', () => {
+      const tokens = tokenize('"QUALIFIED"');
+      expect(tokens.map((token) => token.type)).toEqual(['STRING', 'EOF']);
+      expect(tokens[0]).toMatchObject({
+        type: 'STRING',
+        lexeme: '"QUALIFIED"',
+        stringValue: 'QUALIFIED',
+      });
+    });
+
+    it('tokenizes an empty literal with an empty stringValue', () => {
+      const tokens = tokenize('""');
+      expect(tokens[0]).toMatchObject({ type: 'STRING', stringValue: '' });
+    });
+
+    it('preserves internal spaces and grammar characters verbatim', () => {
+      const tokens = tokenize('"a b [c].d"');
+      expect(tokens[0]).toMatchObject({
+        type: 'STRING',
+        stringValue: 'a b [c].d',
+      });
+    });
+
+    it('accepts a 100-character literal', () => {
+      const content = 'x'.repeat(100);
+      const tokens = tokenize(`"${content}"`);
+      expect(tokens[0]).toMatchObject({ type: 'STRING', stringValue: content });
+    });
+
+    it('rejects a 101-character literal as over-length', () => {
+      const content = 'x'.repeat(101);
+      try {
+        tokenize(`"${content}"`);
+        throw new Error('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(FormulaError);
+        expect((error as FormulaError).code).toBe('TOKENIZE_ERROR');
+        expect((error as FormulaError).message).toBe(
+          'String literal exceeds 100 characters',
+        );
+      }
+    });
+
+    it('rejects a literal left unterminated at end of input', () => {
+      try {
+        tokenize('"abc');
+        throw new Error('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(FormulaError);
+        expect((error as FormulaError).code).toBe('TOKENIZE_ERROR');
+        expect((error as FormulaError).message).toBe(
+          'Unterminated string literal',
+        );
+      }
+    });
+
+    it('rejects a literal broken by a newline before its closing quote', () => {
+      expect(() => tokenize('"abc\ndef"')).toThrowError(
+        /Unterminated string literal/,
+      );
+    });
+
+    it('still rejects a single quote as an illegal character', () => {
+      expect(() => tokenize("'abc'")).toThrowError(/Unexpected character/);
+    });
+  });
+
   describe('injection / hardening', () => {
     it('rejects a statement separator', () => {
       // Classic "escape the expression" attempt.

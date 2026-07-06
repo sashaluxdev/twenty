@@ -91,6 +91,18 @@ describe('dependency extraction', () => {
     expect(deps.sameRecordFields).toEqual(['flagField']);
   });
 
+  it('should collect fields from a condition that compares against a string literal', () => {
+    const deps = extractDependencies('IF(status = "X", a, b)');
+    expect(deps.sameRecordFields).toEqual(['a', 'b', 'status']);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
+
+  it('should contribute no dependency for the string literal itself', () => {
+    const deps = extractDependencies('IF("a" = "b", 1, 2)');
+    expect(deps.sameRecordFields).toEqual([]);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
+
   it('should treat TODAY() as a dependency-free no-op', () => {
     const deps = extractDependencies('TODAY() + 100');
     expect(deps.sameRecordFields).toEqual([]);
@@ -131,6 +143,10 @@ describe('usesToday', () => {
 
   it('returns false for a cross-record reference with no TODAY()', () => {
     expect(usesToday(parse(`[object:${UUID}:field] + 1`))).toBe(false);
+  });
+
+  it('returns false when a string literal is present but TODAY() is not', () => {
+    expect(usesToday(parse('IF(status = "X", 1, 2)'))).toBe(false);
   });
 
   it('detects TODAY() nested under unary negation', () => {

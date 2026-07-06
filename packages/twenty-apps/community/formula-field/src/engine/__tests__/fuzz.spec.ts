@@ -60,9 +60,10 @@ describe('tokenizer fuzzing', () => {
 
   it('never lets a forbidden character survive tokenization', () => {
     const rng = makeRng(0x1234);
-    // '=', '<', '>' left this list when comparisons landed; a lone '!' is
-    // still forbidden (it only exists as part of "!=").
-    const forbidden = ';{}$`"\'\\!&|^~#@?';
+    // '=', '<', '>' left this list when comparisons landed; '"' left when string
+    // literals landed (a lone '"' now opens a string and dies as "unterminated",
+    // still a FormulaError). A lone '!' is still forbidden (only "!=" is legal).
+    const forbidden = ";{}$`'\\!&|^~#@?";
 
     for (let iteration = 0; iteration < 2000; iteration += 1) {
       const bad = forbidden[Math.floor(rng() * forbidden.length)];
@@ -80,10 +81,28 @@ describe('tokenizer fuzzing', () => {
     // branches are themselves generated expressions, so both are finite).
     const genNumber = () => String(1 + Math.floor(rng() * 9));
     const COMPARE_OPS = ['>', '<', '>=', '<=', '=', '==', '!='];
+    // String literals are legal ONLY as a direct operand of = / != inside an IF
+    // condition, so quoted operands are produced only here in genCondition.
+    const STRING_CHARS = [...'abcXYZ 0129._[]'];
+    const genString = (): string => {
+      const length = Math.floor(rng() * 6);
+      let content = '';
+      for (let i = 0; i < length; i += 1) {
+        content += STRING_CHARS[Math.floor(rng() * STRING_CHARS.length)];
+      }
+      return `"${content}"`;
+    };
     const genCondition = (depth: number): string => {
       // Numeric condition or a single (never chained) comparison.
       if (rng() < 0.3) {
         return genExpr(depth - 1);
+      }
+      // Sometimes a (in)equality with a quoted operand on one or both sides.
+      if (rng() < 0.25) {
+        const op = rng() < 0.5 ? '=' : '!=';
+        const left = rng() < 0.5 ? genString() : genExpr(depth - 1);
+        const right = rng() < 0.5 ? genString() : genExpr(depth - 1);
+        return `${left} ${op} ${right}`;
       }
       const op = COMPARE_OPS[Math.floor(rng() * COMPARE_OPS.length)];
       return `${genExpr(depth - 1)} ${op} ${genExpr(depth - 1)}`;
@@ -103,8 +122,15 @@ describe('tokenizer fuzzing', () => {
 
     for (let iteration = 0; iteration < 2000; iteration += 1) {
       const source = genExpr(5);
-      const result = evaluate(parse(source), () => 0);
-      expect(Number.isFinite(result as number)).toBe(true);
+      // String literals are grammar-only in this task (evaluation lands later),
+      // so a string-bearing expression is asserted to PARSE; a purely numeric
+      // one must also evaluate to a finite number as before.
+      if (source.includes('"')) {
+        expect(() => parse(source)).not.toThrow();
+      } else {
+        const result = evaluate(parse(source), () => 0);
+        expect(Number.isFinite(result as number)).toBe(true);
+      }
     }
   });
 });

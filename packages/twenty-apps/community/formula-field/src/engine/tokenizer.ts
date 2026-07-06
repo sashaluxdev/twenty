@@ -4,8 +4,8 @@ import { FormulaError } from 'src/engine/errors';
 // that make up the whitelisted grammar and rejects everything else at the exact
 // offset where the illegal character appears. There is no eval/Function anywhere
 // downstream, but rejecting early keeps the AST small and the failure messages
-// precise (e.g. unicode homoglyph operators, `;`, quotes, backslashes all die
-// here).
+// precise (e.g. unicode homoglyph operators, `;`, single quotes, backslashes
+// all die here; `"` opens a whitelisted string literal instead).
 
 export type TokenType =
   | 'NUMBER'
@@ -25,6 +25,7 @@ export type TokenType =
   | 'NOT_EQUAL'
   | 'FIELD'
   | 'CROSSREF'
+  | 'STRING'
   | 'EOF';
 
 export type CrossRefValue = {
@@ -44,6 +45,9 @@ export type Token = {
   fieldPath?: string;
   // Populated for CROSSREF.
   crossRef?: CrossRefValue;
+  // Populated for STRING: the literal's content with the surrounding double
+  // quotes stripped (the quotes stay in `lexeme`).
+  stringValue?: string;
 };
 
 // Identifier segments that must never be resolved as variable names — they are
@@ -57,6 +61,11 @@ const FORBIDDEN_SEGMENTS = new Set([
 
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// Upper bound on a double-quoted string literal's content length. Keeps literals
+// small (they only ever feed = / != comparisons) and bounds token size well
+// under MAX_EXPRESSION_LENGTH.
+const MAX_STRING_LITERAL_LENGTH = 100;
 
 const isDigit = (char: string): boolean => char >= '0' && char <= '9';
 
@@ -242,6 +251,59 @@ const readCrossRef = (
   };
 };
 
+// Reads a double-quoted string literal. Content is taken verbatim (no escape
+// processing): every character up to the next `"` is kept as-is, so spaces,
+// `[`, `.`, `'` and other grammar characters survive unchanged. A newline or
+// end-of-input before the closing quote is an unterminated literal.
+const readString = (
+  source: string,
+  start: number,
+): { token: Token; next: number } => {
+  let index = start + 1;
+
+  while (index < source.length) {
+    const char = source[index];
+
+    if (char === '"') {
+      const value = source.slice(start + 1, index);
+
+      if (value.length > MAX_STRING_LITERAL_LENGTH) {
+        throw new FormulaError(
+          'TOKENIZE_ERROR',
+          `String literal exceeds ${MAX_STRING_LITERAL_LENGTH} characters`,
+          start,
+        );
+      }
+
+      return {
+        token: {
+          type: 'STRING',
+          lexeme: source.slice(start, index + 1),
+          position: start,
+          stringValue: value,
+        },
+        next: index + 1,
+      };
+    }
+
+    if (char === '\n' || char === '\r') {
+      throw new FormulaError(
+        'TOKENIZE_ERROR',
+        'Unterminated string literal',
+        start,
+      );
+    }
+
+    index += 1;
+  }
+
+  throw new FormulaError(
+    'TOKENIZE_ERROR',
+    'Unterminated string literal',
+    start,
+  );
+};
+
 const SINGLE_CHAR_TOKENS: Record<string, TokenType> = {
   '+': 'PLUS',
   '-': 'MINUS',
@@ -345,6 +407,13 @@ export const tokenize = (source: string): Token[] => {
       continue;
     }
 
+    if (char === '"') {
+      const { token, next } = readString(source, index);
+      tokens.push(token);
+      index = next;
+      continue;
+    }
+
     if (isIdentifierStart(char)) {
       const { lexeme, next } = readIdentifier(source, index);
 
@@ -367,8 +436,9 @@ export const tokenize = (source: string): Token[] => {
       continue;
     }
 
-    // Reached only by illegal characters: `;`, `{`, `}`, `$`, backtick, quotes,
-    // backslash, unicode homoglyph operators (U+2212, fullwidth +/-), etc.
+    // Reached only by illegal characters: `;`, `{`, `}`, `$`, backtick, single
+    // quote, backslash, unicode homoglyph operators (U+2212, fullwidth +/-),
+    // etc. (`"` opens a string literal above, so it does not land here.)
     throw new FormulaError(
       'TOKENIZE_ERROR',
       `Unexpected character "${char}" (U+${char

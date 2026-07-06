@@ -93,6 +93,16 @@ class Parser {
     );
   }
 
+  // Raised wherever a string literal shows up outside a direct = / != operand —
+  // the mirror of comparisonOutsideConditionError for string placement.
+  private stringOutsideConditionError(token: Token): FormulaError {
+    return new FormulaError(
+      'PARSE_ERROR',
+      'String literals are only allowed beside = or != inside an IF condition',
+      token.position,
+    );
+  }
+
   parse(): AstNode {
     const node = this.parseExpression();
 
@@ -200,6 +210,13 @@ class Parser {
       case 'CROSSREF':
         this.advance();
         return { type: 'crossref', ref: token.crossRef! };
+
+      // A STRING in a value position (parens, arithmetic, IF branch, bare, or a
+      // function argument) always routes here and always rejects: string
+      // literals are legal ONLY when parseCondition consumes them directly as an
+      // = / != operand, so this case makes "direct operand only" structural.
+      case 'STRING':
+        throw this.stringOutsideConditionError(token);
 
       case 'LPAREN': {
         this.advance();
@@ -311,24 +328,58 @@ class Parser {
     return { type: 'today' };
   }
 
+  // A comparison operand at the top of an IF condition. This is the ONLY place a
+  // string literal is legal: a leading STRING is consumed directly here, so it
+  // never reaches parsePrimary (which always rejects strings). Anything else is
+  // a plain arithmetic expression as before.
+  private parseConditionOperand(): AstNode {
+    const token = this.peek();
+
+    if (token.type === 'STRING') {
+      this.advance();
+      return { type: 'string', value: token.stringValue! };
+    }
+
+    return this.parseExpression();
+  }
+
   // The ONLY place a comparison may appear: the top level of IF's first
-  // argument. Operands are plain arithmetic expressions; a second comparison
-  // operator after a complete comparison is a chained comparison, rejected.
+  // argument. Operands are plain arithmetic expressions (or a bare string
+  // literal); a second comparison operator after a complete comparison is a
+  // chained comparison, rejected.
   private parseCondition(): AstNode {
     this.enter();
-    const left = this.parseExpression();
+    const left = this.parseConditionOperand();
 
     const operatorToken = this.peek();
     const operator = COMPARISON_TOKEN_TO_OPERATOR[operatorToken.type];
 
     if (operator === undefined) {
-      // Numeric condition (Excel truthiness): 0 = false, nonzero = true.
+      // Numeric condition (Excel truthiness): 0 = false, nonzero = true. A lone
+      // string here is not beside = / != (e.g. IF("a", 1, 2)), so it is illegal.
+      if (left.type === 'string') {
+        throw this.stringOutsideConditionError(operatorToken);
+      }
       this.leave();
       return left;
     }
 
     this.advance();
-    const right = this.parseExpression();
+    const right = this.parseConditionOperand();
+
+    // Strings compare only for (in)equality: an ordering operator with a string
+    // operand is a type error surfaced at the operator itself.
+    if (
+      operator !== '=' &&
+      operator !== '!=' &&
+      (left.type === 'string' || right.type === 'string')
+    ) {
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'Strings support only = and != comparisons',
+        operatorToken.position,
+      );
+    }
 
     const trailing = this.peek();
     if (isComparisonToken(trailing)) {

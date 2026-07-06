@@ -39,6 +39,11 @@ const walk = (
     case 'number':
       return;
 
+    // A string literal is inert data (only ever an = / != operand); it reads no
+    // field, so it contributes no dependency.
+    case 'string':
+      return;
+
     // TODAY() names no field — it is fed by the caller at evaluation time
     // (ADR 0012), so it contributes no dependency and needs no cycle edge.
     case 'today':
@@ -96,6 +101,9 @@ const walk = (
 export const usesToday = (node: AstNode): boolean => {
   switch (node.type) {
     case 'number':
+      return false;
+
+    case 'string':
       return false;
 
     case 'today':
