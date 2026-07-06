@@ -677,14 +677,28 @@ export const recomputeAllRecords = async (
       if (!id) {
         continue;
       }
-      outcomes.push(
-        await recomputeForRecord({
-          client,
-          formula,
+      try {
+        outcomes.push(
+          await recomputeForRecord({
+            client,
+            formula,
+            targetRecordId: id,
+            overriddenRecordIds,
+          }),
+        );
+      } catch (error) {
+        // Per-record fault isolation: a thrown error (a RangeError from a
+        // pathologically deep value included) becomes this record's outcome and
+        // the sweep continues, rather than one poisoned record aborting the whole
+        // pass. The heartbeat below still runs with the accumulated outcomes.
+        outcomes.push({
+          formulaId: formula.id,
           targetRecordId: id,
-          overriddenRecordIds,
-        }),
-      );
+          changed: false,
+          value: null,
+          error: String(error),
+        });
+      }
     }
 
     if (!connection?.pageInfo?.hasNextPage) {

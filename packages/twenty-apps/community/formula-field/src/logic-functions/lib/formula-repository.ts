@@ -212,10 +212,21 @@ export const updateFormulaBookkeeping = async (
 // JSON-stringifies a mirror's raw value for the lastValueText heartbeat,
 // truncated to 500 chars (display/diagnostic only). A nullish value -> null text.
 const MIRROR_VALUE_TEXT_MAX = 500;
-const mirrorValueText = (rawValue: unknown): string | null =>
-  rawValue === null || rawValue === undefined
-    ? null
-    : JSON.stringify(rawValue).slice(0, MIRROR_VALUE_TEXT_MAX);
+const mirrorValueText = (rawValue: unknown): string | null => {
+  if (rawValue === null || rawValue === undefined) {
+    return null;
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(rawValue);
+  } catch {
+    // A pathologically deep or circular RAW_JSON value can throw here; this is a
+    // display/diagnostic string only, so degrade to a marker rather than let the
+    // heartbeat throw. Truncation still applies below.
+    serialized = '[unserializable]';
+  }
+  return serialized.slice(0, MIRROR_VALUE_TEXT_MAX);
+};
 
 // True when the definition is a mirror (bare ref + non-engine target kind), so
 // the heartbeat records lastValueText instead of the NUMBER-typed lastValue.

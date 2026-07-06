@@ -80,6 +80,25 @@ describe('deepJsonEqual', () => {
   it('distinguishes arrays from objects', () => {
     expect(deepJsonEqual([], {})).toBe(false);
   });
+
+  // Depth cap (containment for user-writable RAW_JSON): the cap is 256 levels.
+  const nestObject = (depth: number): unknown => {
+    let value: unknown = 'leaf';
+    for (let index = 0; index < depth; index += 1) {
+      value = { next: value };
+    }
+    return value;
+  };
+
+  it('compares equal values nested below the depth cap as equal', () => {
+    expect(deepJsonEqual(nestObject(200), nestObject(200))).toBe(true);
+  });
+
+  it('treats values nested beyond the depth cap as changed without throwing', () => {
+    // ~20k levels: structurally identical, but too deep — the cap makes it
+    // compare unequal (losing only no-op suppression) instead of a RangeError.
+    expect(deepJsonEqual(nestObject(20000), nestObject(20000))).toBe(false);
+  });
 });
 
 // Drift-guard (FM Task 1 rider): value-io's ENGINE_FAMILY is the single source of
@@ -484,5 +503,76 @@ describe('mirror heartbeat via recomputeAllRecords', () => {
     expect(client.get('formulaDefinition', 'f1')!.lastValueText).toBe(
       JSON.stringify('ACTIVE'),
     );
+  });
+
+  it('degrades an unserializable mirror value to a marker in lastValueText', async () => {
+    const client = new FakeClient();
+    client.seed('formulaDefinition', [
+      mirrorFormula() as Record<string, unknown> & { id: string },
+    ]);
+
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    await recordEvaluationHeartbeat(
+      client,
+      mirrorFormula(),
+      { value: null, error: null, rawValue: circular },
+      false,
+    );
+
+    expect(client.get('formulaDefinition', 'f1')!.lastValueText).toBe(
+      '[unserializable]',
+    );
+  });
+});
+
+describe('recomputeAllRecords per-record fault isolation', () => {
+  it('contains a thrown error to one record and completes the sweep', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', { source: 'RAW_JSON', mirror: 'RAW_JSON' });
+    client.seed('company', [
+      { id: 'c1', source: { ok: 1 }, mirror: null },
+      { id: 'c2', source: { poison: true }, mirror: null },
+      { id: 'c3', source: { ok: 3 }, mirror: null },
+    ]);
+    client.seed('formulaDefinition', [
+      mirrorFormula({ targetFieldType: 'RAW_JSON' }) as Record<string, unknown> & {
+        id: string;
+      },
+    ]);
+
+    // The mirror path resolves the source field kind exactly once per record, so
+    // throwing on the 2nd resolution poisons the 2nd record (c2) mid-sweep —
+    // standing in for a RangeError escaping recomputeForRecord.
+    const realFieldKinds = client.fieldKinds;
+    let resolveCount = 0;
+    client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
+      resolveCount += 1;
+      if (resolveCount === 2) {
+        throw new RangeError('Maximum call stack size exceeded');
+      }
+      return realFieldKinds(object);
+    };
+
+    const outcomes = await recomputeAllRecords(
+      client,
+      mirrorFormula({ targetFieldType: 'RAW_JSON' }),
+    );
+
+    // Every record produced an outcome — the poisoned one did not abort the sweep.
+    expect(outcomes.map((outcome) => outcome.targetRecordId)).toEqual([
+      'c1',
+      'c2',
+      'c3',
+    ]);
+    expect(outcomes.filter((outcome) => outcome.error).length).toBe(1);
+    const poisoned = outcomes.find((outcome) => outcome.targetRecordId === 'c2')!;
+    expect(poisoned.error).toContain('RangeError');
+    // The other records still wrote their mirror value.
+    expect(client.get('company', 'c1')!.mirror).toEqual({ ok: 1 });
+    expect(client.get('company', 'c3')!.mirror).toEqual({ ok: 3 });
+    // The heartbeat still ran afterwards with the accumulated outcomes.
+    expect(client.get('formulaDefinition', 'f1')!.lastEvaluatedAt).toBeDefined();
   });
 });
