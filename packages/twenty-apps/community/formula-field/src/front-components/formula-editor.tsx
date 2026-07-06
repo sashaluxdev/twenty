@@ -50,7 +50,6 @@ import {
   convergeFormulaFieldLayout,
   convergeTrashedDefinitionLayout,
 } from 'src/logic-functions/lib/fx-status-field';
-import { anotherDefinitionTargets } from 'src/logic-functions/lib/handle-definition-lifecycle';
 import { loadTrashedFormulas } from 'src/logic-functions/lib/formula-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import {
@@ -197,6 +196,11 @@ const FormulaEditor = () => {
   // Bumped by refreshStaleTodayFormulas' onStateChange so the memoized
   // `content` below re-evaluates refreshStateRef.current.inFlight.
   const [refreshTick, setRefreshTick] = useState(0);
+  // Throttle for the trashed-def hide side-channel in load() (see there). Held
+  // in a ref (same pattern as refreshStateRef) so it survives across polls
+  // without re-rendering. Layout convergence is itself 60s-throttled, so
+  // probing the server for trashed defs faster than that is pure waste.
+  const trashedProbeAtRef = useRef(0);
   // Drag-to-reorder (ADR 0014, pointer events): pointerdown only records a
   // pending gesture (id + start coordinates) in pendingDragRef — it does NOT
   // arm the drag. A row's onPointerMove arms it once the pointer has moved
@@ -328,29 +332,39 @@ const FormulaEditor = () => {
     // the orphaned field from the record page. Fire-and-forget and throttled,
     // exactly like the live convergence above; trashed defs never enter the
     // rendered list. Guarded to app-created fields no live definition still
-    // targets (same shared-target check the "delete completely" flow uses).
-    if (host) {
-      loadTrashedFormulas(client, host).then((trashed) => {
+    // targets. The whole side-channel is gated behind a 60s in-memory time
+    // gate: layout convergence is 60s-throttled anyway, so probing the server
+    // for trashed defs faster than that is pure waste (and would fire the
+    // loadTrashedFormulas query on every 4s poll). Wrapped so a withRetry
+    // failure (permissions, transient 5xx) can never leak an unhandled
+    // rejection — same silent no-op posture as the live convergence loop.
+    if (host && Date.now() - trashedProbeAtRef.current >= 60_000) {
+      trashedProbeAtRef.current = Date.now();
+      void (async () => {
+        const trashed = await loadTrashedFormulas(client, host);
         for (const definition of trashed) {
           const targetObject = definition.targetObject;
           const targetField = definition.targetField;
           if (definition.createdField !== true || !targetObject || !targetField) {
             continue;
           }
-          anotherDefinitionTargets(client, {
-            id: definition.id,
-            targetObject,
-            targetField,
-          }).then((shared) => {
-            if (!shared) {
-              convergeTrashedDefinitionLayout({
-                objectNameSingular: targetObject,
-                targetField,
-              });
-            }
-          });
+          // Zero-query shared-target check against the already-loaded live
+          // defs. defs are all host-object definitions, so targetObject is
+          // implicitly equal — a live sharer is any other def with the same
+          // targetField. Mirrors anotherDefinitionTargets without a per-row
+          // query.
+          const shared = defs.some(
+            (other) =>
+              other.id !== definition.id && other.targetField === targetField,
+          );
+          if (!shared) {
+            convergeTrashedDefinitionLayout({
+              objectNameSingular: targetObject,
+              targetField,
+            });
+          }
         }
-      });
+      })().catch(() => {});
     }
 
     setDrafts((previous) => {
