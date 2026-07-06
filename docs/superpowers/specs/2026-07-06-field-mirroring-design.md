@@ -51,8 +51,9 @@ EMAILS, PHONES, ARRAY, RAW_JSON.
 - Null/absent source value → write null (clears the target), consistent with
   engine null-propagation.
 - Source record missing (cross-record ref to a deleted/purged record) →
-  treated like a null source; definition `lastError` notes the missing
-  record (parity with current cross-ref behavior).
+  treated like a null source: write null, no error recorded (exact parity
+  with current cross-ref behavior, where a missing record resolves to null
+  silently — resolution 2026-07-06 after internals research).
 - No-op suppression: deep JSON equality between current target value and
   source value → zero writes (write-avoidance invariant).
 - Recompute triggers, hourly sweep, dependency extraction, cycle detection,
@@ -101,9 +102,11 @@ All selections persist on the definition record for wizard resumability
 - Mirror candidates (bare whole-field ref + non-engine target kind) validate:
   source field exists + kind allowlisted + kinds equal. Failures disable the
   definition with a specific `lastError` (existing validation posture).
-- A subpath ref or any operator with a non-engine target kind → existing
-  "cannot compute a non-numeric target" style error (today's behavior for
-  unsupported targets — verify wording during planning).
+- A subpath ref or any operator with a non-engine target kind → NEW
+  save-time rejection introduced by this feature. (No such validation exists
+  today: `targetFieldKind()` silently defaults unknown kinds to NUMBER and
+  failures surface only at write time — this feature closes that latent gap
+  for non-engine target kinds.)
 
 ## Testing
 
