@@ -180,3 +180,42 @@ New `handle-definition-lifecycle.spec.ts` (build a fake client in the style of `
 - [ ] **Step 3: Verify fix 2 (naive delete → hide).** Ensure a wizard-created formula field exists with values visible on a record page. Trash the FormulaDefinition record from its record page / table (soft delete, NOT "Delete Completely"). Re-open a target record page (widget mounts, convergence runs). Expect: value field AND FxStatus chip disappear from the Fields card within one render cycle; field metadata still `isActive: true` (verify via API/metadata query); record data intact. Then restore the definition from trash; re-open the record page; expect the field visible again and recompute working. If a second formula reads the first one's field: after trashing the first, the dependent must show OFFLINE (chip/banner) — verify.
 - [ ] **Step 4: Regression smoke.** Expression save, override toggle, drag-reorder still work on the record-page widget; definition editor loads clean; no console errors (ignore the known benign `setSelectionRange` warning).
 - [ ] **Step 5: Report** with pass/fail per item + evidence (API outputs, screenshots). No commit (nothing in-repo), unless bugs were found and fixed → fixes get their own commits and a re-run.
+
+---
+
+### Task 5: Fix expression autocomplete when editing mid-string (caret tracking without selectionStart)
+
+> Execution-order note: implementation tasks run 1 → 2 → 3 → 5 → (6: string literals, planned separately from `docs/superpowers/specs/2026-07-06-string-literals-design.md`); Task 4 (live verify) runs LAST and must also cover this fix and the deletedAt/`NOT_NULL` live-filter check from Task 2's review.
+
+**Files:**
+- Modify: `packages/twenty-apps/community/formula-field/src/front-components/lib/formula-field-input.tsx`
+- Create: `packages/twenty-apps/community/formula-field/src/front-components/lib/caret-from-diff.ts`
+- Create: `packages/twenty-apps/community/formula-field/src/front-components/lib/__tests__/caret-from-diff.spec.ts`
+
+**Interfaces:**
+- Produces: `caretFromDiff(previousValue: string, nextValue: string): number` — pure helper returning the index immediately AFTER the changed region of a single-region edit (insert, delete, or replace — the only shapes a keystroke/paste/cut produces).
+- Consumes: nothing from other tasks. (The string-literals feature will later reuse the corrected caret path — keep `identifierBeforeCaret` and the suppression logic untouched.)
+
+**Root cause (confirmed by live repro 2026-07-06):** the input's `caret` state is set exclusively from `selectionStart` (`onChange` ~line 273; `syncCaret` on click/keyup ~lines 238-242), but remote-dom never mirrors host-side selection into the app worker, so `selectionStart` is always `undefined` and the fallback `?? value.length` pins the caret to end-of-text. Autocomplete therefore only ever worked when typing at the end (creation); any mid-string edit computes suggestions from the wrong position. Not a regression — present since the first autocomplete commit (`46d7b2fda9`).
+
+**Fix contract:** in `onChange`, compute `const diffCaret = caretFromDiff(previousValue, nextValue)` and set `setCaret(event.target.selectionStart ?? diffCaret)` — `selectionStart` stays as an opportunistic first choice so native hosts keep exact-click behavior. `caretFromDiff` algorithm: `nextValue.length - commonSuffixLength(previousValue, nextValue)`, where `commonSuffixLength` is capped so it never overlaps the common prefix (guard: `min(suffix, nextValue.length - commonPrefixLength, previousValue.length - commonPrefixLength)` — prevents wrong results on repeated characters like `"aaa"` → `"aaaa"`). Keep `syncCaret` as-is (caret-only moves still can't be seen in the sandbox; the next keystroke recovers — accepted limitation, note it in a `//` comment). No styling changes; no new UI.
+
+- [ ] **Step 1: Write failing tests** in `caret-from-diff.spec.ts`:
+
+```ts
+// each as its own it():
+caretFromDiff('money1 * 0.2', 'monney1 * 0.2') === 3   // mid-string insert
+caretFromDiff('money1', 'money1i') === 7               // append at end
+caretFromDiff('money1 * 0.2', 'mony1 * 0.2') === 3     // mid-string delete (backspace at 5→3 region)
+caretFromDiff('aaa', 'aaaa') === 4                      // repeated chars: caret after inserted run, prefix/suffix overlap guarded
+caretFromDiff('money1', 'money1') === 6                 // no-op → end
+caretFromDiff('', 'a') === 1                            // first char
+caretFromDiff('abc', '') === 0                          // clear-all
+```
+
+Plus integration-level cases in the same spec (exercising the exported suggestion-computation path if one exists, else extract one): value `'monney1 * 0.2'` + caret 3 → suggestions include field `money1`; append `'i'` at end → suggestions include `IF(`; caret inside a `[...]` cross-ref → no suggestions.
+
+- [ ] **Step 2: Run the spec, verify failures** (helper missing).
+- [ ] **Step 3: Implement `caret-from-diff.ts` + wire `onChange`.** One `//` comment at the wiring site explaining WHY (remote-dom exposes no selectionStart; diff-derived caret is the reliable signal).
+- [ ] **Step 4: Full app suite + lint** (from the app dir; redirect vitest output to a file and tail it).
+- [ ] **Step 5: Commit** — `fix(formula-field): derive expression caret from value diff (autocomplete works mid-string)`
