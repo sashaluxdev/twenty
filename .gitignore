@@ -60,3 +60,4 @@ output/playwright/
 screenshots/
 !**/public/screenshots/
 !**/assets/screenshots/
+.worktrees/
