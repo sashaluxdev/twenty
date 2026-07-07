@@ -264,10 +264,12 @@ export type PrimaryFetchResult = {
   frozen: boolean;
 };
 
-// Fetches the primary INCLUDING trashed rows, via the plural connection with an
-// explicit (empty) `deletedAt` filter key — the same withDeleted() convention
-// already proven for FakeClient/the server elsewhere in this app (see
-// FakeClient.connection). Also always selects the primary's OWN relation
+// Fetches the primary INCLUDING trashed rows in a single connection read. An
+// `or` over `deletedAt IS NULL / IS NOT NULL` triggers the server's
+// withDeleted() (which disables the default `deletedAt IS NULL` scope), so the
+// row is returned whether it is live or trashed. The earlier `deletedAt: {}`
+// form was server-invalid ("Filter for field deletedAt must have exactly one
+// operator") and is fixed here. Also always selects the primary's OWN relation
 // pointer so callers get the single-level guard for free.
 export const fetchPrimaryRecordInclTrashed = async (
   client: FormulaClient,
@@ -284,7 +286,13 @@ export const fetchPrimaryRecordInclTrashed = async (
       [pluralName]: {
         __args: {
           first: 1,
-          filter: { id: { eq: primaryRecordId }, deletedAt: {} },
+          filter: {
+            id: { eq: primaryRecordId },
+            or: [
+              { deletedAt: { is: graphqlEnum('NULL') } },
+              { deletedAt: { is: graphqlEnum('NOT_NULL') } },
+            ],
+          },
         },
         edges: {
           node: {

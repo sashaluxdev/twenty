@@ -107,12 +107,43 @@ export class FakeClient implements FormulaClient {
     return true;
   }
 
+  // Mirrors the server's withDeleted() gate + its "exactly one operator"
+  // validation: a deletedAt filter anywhere in the filter (top level or nested
+  // in an `or`/`and` array) disables the default `deletedAt IS NULL` scope so
+  // trashed rows surface. The server rejects a deletedAt filter present without
+  // exactly one operator, so we throw the same way — an empty `deletedAt: {}`
+  // (the live-found bug) fails here in units instead of silently passing.
+  private hasDeletedAtFilter(filter: any): boolean {
+    if (filter == null || typeof filter !== 'object') return false;
+    let found = false;
+    for (const [field, value] of Object.entries(filter)) {
+      if (field === 'deletedAt') {
+        if (
+          value == null ||
+          typeof value !== 'object' ||
+          Object.keys(value).length !== 1
+        ) {
+          throw new Error(
+            'Filter for field "deletedAt" must have exactly one operator',
+          );
+        }
+        found = true;
+      } else if ((field === 'or' || field === 'and') && Array.isArray(value)) {
+        for (const sub of value) {
+          if (this.hasDeletedAtFilter(sub)) found = true;
+        }
+      }
+    }
+    return found;
+  }
+
   private connection(object: string, node: any) {
     const filter = node?.__args?.filter;
     let records = Array.from(this.store.get(object)?.values() ?? []);
-    // The record API returns soft-deleted rows only when the filter carries a
-    // deletedAt key (mirrors the server's withDeleted() gate).
-    if (!filter || !('deletedAt' in filter)) {
+    // The record API returns soft-deleted rows only when a deletedAt filter is
+    // present (mirrors the server's withDeleted() gate); this also validates the
+    // deletedAt operator, so a server-invalid filter throws.
+    if (!this.hasDeletedAtFilter(filter)) {
       records = records.filter((record) => record.deletedAt == null);
     }
     if (filter) {
