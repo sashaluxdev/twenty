@@ -1,3 +1,5 @@
+import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
+
 // Output formats the "Add formula field" wizard offers, and how each maps to
 // Twenty field metadata (createOneField input). Pure data + helpers so the
 // mapping is unit-testable without a client.
@@ -222,16 +224,55 @@ export const areFormatOptionsValid = (
   return true;
 };
 
+// A wizard "Mirror another field" selection, persisted on the definition record
+// so an interrupted mirror wizard reseeds its source object/field/record. A
+// same-record mirror carries no sourceRecordId (empty = same-record).
+export type MirrorDraft = {
+  sourceObject: string;
+  sourceField: string;
+  sourceRecordId?: string;
+};
+
 // What we persist on FormulaDefinition.targetFieldSettings so the wizard/editor
-// stay resumable and can restore the exact chosen options.
+// stay resumable and can restore the exact chosen options. `mirror` is present
+// only for a mirror-mode definition (design 2026-07-06).
 export type TargetFieldSettings = {
   settings: Record<string, unknown> | null;
   currencyCode?: string;
+  mirror?: MirrorDraft;
 };
 
 export const serializeTargetFieldSettings = (
   value: TargetFieldSettings,
 ): string => JSON.stringify(value);
+
+// Recovers a MirrorDraft from an unknown parsed shape. Requires both source
+// names as non-empty strings; a missing/malformed source is treated as "no
+// mirror" so a corrupted draft degrades to the format flow rather than crashing.
+const parseMirrorDraft = (raw: unknown): MirrorDraft | undefined => {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const candidate = raw as {
+    sourceObject?: unknown;
+    sourceField?: unknown;
+    sourceRecordId?: unknown;
+  };
+  if (
+    typeof candidate.sourceObject !== 'string' ||
+    candidate.sourceObject.length === 0 ||
+    typeof candidate.sourceField !== 'string' ||
+    candidate.sourceField.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    sourceObject: candidate.sourceObject,
+    sourceField: candidate.sourceField,
+    ...(typeof candidate.sourceRecordId === 'string' &&
+    candidate.sourceRecordId.length > 0
+      ? { sourceRecordId: candidate.sourceRecordId }
+      : {}),
+  };
+};
 
 export const parseTargetFieldSettings = (
   raw: string,
@@ -241,17 +282,72 @@ export const parseTargetFieldSettings = (
     const parsed = JSON.parse(raw) as {
       settings?: Record<string, unknown> | null;
       currencyCode?: unknown;
+      mirror?: unknown;
     };
     if (!parsed || typeof parsed !== 'object') return null;
+    const mirror = parseMirrorDraft(parsed.mirror);
     return {
       settings: (parsed.settings ?? null) as Record<string, unknown> | null,
-      currencyCode:
-        typeof parsed.currencyCode === 'string' ? parsed.currencyCode : undefined,
+      ...(typeof parsed.currencyCode === 'string'
+        ? { currencyCode: parsed.currencyCode }
+        : {}),
+      ...(mirror ? { mirror } : {}),
     };
   } catch {
     return null;
   }
 };
+
+// Seeds the mirror expression from a source selection: a same-record mirror
+// (no source record id) is a bare field reference; a specific source record is a
+// cross-record [object:recordId:field] reference (design 2026-07-06).
+export const seedMirrorExpression = (draft: MirrorDraft): string =>
+  draft.sourceRecordId && draft.sourceRecordId.length > 0
+    ? `[${draft.sourceObject}:${draft.sourceRecordId}:${draft.sourceField}]`
+    : draft.sourceField;
+
+// A cloned SELECT/MULTI_SELECT option for the createOneField input. No `id`:
+// the server assigns a fresh UUID per option on create (verified in
+// from-create-field-input-to-flat-field-metadatas-to-create.util.ts, which maps
+// each option to `id: v4()` BEFORE the enum validators run), and the GraphQL
+// input marks option `id` optional, so sending one is redundant.
+export type MirrorClonedOption = {
+  label: string;
+  value: string;
+  color: string;
+  position: number;
+};
+
+// Clones a source SELECT/MULTI_SELECT option set for the created mirror field:
+// label/value/color/position copied verbatim (the source values already pass the
+// server's snake_case validation); the server assigns each option's id. Cloned-
+// not-linked: later source-option edits do NOT propagate (design 2026-07-06).
+// Entries lacking a string value or label are dropped (malformed source metadata).
+export const cloneMirrorOptions = (
+  sourceOptions: unknown,
+): MirrorClonedOption[] => {
+  if (!Array.isArray(sourceOptions)) return [];
+  return sourceOptions
+    .filter(
+      (option): option is Record<string, unknown> =>
+        Boolean(option) &&
+        typeof (option as Record<string, unknown>).value === 'string' &&
+        typeof (option as Record<string, unknown>).label === 'string',
+    )
+    .map((option, index) => ({
+      label: option.label as string,
+      value: option.value as string,
+      color: typeof option.color === 'string' ? option.color : 'gray',
+      position: typeof option.position === 'number' ? option.position : index,
+    }));
+};
+
+// Narrows a list of candidate source fields to only the mirror allowlist kinds
+// (excludes the engine numeric family and non-mirrorable kinds). Generic over the
+// field shape so the wizard can carry its own metadata alongside `type`.
+export const pickableMirrorSourceFields = <T extends { type: string }>(
+  fields: T[],
+): T[] => fields.filter((field) => isMirrorTargetKind(field.type));
 
 // Reconstructs FormatOptions from a persisted settings object (+ currency code),
 // overlaying whatever is present onto the format's defaults. Used to resume the

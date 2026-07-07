@@ -916,6 +916,72 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.get('company', 'c1')!.mirror).toBe('MANUAL');
   });
 
+  it('ignores an app echo on a COMPOSITE mirror target (deep-equal source value)', async () => {
+    client = new FakeClient();
+    client.setFieldKinds('company', { source: 'FULL_NAME', mirror: 'FULL_NAME' });
+    client.seed('formulaDefinition', [
+      {
+        id: 'm1',
+        targetObject: 'company',
+        targetField: 'mirror',
+        targetFieldType: 'FULL_NAME',
+        expression: 'source',
+        enabled: true,
+      },
+    ]);
+    const composite = { firstName: 'Ada', lastName: 'Lovelace' };
+    client.seed('company', [{ id: 'c1', source: composite, mirror: composite }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: composite },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    // The stored composite deep-equals the mirror source -> the app's own write,
+    // not a human pin.
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+  });
+
+  it('pins a text override when a HUMAN edits a COMPOSITE mirror target away from the source', async () => {
+    client = new FakeClient();
+    client.setFieldKinds('company', { source: 'FULL_NAME', mirror: 'FULL_NAME' });
+    client.seed('formulaDefinition', [
+      {
+        id: 'm1',
+        targetObject: 'company',
+        targetField: 'mirror',
+        targetFieldType: 'FULL_NAME',
+        expression: 'source',
+        enabled: true,
+      },
+    ]);
+    const source = { firstName: 'Ada', lastName: 'Lovelace' };
+    const manual = { firstName: 'Grace', lastName: 'Hopper' };
+    client.seed('company', [{ id: 'c1', source, mirror: manual }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: manual },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    const override = client.get('formulaOverride', 'formulaOverride-0');
+    expect(override).toBeDefined();
+    expect(override!.recordId).toBe('c1');
+    expect(override!.targetField).toBe('mirror');
+    expect(override!.overrideValueText).toBe(JSON.stringify(manual));
+    expect(override!.overrideValue ?? null).toBeNull();
+    // The human's manual composite is left in place.
+    expect(client.get('company', 'c1')!.mirror).toEqual(manual);
+  });
+
   it('skips a superseded stale echo on a mirror target (no spurious pin)', async () => {
     client = new FakeClient();
     client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });

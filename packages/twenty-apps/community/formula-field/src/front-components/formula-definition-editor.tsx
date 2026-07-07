@@ -4,15 +4,7 @@ import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { useRecordId } from 'twenty-sdk/front-component';
 
-import {
-  collectStringComparisonRefs,
-  detectCycle,
-  extractDependenciesFromAst,
-  type FormulaTarget,
-  isFormulaError,
-  parse,
-  usesToday,
-} from 'src/engine';
+import { bareReferenceOf, parse, usesToday } from 'src/engine';
 import {
   type DeleteDefinitionPlan,
   deleteDefinitionCompletely,
@@ -30,7 +22,9 @@ import {
 } from 'src/front-components/lib/refresh-stale-formulas';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
+import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
+import { validateExpression } from 'src/front-components/lib/validate-expression';
 import {
   BannerDanger,
   BannerWarning,
@@ -91,61 +85,50 @@ const expressionUsesToday = (expression: string): boolean => {
   }
 };
 
+// Delegates to the shared record-page validator (parse + string-comparison kind
+// check + mirror checks + cycle detection) so this editor and the record-page
+// "Formulas" tab enforce the exact same rules. The host field kinds (name ->
+// metadata type) are closed into the accessor validateExpression expects; the
+// candidate's targetFieldType drives the mirror checks.
 const validate = (
   candidate: Definition,
   expression: string,
   all: Definition[],
-  // Host field kinds (name -> metadata type). When present, a string comparison
-  // against a same-record field that can't hold a string is rejected inline —
-  // parity with the server save-time check and formula-editor.tsx. Omitted or a
-  // field absent from the map -> that check is skipped (backward compatible).
   fieldKinds?: Map<string, string>,
+): string | null =>
+  validateExpression(
+    expression,
+    candidate.targetObject,
+    candidate.targetField,
+    all.map((definition) => ({
+      targetObject: definition.targetObject,
+      targetField: definition.targetField,
+      expression: definition.expression,
+    })),
+    fieldKinds
+      ? (object) => (object === candidate.targetObject ? fieldKinds : undefined)
+      : undefined,
+    candidate.targetFieldType,
+  );
+
+// The "{object}.{field}" a mirror definition copies from, for the read-only
+// Field-settings line. Same-record mirrors read from the target object itself;
+// cross-record mirrors name the referenced object. Null when the expression is
+// not a bare whole-field reference (not a mirror).
+const mirrorSourceRef = (
+  expression: string,
+  targetObject: string,
 ): string | null => {
-  let ast;
-  let dependencies;
+  let bare;
   try {
-    ast = parse(expression);
-    dependencies = extractDependenciesFromAst(ast);
-  } catch (error) {
-    return isFormulaError(error)
-      ? `${error.code}: ${error.message}`
-      : String(error);
+    bare = bareReferenceOf(parse(expression));
+  } catch {
+    return null;
   }
-
-  if (fieldKinds) {
-    for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
-      const rootField = path.split('.')[0];
-      const kind = fieldKinds.get(rootField);
-      if (kind !== undefined && kind !== 'SELECT' && kind !== 'TEXT') {
-        return `String comparison against "${rootField}" is not supported (field type ${kind}; only SELECT and TEXT fields)`;
-      }
-    }
-  }
-
-  const others: FormulaTarget[] = all
-    .filter((definition) => definition.id !== candidate.id)
-    .map((definition) => {
-      try {
-        return {
-          object: definition.targetObject,
-          field: definition.targetField,
-          dependencies: extractDependenciesFromAst(parse(definition.expression)),
-        };
-      } catch {
-        return null;
-      }
-    })
-    .filter((target): target is FormulaTarget => target !== null);
-
-  const cycle = detectCycle([
-    ...others,
-    {
-      object: candidate.targetObject,
-      field: candidate.targetField,
-      dependencies,
-    },
-  ]);
-  return cycle.hasCycle ? `Dependency cycle: ${cycle.cycle.join(' -> ')}` : null;
+  if (bare === null) return null;
+  return bare.kind === 'same'
+    ? `${targetObject}.${bare.field}`
+    : `${bare.ref.object}.${bare.ref.fieldPath}`;
 };
 
 // Danger zone: permanently destroy the definition and (when this app owns the
@@ -509,6 +492,13 @@ const FormulaDefinitionEditor = () => {
 
   const dirty = draft !== definition.expression;
   const awaitingExpression = !definition.expression && !dirty;
+  // Mirror provenance line: shown when the value field's kind is a mirror kind
+  // AND the SAVED expression is a bare whole-field reference. Uses the saved
+  // expression (not the in-progress draft) so the section reflects what is live.
+  const mirrorSource =
+    isMirrorTargetKind(definition.targetFieldType) && definition.expression
+      ? mirrorSourceRef(definition.expression, definition.targetObject)
+      : null;
 
   return (
     <WidgetRoot style={layout.container}>
@@ -581,14 +571,30 @@ const FormulaDefinitionEditor = () => {
         <OkText as="div">Valid</OkText>
       )}
 
-      <FieldSettingsEditor
-        definitionId={definition.id}
-        targetObject={definition.targetObject}
-        targetField={definition.targetField}
-        targetFieldType={definition.targetFieldType}
-        outputFormat={definition.outputFormat}
-        currencyCode={definition.currencyCode}
-      />
+      {mirrorSource ? (
+        // A mirror copies its source field verbatim (type + settings + options
+        // cloned at creation); there are no display-format options to tune, so
+        // the Field-settings section is a read-only provenance line instead.
+        <div style={layout.mirrorSection}>
+          <SectionTitle style={layout.mirrorTitle}>Field settings</SectionTitle>
+          <MutedText as="div">
+            Mirrors <span style={layout.mono}>{mirrorSource}</span>
+          </MutedText>
+          <HintText as="div">
+            Cloned, not linked — later changes to the source field’s options do
+            not propagate.
+          </HintText>
+        </div>
+      ) : (
+        <FieldSettingsEditor
+          definitionId={definition.id}
+          targetObject={definition.targetObject}
+          targetField={definition.targetField}
+          targetFieldType={definition.targetFieldType}
+          outputFormat={definition.outputFormat}
+          currencyCode={definition.currencyCode}
+        />
+      )}
 
       <FormulaDangerZone
         definitionId={definition.id}
@@ -637,6 +643,12 @@ const layout: Record<string, React.CSSProperties> = {
   mono: { fontFamily: 'ui-monospace, monospace', color: TOKENS.fontColorPrimary },
   confirmLabel: { marginBottom: '6px' },
   confirmInput: { width: '100%', marginBottom: '8px', boxSizing: 'border-box' },
+  mirrorSection: {
+    marginTop: '18px',
+    paddingTop: '12px',
+    borderTop: `1px solid ${TOKENS.borderLight}`,
+  },
+  mirrorTitle: { marginBottom: '6px' },
 };
 
 export const FORMULA_DEFINITION_EDITOR_UNIVERSAL_IDENTIFIER =

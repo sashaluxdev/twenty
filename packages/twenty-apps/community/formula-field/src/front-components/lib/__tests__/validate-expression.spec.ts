@@ -129,6 +129,135 @@ describe('validateExpression', () => {
     ).toBeNull();
   });
 
+  // Mirror validation parity with the server save-validation (adjudicated at
+  // Task 1 review): the inline validator runs the same three mirror checks with
+  // the exact same messages when a non-engine target field type is supplied.
+  it('rejects a non-mirrorable target kind with the exact message', () => {
+    expect(
+      validateExpression(
+        'status',
+        'opportunity',
+        'mirrorField',
+        [],
+        undefined,
+        'RELATION',
+      ),
+    ).toBe('Field kind RELATION cannot be mirrored');
+  });
+
+  it('rejects an operator expression onto a mirrorable target', () => {
+    expect(
+      validateExpression(
+        'status + otherField',
+        'opportunity',
+        'mirrorField',
+        [],
+        undefined,
+        'SELECT',
+      ),
+    ).toBe('Only a plain field reference can be mirrored onto a SELECT field');
+  });
+
+  it('rejects a dotted subpath ref onto a mirrorable target', () => {
+    expect(
+      validateExpression(
+        'amount.amountMicros',
+        'opportunity',
+        'mirrorField',
+        [],
+        undefined,
+        'SELECT',
+      ),
+    ).toBe('Only a plain field reference can be mirrored onto a SELECT field');
+  });
+
+  it('rejects a same-record source of a different kind with the exact message', () => {
+    expect(
+      validateExpression(
+        'sourceField',
+        'opportunity',
+        'mirrorField',
+        [],
+        (object) =>
+          object === 'opportunity'
+            ? new Map([['sourceField', 'TEXT']])
+            : undefined,
+        'SELECT',
+      ),
+    ).toBe(
+      'Cannot mirror TEXT field "sourceField" onto a SELECT field (kinds must match)',
+    );
+  });
+
+  it('rejects a cross-record source of a different kind (preloaded source object)', () => {
+    expect(
+      validateExpression(
+        `[company:${COMPANY_ID}:name]`,
+        'opportunity',
+        'mirrorField',
+        [],
+        (object) =>
+          object === 'company' ? new Map([['name', 'TEXT']]) : undefined,
+        'SELECT',
+      ),
+    ).toBe(
+      'Cannot mirror TEXT field "name" onto a SELECT field (kinds must match)',
+    );
+  });
+
+  it('accepts a same-kind same-record mirror', () => {
+    expect(
+      validateExpression(
+        'sourceField',
+        'opportunity',
+        'mirrorField',
+        [],
+        () => new Map([['sourceField', 'SELECT']]),
+        'SELECT',
+      ),
+    ).toBeNull();
+  });
+
+  it('accepts a same-kind cross-record mirror', () => {
+    expect(
+      validateExpression(
+        `[company:${COMPANY_ID}:name]`,
+        'opportunity',
+        'mirrorField',
+        [],
+        (object) =>
+          object === 'company' ? new Map([['name', 'SELECT']]) : undefined,
+        'SELECT',
+      ),
+    ).toBeNull();
+  });
+
+  it('leaves an engine-family target (NUMBER) on the engine path', () => {
+    expect(
+      validateExpression(
+        'sourceField',
+        'opportunity',
+        'mirrorField',
+        [],
+        () => new Map([['sourceField', 'SELECT']]),
+        'NUMBER',
+      ),
+    ).toBeNull();
+  });
+
+  it('degrades gracefully without an accessor: unknown source kind passes', () => {
+    expect(
+      validateExpression(
+        'sourceField',
+        'opportunity',
+        'mirrorField',
+        [],
+        undefined,
+        'SELECT',
+      ),
+    ).toBeNull();
+  });
+
   it('does not report a cycle for same-named fields with no dependency loop', () => {
     const definitions: ValidatableDefinition[] = [
       {

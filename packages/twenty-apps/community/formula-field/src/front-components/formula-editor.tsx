@@ -595,6 +595,7 @@ const FormulaEditor = () => {
         definition.targetField,
         definitions,
         hostFieldKindsAccessor,
+        definition.targetFieldType,
       );
       if (error) {
         setDefinitions((prev) =>
@@ -789,6 +790,7 @@ const FormulaEditor = () => {
         definition.targetField,
         definitions,
         hostFieldKindsAccessor,
+        definition.targetFieldType,
       );
       const overrideEntry = overrides[definition.targetField];
       const isOverridden = overrideEntry?.active ?? false;

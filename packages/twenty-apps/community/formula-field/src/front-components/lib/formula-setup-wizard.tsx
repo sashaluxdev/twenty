@@ -10,22 +10,28 @@ import {
   areFormatOptionsValid,
   buildCurrencyDefaultValue,
   buildFieldSettings,
+  cloneMirrorOptions,
   deriveFieldName,
   type FormatOptions,
   getOutputFormat,
   isValidFieldName,
   makeFormatOptions,
+  type MirrorDraft,
   optionsFromSettings,
   OUTPUT_FORMATS,
   type OutputFormat,
   parseTargetFieldSettings,
+  pickableMirrorSourceFields,
+  seedMirrorExpression,
   serializeTargetFieldSettings,
 } from 'src/front-components/lib/formula-field-formats';
+import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import {
   ChoiceChip,
   ErrText,
   HintText,
   MutedText,
+  OkText,
   PrimaryButton,
   StepTitle,
   TextInput,
@@ -71,12 +77,28 @@ const FX_STATUS_OPTIONS = [
 
 type FieldInfo = { id: string; isActive: boolean };
 
+// A candidate mirror SOURCE field: its kind + settings + option set, so the
+// wizard can clone them onto the created target field.
+type SourceFieldOption = {
+  id: string;
+  name: string;
+  label: string;
+  type: string;
+  settings: Record<string, unknown> | null;
+  options: unknown;
+};
+
 type TargetObjectOption = {
   id: string;
   nameSingular: string;
   labelSingular: string;
   fields: Map<string, FieldInfo>;
+  // Active, non-system fields eligible as mirror sources (pre-allowlist; the
+  // picker narrows to mirrorable kinds via pickableMirrorSourceFields).
+  sourceFields: SourceFieldOption[];
 };
+
+type WizardMode = 'format' | 'mirror';
 
 export type WizardDraft = {
   id: string;
@@ -130,6 +152,31 @@ export const FormulaSetupWizard = ({
   // Suppresses the label-persist debounce until the user actually types.
   const labelTouched = useRef(false);
 
+  // Mirror-mode draft, recovered once from the persisted settings (outputFormat
+  // 'mirror' or a mirror block). The source object/field re-resolve against the
+  // loaded objects below; sourceRecordId seeds the record input directly.
+  const persistedMirror = useMemo(
+    () => parseTargetFieldSettings(draft.targetFieldSettings)?.mirror ?? null,
+    [draft.targetFieldSettings],
+  );
+  const [mode, setMode] = useState<WizardMode>(
+    draft.outputFormat === 'mirror' || persistedMirror ? 'mirror' : 'format',
+  );
+  // The mirror SOURCE object (which object's field to copy) — distinct from the
+  // step-1 target object where the mirror field is created.
+  const [sourceObject, setSourceObject] = useState<TargetObjectOption | null>(
+    null,
+  );
+  const [sourceObjectFilter, setSourceObjectFilter] = useState('');
+  const [sourceField, setSourceField] = useState<SourceFieldOption | null>(null);
+  const [sourceRecordId, setSourceRecordId] = useState(
+    persistedMirror?.sourceRecordId ?? '',
+  );
+  // Source-record existence check (cross-record mirrors): 'valid' unlocks create.
+  const [sourceRecordStatus, setSourceRecordStatus] = useState<
+    'idle' | 'checking' | 'valid' | 'invalid'
+  >('idle');
+
   // Fire-and-forget draft persistence; a failed save only costs resumability.
   const persistDraft = useCallback(
     (data: Record<string, unknown>) => {
@@ -163,7 +210,20 @@ export const FormulaSetupWizard = ({
                 isSystem: true,
                 fields: {
                   __args: { paging: { first: 500 }, filter: {} },
-                  edges: { node: { id: true, name: true, isActive: true } },
+                  edges: {
+                    node: {
+                      id: true,
+                      name: true,
+                      label: true,
+                      type: true,
+                      isActive: true,
+                      isSystem: true,
+                      // JSON scalars: a SELECT/MULTI_SELECT option set and the
+                      // field's display settings, both cloned onto a mirror.
+                      options: true,
+                      settings: true,
+                    },
+                  },
                 },
               },
             },
@@ -179,32 +239,67 @@ export const FormulaSetupWizard = ({
               !node.isSystem &&
               !EXCLUDED_OBJECTS.has(node.nameSingular),
           )
-          .map((node: any) => ({
-            id: node.id,
-            nameSingular: node.nameSingular,
-            labelSingular: node.labelSingular ?? node.nameSingular,
-            fields: new Map<string, FieldInfo>(
-              (node.fields?.edges ?? [])
-                .filter((fieldEdge: any) => fieldEdge?.node?.name)
-                .map((fieldEdge: any) => [
-                  fieldEdge.node.name,
+          .map((node: any) => {
+            const fieldNodes: any[] = (node.fields?.edges ?? [])
+              .map((fieldEdge: any) => fieldEdge?.node)
+              .filter((fieldNode: any) => fieldNode?.name);
+            return {
+              id: node.id,
+              nameSingular: node.nameSingular,
+              labelSingular: node.labelSingular ?? node.nameSingular,
+              fields: new Map<string, FieldInfo>(
+                fieldNodes.map((fieldNode: any) => [
+                  fieldNode.name,
                   {
-                    id: fieldEdge.node.id,
-                    isActive: fieldEdge.node.isActive !== false,
+                    id: fieldNode.id,
+                    isActive: fieldNode.isActive !== false,
                   },
                 ]),
-            ),
-          }))
+              ),
+              sourceFields: fieldNodes
+                .filter(
+                  (fieldNode: any) =>
+                    fieldNode.isActive !== false &&
+                    fieldNode.isSystem !== true &&
+                    typeof fieldNode.type === 'string',
+                )
+                .map((fieldNode: any) => ({
+                  id: fieldNode.id,
+                  name: fieldNode.name,
+                  label: fieldNode.label ?? fieldNode.name,
+                  type: fieldNode.type,
+                  settings:
+                    (fieldNode.settings ?? null) as Record<string, unknown> | null,
+                  options: fieldNode.options,
+                }))
+                .sort((a: SourceFieldOption, b: SourceFieldOption) =>
+                  a.label.localeCompare(b.label),
+                ),
+            };
+          })
           .sort((a: TargetObjectOption, b: TargetObjectOption) =>
             a.labelSingular.localeCompare(b.labelSingular),
           );
         setObjects(options);
-        // Resume: reselect the draft's object.
+        // Resume: reselect the draft's target object.
         if (draft.targetObject) {
           const saved = options.find(
             (option) => option.nameSingular === draft.targetObject,
           );
           if (saved) setSelectedObject(saved);
+        }
+        // Resume: re-resolve the persisted mirror source object + field.
+        if (persistedMirror) {
+          const savedSourceObject = options.find(
+            (option) => option.nameSingular === persistedMirror.sourceObject,
+          );
+          if (savedSourceObject) {
+            setSourceObject(savedSourceObject);
+            const savedSourceField = savedSourceObject.sourceFields.find(
+              (candidate) => candidate.name === persistedMirror.sourceField,
+            );
+            if (savedSourceField) setSourceField(savedSourceField);
+          }
         }
       } catch (loadError) {
         if (!cancelled) {
@@ -269,6 +364,61 @@ export const FormulaSetupWizard = ({
     if (format) persistFormatOptions(format, nextOptions);
   };
 
+  // The mirror selection as a persistable draft — non-null only once a source
+  // object AND field are chosen. An empty record input means a same-record
+  // mirror, so sourceRecordId is dropped when blank.
+  const mirrorDraft = useMemo<MirrorDraft | null>(() => {
+    if (!sourceObject || !sourceField) return null;
+    const trimmedRecordId = sourceRecordId.trim();
+    return {
+      sourceObject: sourceObject.nameSingular,
+      sourceField: sourceField.name,
+      ...(trimmedRecordId ? { sourceRecordId: trimmedRecordId } : {}),
+    };
+  }, [sourceObject, sourceField, sourceRecordId]);
+
+  // Persists the current mirror selection (outputFormat 'mirror' marks the
+  // definition as mirror-mode for resumability; the mirror block reseeds the
+  // source object/field/record).
+  const persistMirrorDraft = useCallback(
+    (draftMirror: MirrorDraft | null) => {
+      persistDraft({
+        outputFormat: 'mirror',
+        targetFieldSettings: serializeTargetFieldSettings({
+          settings: null,
+          ...(draftMirror ? { mirror: draftMirror } : {}),
+        }),
+      });
+    },
+    [persistDraft],
+  );
+
+  const pickMode = (nextMode: WizardMode) => {
+    setMode(nextMode);
+    // Clear the format marker when leaving mirror mode so a resumed draft does
+    // not re-enter it; entering mirror mode marks it immediately.
+    persistDraft({ outputFormat: nextMode === 'mirror' ? 'mirror' : '' });
+  };
+  const pickSourceObject = (object: TargetObjectOption) => {
+    setSourceObject(object);
+    // A different object's fields are unrelated — reset the field + record.
+    setSourceField(null);
+    setSourceRecordId('');
+    setSourceRecordStatus('idle');
+    persistMirrorDraft(null);
+  };
+  const pickSourceField = (field: SourceFieldOption) => {
+    setSourceField(field);
+    if (sourceObject) {
+      const trimmedRecordId = sourceRecordId.trim();
+      persistMirrorDraft({
+        sourceObject: sourceObject.nameSingular,
+        sourceField: field.name,
+        ...(trimmedRecordId ? { sourceRecordId: trimmedRecordId } : {}),
+      });
+    }
+  };
+
   const fieldName = useMemo(() => deriveFieldName(label), [label]);
   const existingField = selectedObject?.fields.get(fieldName);
   const existingCompanion = selectedObject?.fields.get(`${fieldName}FxStatus`);
@@ -289,56 +439,110 @@ export const FormulaSetupWizard = ({
     );
   }, [objects, objectFilter]);
 
-  const readyToCreate =
-    Boolean(selectedObject) &&
-    Boolean(format) &&
-    isValidFieldName(fieldName) &&
-    !collision &&
-    !creating &&
-    (!format || areFormatOptionsValid(format, options));
+  // Mirror source-object list (same objects, own filter box).
+  const visibleSourceObjects = useMemo(() => {
+    const needle = sourceObjectFilter.trim().toLowerCase();
+    if (!needle) return objects;
+    return objects.filter(
+      (object) =>
+        object.labelSingular.toLowerCase().includes(needle) ||
+        object.nameSingular.toLowerCase().includes(needle),
+    );
+  }, [objects, sourceObjectFilter]);
 
-  const create = useCallback(async () => {
-    if (!selectedObject || !format || !isValidFieldName(fieldName)) return;
-    setCreating(true);
-    setError('');
-    try {
-      const formatDefinition = getOutputFormat(format);
-      const isCurrency = formatDefinition.targetFieldType === 'CURRENCY';
-      const settings = buildFieldSettings(format, options);
-      const metadataClient = new MetadataApiClient();
+  // Only mirrorable-kind fields of the chosen source object are pickable.
+  const mirrorSourceFields = useMemo(
+    () =>
+      sourceObject ? pickableMirrorSourceFields(sourceObject.sourceFields) : [],
+    [sourceObject],
+  );
 
-      let valueFieldId = existingField?.id ?? null;
-      if (!existingField) {
-        const createdField = await metadataClient.mutation({
-          createOneField: {
-            __args: {
-              input: {
-                field: {
-                  objectMetadataId: selectedObject.id,
-                  type: formatDefinition.fieldType,
-                  name: fieldName,
-                  label: label.trim() || fieldName,
-                  description: `Computed by the Formula Field app (${format}).`,
-                  icon: 'IconMathFunction',
-                  isUIEditable: true,
-                  ...(settings ? { settings } : {}),
-                  // String defaults use the server's quoted-literal convention.
-                  ...(isCurrency
-                    ? {
-                        defaultValue: buildCurrencyDefaultValue(
-                          options.currencyCode,
-                        ),
-                      }
-                    : {}),
-                },
-              },
-            },
+  const sourceIsSameObject = Boolean(
+    sourceObject && selectedObject && sourceObject.id === selectedObject.id,
+  );
+  // A cross-object mirror MUST name a specific source record (there is no
+  // "current record" to read from); a same-object mirror may leave it blank.
+  const sourceRecordRequired = Boolean(sourceObject) && !sourceIsSameObject;
+  const trimmedSourceRecordId = sourceRecordId.trim();
+  const mirrorRecordReady = trimmedSourceRecordId
+    ? sourceRecordStatus === 'valid'
+    : !sourceRecordRequired;
+
+  // Validate a typed source-record id by fetching it (existence check). Debounced;
+  // a blank id resets to idle. The dynamic client covers arbitrary/runtime objects.
+  useEffect(() => {
+    if (!sourceObject || !trimmedSourceRecordId) {
+      setSourceRecordStatus('idle');
+      return;
+    }
+    if (!/^[0-9a-f-]{36}$/i.test(trimmedSourceRecordId)) {
+      setSourceRecordStatus('invalid');
+      return;
+    }
+    let cancelled = false;
+    setSourceRecordStatus('checking');
+    const handle = setTimeout(() => {
+      const client = createDynamicCoreClient();
+      client
+        .query({
+          [sourceObject.nameSingular]: {
+            __args: { filter: { id: { eq: trimmedSourceRecordId } } },
             id: true,
-            name: true,
           },
+        })
+        .then((response: any) => {
+          if (cancelled) return;
+          setSourceRecordStatus(
+            response?.[sourceObject.nameSingular]?.id ? 'valid' : 'invalid',
+          );
+          if (response?.[sourceObject.nameSingular]?.id) {
+            persistMirrorDraft(mirrorDraft);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setSourceRecordStatus('invalid');
         });
-        valueFieldId = createdField?.createOneField?.id ?? null;
-      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+    // mirrorDraft/persistMirrorDraft intentionally omitted — persistence is a
+    // fire-and-forget side effect keyed on the id, not a validation input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceObject, trimmedSourceRecordId]);
+
+  const readyToCreate =
+    mode === 'mirror'
+      ? Boolean(selectedObject) &&
+        Boolean(sourceObject) &&
+        Boolean(sourceField) &&
+        mirrorRecordReady &&
+        isValidFieldName(fieldName) &&
+        !collision &&
+        !creating
+      : Boolean(selectedObject) &&
+        Boolean(format) &&
+        isValidFieldName(fieldName) &&
+        !collision &&
+        !creating &&
+        (!format || areFormatOptionsValid(format, options));
+
+  // Shared tail for both create paths: create/heal the FX Status companion, add
+  // the record-page tab, hide the companion chip via layout, then write the
+  // finished definition (format-specific `data`) and notify. The value field
+  // itself is created by the caller (format vs mirror shapes differ).
+  const finalizeCreation = useCallback(
+    async ({
+      metadataClient,
+      valueFieldId,
+      definitionData,
+    }: {
+      metadataClient: MetadataApiClient;
+      valueFieldId: string | null;
+      definitionData: Record<string, unknown>;
+    }) => {
+      if (!selectedObject) return;
 
       // Companion "FX Status" SELECT: always ACTIVE (values stay writable and
       // accurate); it is hidden/shown purely via record-page LAYOUT, slotted
@@ -404,23 +608,7 @@ export const FormulaSetupWizard = ({
       const coreClient = new CoreApiClient();
       await coreClient.mutation({
         updateFormulaDefinition: {
-          __args: {
-            id: draft.id,
-            data: {
-              targetObject: selectedObject.nameSingular,
-              targetField: fieldName,
-              targetFieldType: formatDefinition.targetFieldType,
-              currencyCode: isCurrency ? options.currencyCode : '',
-              outputFormat: format,
-              targetFieldSettings: serializeTargetFieldSettings({
-                settings,
-                currencyCode: isCurrency ? options.currencyCode : undefined,
-              }),
-              // Provenance: the lifecycle machinery only deactivates /
-              // reactivates fields the wizard created (ADR 0009).
-              createdField: true,
-            },
-          },
+          __args: { id: draft.id, data: definitionData },
           id: true,
         },
       });
@@ -441,6 +629,71 @@ export const FormulaSetupWizard = ({
         // No host snackbar — the expression editor also shows an inline note.
       }
       onCreated();
+    },
+    [selectedObject, existingCompanion, fieldName, label, draft.id, onCreated],
+  );
+
+  const create = useCallback(async () => {
+    if (!selectedObject || !format || !isValidFieldName(fieldName)) return;
+    setCreating(true);
+    setError('');
+    try {
+      const formatDefinition = getOutputFormat(format);
+      const isCurrency = formatDefinition.targetFieldType === 'CURRENCY';
+      const settings = buildFieldSettings(format, options);
+      const metadataClient = new MetadataApiClient();
+
+      let valueFieldId = existingField?.id ?? null;
+      if (!existingField) {
+        const createdField = await metadataClient.mutation({
+          createOneField: {
+            __args: {
+              input: {
+                field: {
+                  objectMetadataId: selectedObject.id,
+                  type: formatDefinition.fieldType,
+                  name: fieldName,
+                  label: label.trim() || fieldName,
+                  description: `Computed by the Formula Field app (${format}).`,
+                  icon: 'IconMathFunction',
+                  isUIEditable: true,
+                  ...(settings ? { settings } : {}),
+                  // String defaults use the server's quoted-literal convention.
+                  ...(isCurrency
+                    ? {
+                        defaultValue: buildCurrencyDefaultValue(
+                          options.currencyCode,
+                        ),
+                      }
+                    : {}),
+                },
+              },
+            },
+            id: true,
+            name: true,
+          },
+        });
+        valueFieldId = createdField?.createOneField?.id ?? null;
+      }
+
+      await finalizeCreation({
+        metadataClient,
+        valueFieldId,
+        definitionData: {
+          targetObject: selectedObject.nameSingular,
+          targetField: fieldName,
+          targetFieldType: formatDefinition.targetFieldType,
+          currencyCode: isCurrency ? options.currencyCode : '',
+          outputFormat: format,
+          targetFieldSettings: serializeTargetFieldSettings({
+            settings,
+            currencyCode: isCurrency ? options.currencyCode : undefined,
+          }),
+          // Provenance: the lifecycle machinery only deactivates / reactivates
+          // fields the wizard created (ADR 0009).
+          createdField: true,
+        },
+      });
     } catch (createError) {
       setError((createError as Error).message ?? String(createError));
     } finally {
@@ -452,10 +705,98 @@ export const FormulaSetupWizard = ({
     options,
     fieldName,
     label,
-    draft.id,
     existingField,
-    existingCompanion,
-    onCreated,
+    finalizeCreation,
+  ]);
+
+  // Mirror create: CLONE the source field (type + settings + option set) onto a
+  // new target field, seed the expression, and wire the definition as a mirror.
+  const createMirror = useCallback(async () => {
+    if (
+      !selectedObject ||
+      !sourceObject ||
+      !sourceField ||
+      !mirrorDraft ||
+      !isValidFieldName(fieldName)
+    ) {
+      return;
+    }
+    setCreating(true);
+    setError('');
+    try {
+      const metadataClient = new MetadataApiClient();
+      // Only enum kinds carry an explicit option set to clone; every other
+      // mirrorable kind clones its settings verbatim (design 2026-07-06).
+      const clonesOptions =
+        sourceField.type === 'SELECT' || sourceField.type === 'MULTI_SELECT';
+      const clonedOptions = clonesOptions
+        ? cloneMirrorOptions(sourceField.options)
+        : [];
+
+      let valueFieldId = existingField?.id ?? null;
+      if (!existingField) {
+        const createdField = await metadataClient.mutation({
+          createOneField: {
+            __args: {
+              input: {
+                field: {
+                  objectMetadataId: selectedObject.id,
+                  type: sourceField.type,
+                  name: fieldName,
+                  label: label.trim() || fieldName,
+                  description: `Mirrors ${sourceObject.nameSingular}.${sourceField.name} (Formula Field app).`,
+                  icon: 'IconCopy',
+                  isUIEditable: true,
+                  ...(sourceField.settings
+                    ? { settings: sourceField.settings }
+                    : {}),
+                  ...(clonedOptions.length > 0
+                    ? { options: clonedOptions }
+                    : {}),
+                },
+              },
+            },
+            id: true,
+            name: true,
+          },
+        });
+        valueFieldId = createdField?.createOneField?.id ?? null;
+      }
+
+      await finalizeCreation({
+        metadataClient,
+        valueFieldId,
+        definitionData: {
+          targetObject: selectedObject.nameSingular,
+          targetField: fieldName,
+          targetFieldType: sourceField.type,
+          currencyCode: '',
+          outputFormat: 'mirror',
+          // Expression is seeded automatically (same-record bare ref or cross-
+          // record [object:id:field]); enabling triggers the first passthrough.
+          expression: seedMirrorExpression(mirrorDraft),
+          enabled: true,
+          targetFieldSettings: serializeTargetFieldSettings({
+            settings: sourceField.settings ?? null,
+            mirror: mirrorDraft,
+          }),
+          createdField: true,
+        },
+      });
+    } catch (createError) {
+      setError((createError as Error).message ?? String(createError));
+    } finally {
+      setCreating(false);
+    }
+  }, [
+    selectedObject,
+    sourceObject,
+    sourceField,
+    mirrorDraft,
+    fieldName,
+    label,
+    existingField,
+    finalizeCreation,
   ]);
 
   return (
@@ -491,31 +832,145 @@ export const FormulaSetupWizard = ({
       </div>
 
       <div style={layout.step}>
-        <StepTitle style={layout.stepTitle}>2 · Output format</StepTitle>
+        <StepTitle style={layout.stepTitle}>2 · Value source</StepTitle>
         <div style={layout.formatRow}>
-          {OUTPUT_FORMATS.map((candidate) => (
-            <ChoiceChip
-              key={candidate.key}
-              selected={format === candidate.key}
-              onMouseDown={() => pickFormat(candidate.key)}
-            >
-              {candidate.label}
-              <HintText as="span"> {candidate.hint}</HintText>
-            </ChoiceChip>
-          ))}
+          <ChoiceChip
+            selected={mode === 'format'}
+            onMouseDown={() => pickMode('format')}
+          >
+            Format
+            <HintText as="span"> compute a value</HintText>
+          </ChoiceChip>
+          <ChoiceChip
+            selected={mode === 'mirror'}
+            onMouseDown={() => pickMode('mirror')}
+          >
+            Mirror another field
+            <HintText as="span"> copy a field verbatim</HintText>
+          </ChoiceChip>
         </div>
       </div>
 
-      {format ? (
-        <div style={layout.step}>
-          <StepTitle style={layout.stepTitle}>2b · Format options</StepTitle>
-          <FormatOptionsFields
-            format={format}
-            options={options}
-            onChange={changeOptions}
-          />
-        </div>
-      ) : null}
+      {mode === 'format' ? (
+        <>
+          <div style={layout.step}>
+            <StepTitle style={layout.stepTitle}>2a · Output format</StepTitle>
+            <div style={layout.formatRow}>
+              {OUTPUT_FORMATS.map((candidate) => (
+                <ChoiceChip
+                  key={candidate.key}
+                  selected={format === candidate.key}
+                  onMouseDown={() => pickFormat(candidate.key)}
+                >
+                  {candidate.label}
+                  <HintText as="span"> {candidate.hint}</HintText>
+                </ChoiceChip>
+              ))}
+            </div>
+          </div>
+
+          {format ? (
+            <div style={layout.step}>
+              <StepTitle style={layout.stepTitle}>2b · Format options</StepTitle>
+              <FormatOptionsFields
+                format={format}
+                options={options}
+                onChange={changeOptions}
+              />
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <div style={layout.step}>
+            <StepTitle style={layout.stepTitle}>2a · Source object</StepTitle>
+            <TextInput
+              style={layout.filter}
+              value={sourceObjectFilter}
+              placeholder="Filter objects…"
+              onChange={(event) => setSourceObjectFilter(event.target.value)}
+            />
+            <div style={layout.objectList}>
+              {visibleSourceObjects.map((object) => (
+                <ChoiceChip
+                  key={object.id}
+                  selected={sourceObject?.id === object.id}
+                  onMouseDown={() => pickSourceObject(object)}
+                >
+                  {object.labelSingular}
+                  {selectedObject?.id === object.id ? (
+                    <HintText as="span"> this object</HintText>
+                  ) : null}
+                </ChoiceChip>
+              ))}
+              {visibleSourceObjects.length === 0 ? (
+                <MutedText>No matching object</MutedText>
+              ) : null}
+            </div>
+          </div>
+
+          {sourceObject ? (
+            <div style={layout.step}>
+              <StepTitle style={layout.stepTitle}>2b · Source field</StepTitle>
+              <div style={layout.formatRow}>
+                {mirrorSourceFields.map((field) => (
+                  <ChoiceChip
+                    key={field.id}
+                    selected={sourceField?.id === field.id}
+                    onMouseDown={() => pickSourceField(field)}
+                  >
+                    {field.label}
+                    <HintText as="span"> {field.type}</HintText>
+                  </ChoiceChip>
+                ))}
+                {mirrorSourceFields.length === 0 ? (
+                  <MutedText>
+                    No mirrorable field on this object — only non-numeric kinds
+                    (SELECT, MULTI_SELECT, links, full name, …) can be mirrored.
+                  </MutedText>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {sourceField ? (
+            <div style={layout.step}>
+              <StepTitle style={layout.stepTitle}>2c · Source record</StepTitle>
+              <TextInput
+                style={layout.filter}
+                value={sourceRecordId}
+                placeholder={
+                  sourceRecordRequired
+                    ? 'Source record UUID (required)'
+                    : 'Source record UUID (optional)'
+                }
+                onChange={(event) => setSourceRecordId(event.target.value)}
+              />
+              {trimmedSourceRecordId ? (
+                sourceRecordStatus === 'checking' ? (
+                  <MutedText as="div">Checking record…</MutedText>
+                ) : sourceRecordStatus === 'valid' ? (
+                  <OkText as="div">Record found</OkText>
+                ) : sourceRecordStatus === 'invalid' ? (
+                  <ErrText as="div">
+                    No record with that id on {sourceObject?.labelSingular}
+                  </ErrText>
+                ) : null
+              ) : sourceRecordRequired ? (
+                // A cross-object mirror has no "current record" to read from, so a
+                // specific source record is required before create unlocks.
+                <HintText as="div">
+                  A different object needs a specific source record to copy from.
+                </HintText>
+              ) : (
+                <HintText as="div">
+                  Leave blank to mirror each record’s own {sourceField.label}.
+                </HintText>
+              )}
+            </div>
+          ) : null}
+        </>
+      )}
 
       <div style={layout.step}>
         <StepTitle style={layout.stepTitle}>3 · Field name</StepTitle>
@@ -549,12 +1004,17 @@ export const FormulaSetupWizard = ({
       </div>
 
       <div style={layout.actions}>
-        <PrimaryButton disabled={!readyToCreate} onMouseDown={create}>
+        <PrimaryButton
+          disabled={!readyToCreate}
+          onMouseDown={mode === 'mirror' ? createMirror : create}
+        >
           {creating
             ? 'Creating field…'
             : resumable
               ? 'Adopt fields & finish setup'
-              : 'Create formula field'}
+              : mode === 'mirror'
+                ? 'Create mirror field'
+                : 'Create formula field'}
         </PrimaryButton>
         <MutedText>
           Progress is saved — you can leave and resume anytime.

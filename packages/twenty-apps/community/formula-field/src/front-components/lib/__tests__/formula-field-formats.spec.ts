@@ -4,6 +4,7 @@ import {
   areFormatOptionsValid,
   buildCurrencyDefaultValue,
   buildFieldSettings,
+  cloneMirrorOptions,
   deriveFieldName,
   getOutputFormat,
   isValidCustomUnicodeDateFormat,
@@ -12,6 +13,8 @@ import {
   optionsFromSettings,
   OUTPUT_FORMATS,
   parseTargetFieldSettings,
+  pickableMirrorSourceFields,
+  seedMirrorExpression,
   serializeTargetFieldSettings,
 } from 'src/front-components/lib/formula-field-formats';
 
@@ -171,6 +174,136 @@ describe('targetFieldSettings persistence', () => {
   it('returns null for blank or malformed input', () => {
     expect(parseTargetFieldSettings('')).toBeNull();
     expect(parseTargetFieldSettings('not json')).toBeNull();
+  });
+
+  it('round-trips a cross-record mirror draft', () => {
+    const value = {
+      settings: null,
+      mirror: {
+        sourceObject: 'company',
+        sourceField: 'industry',
+        sourceRecordId: '11111111-1111-4111-8111-111111111111',
+      },
+    };
+    expect(parseTargetFieldSettings(serializeTargetFieldSettings(value))).toEqual(
+      value,
+    );
+  });
+
+  it('round-trips a same-record mirror draft (no source record id)', () => {
+    const value = {
+      settings: null,
+      mirror: { sourceObject: 'opportunity', sourceField: 'stage' },
+    };
+    expect(parseTargetFieldSettings(serializeTargetFieldSettings(value))).toEqual(
+      value,
+    );
+  });
+
+  it('omits the mirror key when the persisted settings carry none', () => {
+    const parsed = parseTargetFieldSettings(
+      serializeTargetFieldSettings({ settings: { type: 'number' } }),
+    );
+    expect(parsed).not.toBeNull();
+    expect(parsed?.mirror).toBeUndefined();
+  });
+
+  it('ignores a malformed mirror shape (missing fields)', () => {
+    const parsed = parseTargetFieldSettings(
+      JSON.stringify({ settings: null, mirror: { sourceObject: 'company' } }),
+    );
+    expect(parsed?.mirror).toBeUndefined();
+  });
+});
+
+describe('seedMirrorExpression', () => {
+  it('seeds a bare field reference for a same-record mirror', () => {
+    expect(
+      seedMirrorExpression({ sourceObject: 'opportunity', sourceField: 'stage' }),
+    ).toBe('stage');
+  });
+
+  it('treats an empty source record id as a same-record mirror', () => {
+    expect(
+      seedMirrorExpression({
+        sourceObject: 'opportunity',
+        sourceField: 'stage',
+        sourceRecordId: '',
+      }),
+    ).toBe('stage');
+  });
+
+  it('seeds a cross-record reference when a source record id is present', () => {
+    const uuid = '22222222-2222-4222-8222-222222222222';
+    expect(
+      seedMirrorExpression({
+        sourceObject: 'company',
+        sourceField: 'industry',
+        sourceRecordId: uuid,
+      }),
+    ).toBe(`[company:${uuid}:industry]`);
+  });
+});
+
+describe('cloneMirrorOptions', () => {
+  it('copies label/value/color/position verbatim and drops the source id', () => {
+    const source = [
+      { id: 'old-1', label: 'Active', value: 'ACTIVE', color: 'green', position: 0 },
+      { id: 'old-2', label: 'Closed', value: 'CLOSED', color: 'red', position: 1 },
+    ];
+    const cloned = cloneMirrorOptions(source);
+
+    // The server assigns each option id on create, so clones carry none.
+    expect(cloned).toEqual([
+      { label: 'Active', value: 'ACTIVE', color: 'green', position: 0 },
+      { label: 'Closed', value: 'CLOSED', color: 'red', position: 1 },
+    ]);
+    expect(cloned[0]).not.toHaveProperty('id');
+  });
+
+  it('returns an empty array for undefined or non-array input', () => {
+    expect(cloneMirrorOptions(undefined)).toEqual([]);
+    expect(cloneMirrorOptions(null)).toEqual([]);
+  });
+
+  it('skips entries missing a string value or label', () => {
+    const cloned = cloneMirrorOptions([
+      { label: 'Ok', value: 'OK', color: 'blue', position: 0 },
+      { label: 'NoValue', color: 'blue', position: 1 },
+      { value: 'NO_LABEL', color: 'blue', position: 2 },
+    ]);
+    expect(cloned).toHaveLength(1);
+    expect(cloned[0]).toMatchObject({ value: 'OK', label: 'Ok' });
+  });
+});
+
+describe('pickableMirrorSourceFields', () => {
+  it('keeps only allowlisted mirror kinds', () => {
+    const fields = [
+      { name: 'stage', type: 'SELECT' },
+      { name: 'tags', type: 'MULTI_SELECT' },
+      { name: 'name', type: 'FULL_NAME' },
+      { name: 'website', type: 'LINKS' },
+      { name: 'amount', type: 'NUMBER' },
+      { name: 'value', type: 'CURRENCY' },
+      { name: 'owner', type: 'RELATION' },
+      { name: 'createdBy', type: 'ACTOR' },
+    ];
+    expect(pickableMirrorSourceFields(fields).map((field) => field.name)).toEqual([
+      'stage',
+      'tags',
+      'name',
+      'website',
+    ]);
+  });
+
+  it('returns an empty array when nothing is mirrorable', () => {
+    expect(
+      pickableMirrorSourceFields([
+        { name: 'amount', type: 'NUMBER' },
+        { name: 'owner', type: 'RELATION' },
+      ]),
+    ).toEqual([]);
   });
 });
 
