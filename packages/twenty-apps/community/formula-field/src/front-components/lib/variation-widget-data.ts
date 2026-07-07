@@ -1,0 +1,419 @@
+import { deriveRecordDisplayLabel } from 'src/front-components/lib/formula-field-formats';
+import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
+import { selectionEntryForMirrorKind } from 'src/logic-functions/lib/mirror-kinds';
+import {
+  deactivateOverride,
+  loadActiveOverrideFieldsForRecord,
+} from 'src/logic-functions/lib/override-repository';
+import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
+import { type FormulaClient } from 'src/logic-functions/lib/types';
+import { findVariationConfigByTargetObject } from 'src/logic-functions/lib/variation-config-repository';
+import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
+import {
+  fetchPrimaryRecordInclTrashed,
+  loadVariationRecordIds,
+  syncOneVariation,
+  type SyncOutcome,
+} from 'src/logic-functions/lib/variation-sync';
+import { withRetry } from 'src/logic-functions/lib/with-retry';
+
+// The widget's pure, testable data layer (design 2026-07-07, Plan 3 Task 1).
+// Every function here reuses the Plan 1 sync engine directly — the widget UI
+// (Tasks 3-4) is a thin shell over these. Nothing here holds React state or
+// touches the DOM, so the whole surface is unit-tested against FakeClient.
+
+const DEFAULT_RELATION_FIELD = 'primaryRecord';
+
+const relationFieldOf = (config: VariationConfigRecord): string =>
+  config.relationFieldName ?? DEFAULT_RELATION_FIELD;
+
+export type LabelFieldInfo = { name: string; kind: string };
+
+// The object's label-identifier field (name + kind), resolved from the shared
+// metadata pull. Any kind is returned here; the label WRITE/READ policy narrows
+// to TEXT/FULL_NAME at the call sites (matching the wizard's labelFieldSelection
+// policy). Returns null when the object or its label field can't be resolved.
+export const resolveLabelField = async (
+  objectName: string,
+): Promise<LabelFieldInfo | null> => {
+  const objects = await loadAllObjectsWithFields();
+  const object = objects.find((candidate) => candidate.nameSingular === objectName);
+  if (!object || !object.labelIdentifierFieldMetadataId) {
+    return null;
+  }
+  const field = object.fields.find(
+    (candidate) => candidate.id === object.labelIdentifierFieldMetadataId,
+  );
+  return field ? { name: field.name, kind: field.type } : null;
+};
+
+// Only TEXT / FULL_NAME labels are readable/writable (same policy as the
+// wizard); every other kind yields no label. Narrows a resolved label field to
+// the selectable subset.
+const selectableLabelField = (
+  labelField: LabelFieldInfo | null,
+): LabelFieldInfo | null =>
+  labelField && (labelField.kind === 'TEXT' || labelField.kind === 'FULL_NAME')
+    ? labelField
+    : null;
+
+// The (fields, selectionOverrides) pair fetchPrimaryRecordInclTrashed needs to
+// read a kind-aware label: TEXT selects scalar `true`; FULL_NAME selects the
+// {firstName,lastName} composite.
+const labelSelectionArgs = (
+  labelField: LabelFieldInfo | null,
+): { fields: string[]; overrides: Record<string, unknown> } => {
+  const selectable = selectableLabelField(labelField);
+  if (!selectable) {
+    return { fields: [], overrides: {} };
+  }
+  if (selectable.kind === 'FULL_NAME') {
+    return {
+      fields: [],
+      overrides: { [selectable.name]: selectionEntryForMirrorKind('FULL_NAME') },
+    };
+  }
+  return { fields: [selectable.name], overrides: {} };
+};
+
+export type WidgetRole =
+  | { kind: 'hidden' }
+  | { kind: 'primary'; config: VariationConfigRecord }
+  | {
+      kind: 'variation';
+      config: VariationConfigRecord;
+      primaryRecordId: string;
+      frozen: boolean;
+      primaryLabel: string | null;
+    };
+
+// One call resolving everything the shell needs: config lookup, a FRESH pointer
+// read (never trusted from a cached prop — same rule as the dispatchers), and
+// for a variation a deletedAt-inclusive primary fetch that also yields the
+// label. Hidden when no enabled config exists for the object.
+export const resolveWidgetRole = async (
+  client: FormulaClient,
+  objectName: string,
+  recordId: string,
+): Promise<WidgetRole> => {
+  const config = await findVariationConfigByTargetObject(client, objectName);
+  if (!config || config.enabled !== true) {
+    return { kind: 'hidden' };
+  }
+
+  const relationFieldName = relationFieldOf(config);
+  const pointerField = `${relationFieldName}Id`;
+
+  // Fresh one-field pointer read: a cached pointer prop is exactly the value an
+  // echo-race could make stale, so re-read it before deciding the role.
+  const pointerResponse = await withRetry(() =>
+    client.query({
+      [objectName]: {
+        __args: { filter: { id: { eq: recordId } } },
+        id: true,
+        [pointerField]: true,
+      },
+    }),
+  );
+  const record = pointerResponse?.[objectName] as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  const primaryRecordId =
+    (record?.[pointerField] as string | null | undefined) ?? null;
+
+  if (!primaryRecordId) {
+    return { kind: 'primary', config };
+  }
+
+  const labelField = await resolveLabelField(objectName);
+  const { fields, overrides } = labelSelectionArgs(labelField);
+  const { record: primary, frozen } = await fetchPrimaryRecordInclTrashed(
+    client,
+    objectName,
+    primaryRecordId,
+    fields,
+    overrides,
+    relationFieldName,
+  );
+
+  const selectable = selectableLabelField(labelField);
+  const primaryLabel =
+    primary && selectable
+      ? deriveRecordDisplayLabel(primary, selectable.name, selectable.kind)
+      : null;
+
+  return {
+    kind: 'variation',
+    config,
+    primaryRecordId,
+    frozen,
+    primaryLabel,
+  };
+};
+
+// Active override field names grouped by variation record id, loaded in ONE
+// paginated query (filter targetObject + active) — never one query per
+// variation. The grouped shape lets loadVariationList compute every variation's
+// diverged count from a single read.
+const loadActiveOverridesGroupedByRecord = async (
+  client: FormulaClient,
+  targetObject: string,
+  pageSize = 500,
+): Promise<Map<string, Set<string>>> => {
+  const grouped = new Map<string, Set<string>>();
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        formulaOverrides: {
+          __args: {
+            first: pageSize,
+            filter: {
+              targetObject: { eq: targetObject },
+              active: { eq: true },
+            },
+            ...(after ? { after } : {}),
+          },
+          edges: { node: { recordId: true, targetField: true } },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+    const connection = response?.formulaOverrides;
+    for (const edge of connection?.edges ?? []) {
+      const recordId = edge?.node?.recordId as string | undefined;
+      const targetField = edge?.node?.targetField as string | undefined;
+      if (!recordId || !targetField) continue;
+      const fields = grouped.get(recordId) ?? new Set<string>();
+      fields.add(targetField);
+      grouped.set(recordId, fields);
+    }
+    if (!connection?.pageInfo?.hasNextPage) break;
+    after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  return grouped;
+};
+
+// Reads one variation's kind-aware label. A separate singular read per
+// variation (not batched): only the OVERRIDE load is contractually single-query
+// — labels can't ride that formulaOverrides read.
+const fetchVariationLabel = async (
+  client: FormulaClient,
+  targetObject: string,
+  recordId: string,
+  labelField: LabelFieldInfo | null,
+): Promise<string | null> => {
+  const selectable = selectableLabelField(labelField);
+  if (!selectable) {
+    return null;
+  }
+  const selection =
+    selectable.kind === 'FULL_NAME'
+      ? { [selectable.name]: selectionEntryForMirrorKind('FULL_NAME') }
+      : { [selectable.name]: true };
+  const response = await withRetry(() =>
+    client.query({
+      [targetObject]: {
+        __args: { filter: { id: { eq: recordId } } },
+        id: true,
+        ...selection,
+      },
+    }),
+  );
+  const record = response?.[targetObject] as Record<string, unknown> | null | undefined;
+  return record
+    ? deriveRecordDisplayLabel(record, selectable.name, selectable.kind)
+    : null;
+};
+
+export type VariationListEntry = {
+  id: string;
+  label: string | null;
+  divergedCount: number;
+};
+
+// Primary view data: every variation id (paginated), its display label, and its
+// diverged-field count = active override fields ∩ current syncable set.
+export const loadVariationList = async (
+  client: FormulaClient,
+  config: VariationConfigRecord,
+  primaryRecordId: string,
+): Promise<VariationListEntry[]> => {
+  const targetObject = config.targetObject ?? '';
+  const relationFieldName = relationFieldOf(config);
+
+  const variationIds = await loadVariationRecordIds(
+    client,
+    targetObject,
+    relationFieldName,
+    primaryRecordId,
+  );
+  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
+  const syncableNames = new Set(syncable.map((field) => field.name));
+  const overridesByRecord = await loadActiveOverridesGroupedByRecord(client, targetObject);
+  const labelField = await resolveLabelField(targetObject);
+
+  const entries: VariationListEntry[] = [];
+  for (const variationId of variationIds) {
+    const overrideFields = overridesByRecord.get(variationId) ?? new Set<string>();
+    let divergedCount = 0;
+    for (const fieldName of overrideFields) {
+      if (syncableNames.has(fieldName)) divergedCount += 1;
+    }
+    const label = await fetchVariationLabel(client, targetObject, variationId, labelField);
+    entries.push({ id: variationId, label, divergedCount });
+  }
+  return entries;
+};
+
+export type DivergedField = { name: string; kind: string };
+
+// Variation view data: the active overrides on this record ∩ the syncable set,
+// carried as {name, kind} so the re-sync action knows the field's selection
+// shape.
+export const loadDivergedFields = async (
+  client: FormulaClient,
+  config: VariationConfigRecord,
+  variationRecordId: string,
+): Promise<DivergedField[]> => {
+  const targetObject = config.targetObject ?? '';
+  const relationFieldName = relationFieldOf(config);
+
+  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
+  const activeOverrideFields = await loadActiveOverrideFieldsForRecord(
+    client,
+    targetObject,
+    variationRecordId,
+  );
+
+  return syncable
+    .filter((field) => activeOverrideFields.has(field.name))
+    .map((field) => ({ name: field.name, kind: field.kind }));
+};
+
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// "<primary label> (variation)", numbered on collision. Scans the existing
+// variation labels for the exact base and "(variation N)" suffixes: the plain
+// base counts as 1, and the next label is max(taken)+1. The primary label is
+// regex-escaped so a label like "Acme (test)" matches literally.
+export const nextVariationLabel = (
+  primaryLabel: string,
+  existingLabels: (string | null)[],
+): string => {
+  const base = `${primaryLabel} (variation)`;
+  const numberedPattern = new RegExp(
+    `^${escapeRegExp(primaryLabel)} \\(variation (\\d+)\\)$`,
+  );
+
+  let maxTaken = 0;
+  for (const label of existingLabels) {
+    if (label == null) continue;
+    if (label === base) {
+      maxTaken = Math.max(maxTaken, 1);
+      continue;
+    }
+    const match = numberedPattern.exec(label);
+    if (match) {
+      maxTaken = Math.max(maxTaken, Number(match[1]));
+    }
+  }
+
+  return maxTaken === 0 ? base : `${primaryLabel} (variation ${maxTaken + 1})`;
+};
+
+// The label WRITE policy for creating a variation, by label-field kind:
+//   TEXT      -> { [labelField]: nextVariationLabel(...) }
+//   FULL_NAME -> { [labelField]: { firstName: <copied>, lastName: numbered } }
+//   other/unknown -> {} (create unnamed; server default applies). Numbering is
+// only meaningful where we can write a label at all, so non-TEXT/FULL_NAME
+// label objects get unnamed variations — acceptable for v1.
+export const buildVariationLabelData = (
+  labelField: LabelFieldInfo | null,
+  primaryRecord: Record<string, unknown>,
+  existingLabels: (string | null)[],
+): Record<string, unknown> => {
+  if (!labelField) {
+    return {};
+  }
+
+  if (labelField.kind === 'TEXT') {
+    const current = primaryRecord[labelField.name];
+    const primaryLabel = typeof current === 'string' ? current : '';
+    return { [labelField.name]: nextVariationLabel(primaryLabel, existingLabels) };
+  }
+
+  if (labelField.kind === 'FULL_NAME') {
+    const composite = (primaryRecord[labelField.name] ?? {}) as {
+      firstName?: unknown;
+      lastName?: unknown;
+    };
+    const firstName = typeof composite.firstName === 'string' ? composite.firstName : '';
+    const lastName = typeof composite.lastName === 'string' ? composite.lastName : '';
+    return {
+      [labelField.name]: {
+        firstName,
+        lastName: nextVariationLabel(lastName, existingLabels),
+      },
+    };
+  }
+
+  return {};
+};
+
+// Re-sync one diverged field: deactivate the override (keeping its value —
+// existing toggle-OFF semantic), then copy the primary's current value via
+// syncOneVariation scoped to exactly this field. Returns {frozen:true} — with
+// NO write and the override left ACTIVE — when the primary is gone, because
+// deactivating without a copy would silently hand the field to nothing.
+export const resyncDivergedField = async (
+  client: FormulaClient,
+  config: VariationConfigRecord,
+  variationRecordId: string,
+  field: DivergedField,
+): Promise<SyncOutcome | { frozen: true }> => {
+  const targetObject = config.targetObject ?? '';
+  const relationFieldName = relationFieldOf(config);
+  const pointerField = `${relationFieldName}Id`;
+
+  // Fresh pointer read: the variation's primary id is re-read, never trusted
+  // from a cached prop.
+  const pointerResponse = await withRetry(() =>
+    client.query({
+      [targetObject]: {
+        __args: { filter: { id: { eq: variationRecordId } } },
+        id: true,
+        [pointerField]: true,
+      },
+    }),
+  );
+  const primaryRecordId =
+    ((pointerResponse?.[targetObject] as Record<string, unknown> | null | undefined)?.[
+      pointerField
+    ] as string | null | undefined) ?? null;
+  if (!primaryRecordId) {
+    return { frozen: true };
+  }
+
+  const { record: primary, frozen } = await fetchPrimaryRecordInclTrashed(
+    client,
+    targetObject,
+    primaryRecordId,
+    [field.name],
+    { [field.name]: selectionEntryForMirrorKind(field.kind) },
+    relationFieldName,
+  );
+  if (frozen || !primary) {
+    return { frozen: true };
+  }
+
+  // Deactivate FIRST: syncOneVariation skips actively-overridden fields, so the
+  // override must be off before the copy. If the sync then errors, the override
+  // stays deactivated and the hourly sweep converges the field — acceptable.
+  await deactivateOverride(client, targetObject, field.name, variationRecordId);
+  return syncOneVariation(client, targetObject, primary, variationRecordId, [field]);
+};
