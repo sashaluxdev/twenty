@@ -12,6 +12,7 @@ import {
   buildFieldSettings,
   cloneMirrorOptions,
   deriveFieldName,
+  deriveRecordDisplayLabel,
   type FormatOptions,
   getOutputFormat,
   isValidFieldName,
@@ -96,6 +97,24 @@ type TargetObjectOption = {
   // Active, non-system fields eligible as mirror sources (pre-allowlist; the
   // picker narrows to mirrorable kinds via pickableMirrorSourceFields).
   sourceFields: SourceFieldOption[];
+  // The object's label-identifier field (resolved from
+  // labelIdentifierFieldMetadataId) so record validation can show the record's
+  // name/label. null when it can't be resolved to a known display kind.
+  labelField: { name: string; type: string } | null;
+};
+
+// The record-fetch sub-selection for a label-identifier field. FULL_NAME is a
+// composite (a scalar selection silently returns null through the dynamic
+// client), so its sub-fields must be named explicitly. Only known display kinds
+// are selected — an unexpected kind degrades to existence-only, never breaking
+// the query and thus the validation gate.
+const labelFieldSelection = (
+  labelField: { name: string; type: string } | null,
+): true | { firstName: true; lastName: true } | null => {
+  if (!labelField) return null;
+  if (labelField.type === 'FULL_NAME') return { firstName: true, lastName: true };
+  if (labelField.type === 'TEXT') return true;
+  return null;
 };
 
 type WizardMode = 'format' | 'mirror';
@@ -176,6 +195,9 @@ export const FormulaSetupWizard = ({
   const [sourceRecordStatus, setSourceRecordStatus] = useState<
     'idle' | 'checking' | 'valid' | 'invalid'
   >('idle');
+  // The validated record's display label (name), shown so the user can confirm
+  // they picked the RIGHT record. null degrades to a generic "Record found".
+  const [sourceRecordLabel, setSourceRecordLabel] = useState<string | null>(null);
 
   // Fire-and-forget draft persistence; a failed save only costs resumability.
   const persistDraft = useCallback(
@@ -206,6 +228,7 @@ export const FormulaSetupWizard = ({
                 id: true,
                 nameSingular: true,
                 labelSingular: true,
+                labelIdentifierFieldMetadataId: true,
                 isActive: true,
                 isSystem: true,
                 fields: {
@@ -243,6 +266,24 @@ export const FormulaSetupWizard = ({
             const fieldNodes: any[] = (node.fields?.edges ?? [])
               .map((fieldEdge: any) => fieldEdge?.node)
               .filter((fieldNode: any) => fieldNode?.name);
+            // Resolve the label-identifier field (the field whose id equals
+            // labelIdentifierFieldMetadataId) so record validation can show the
+            // picked record's display name; only known display kinds are kept.
+            const labelIdentifierField = node.labelIdentifierFieldMetadataId
+              ? fieldNodes.find(
+                  (fieldNode: any) =>
+                    fieldNode.id === node.labelIdentifierFieldMetadataId,
+                )
+              : null;
+            const labelField =
+              labelIdentifierField &&
+              typeof labelIdentifierField.name === 'string' &&
+              typeof labelIdentifierField.type === 'string'
+                ? {
+                    name: labelIdentifierField.name,
+                    type: labelIdentifierField.type,
+                  }
+                : null;
             return {
               id: node.id,
               nameSingular: node.nameSingular,
@@ -275,6 +316,7 @@ export const FormulaSetupWizard = ({
                 .sort((a: SourceFieldOption, b: SourceFieldOption) =>
                   a.label.localeCompare(b.label),
                 ),
+              labelField,
             };
           })
           .sort((a: TargetObjectOption, b: TargetObjectOption) =>
@@ -395,9 +437,28 @@ export const FormulaSetupWizard = ({
 
   const pickMode = (nextMode: WizardMode) => {
     setMode(nextMode);
-    // Clear the format marker when leaving mirror mode so a resumed draft does
-    // not re-enter it; entering mirror mode marks it immediately.
-    persistDraft({ outputFormat: nextMode === 'mirror' ? 'mirror' : '' });
+    if (nextMode === 'mirror') {
+      // Entering mirror mode marks the draft immediately (resume goes to mirror).
+      persistDraft({ outputFormat: 'mirror' });
+      return;
+    }
+    // Leaving mirror mode: clear the format marker AND drop the stale mirror
+    // block from targetFieldSettings. A lingering mirror block would flip the
+    // initial mode back to 'mirror' on remount, losing this format choice.
+    // Format options (if any) are re-serialized without the mirror key.
+    persistDraft({
+      outputFormat: '',
+      targetFieldSettings: serializeTargetFieldSettings(
+        format
+          ? {
+              settings: buildFieldSettings(format, options),
+              ...(getOutputFormat(format).fieldType === 'CURRENCY'
+                ? { currencyCode: options.currencyCode }
+                : {}),
+            }
+          : { settings: null },
+      ),
+    });
   };
   const pickSourceObject = (object: TargetObjectOption) => {
     setSourceObject(object);
@@ -405,6 +466,7 @@ export const FormulaSetupWizard = ({
     setSourceField(null);
     setSourceRecordId('');
     setSourceRecordStatus('idle');
+    setSourceRecordLabel(null);
     persistMirrorDraft(null);
   };
   const pickSourceField = (field: SourceFieldOption) => {
@@ -473,14 +535,21 @@ export const FormulaSetupWizard = ({
   useEffect(() => {
     if (!sourceObject || !trimmedSourceRecordId) {
       setSourceRecordStatus('idle');
+      setSourceRecordLabel(null);
       return;
     }
     if (!/^[0-9a-f-]{36}$/i.test(trimmedSourceRecordId)) {
       setSourceRecordStatus('invalid');
+      setSourceRecordLabel(null);
       return;
     }
     let cancelled = false;
     setSourceRecordStatus('checking');
+    setSourceRecordLabel(null);
+    // Fetch the record's label field alongside id so validation shows the
+    // record's name (composite label kinds need their sub-fields named).
+    const labelField = sourceObject.labelField;
+    const labelSelection = labelFieldSelection(labelField);
     const handle = setTimeout(() => {
       const client = createDynamicCoreClient();
       client
@@ -488,19 +557,30 @@ export const FormulaSetupWizard = ({
           [sourceObject.nameSingular]: {
             __args: { filter: { id: { eq: trimmedSourceRecordId } } },
             id: true,
+            ...(labelField && labelSelection
+              ? { [labelField.name]: labelSelection }
+              : {}),
           },
         })
         .then((response: any) => {
           if (cancelled) return;
-          setSourceRecordStatus(
-            response?.[sourceObject.nameSingular]?.id ? 'valid' : 'invalid',
+          const record = response?.[sourceObject.nameSingular];
+          const found = Boolean(record?.id);
+          setSourceRecordStatus(found ? 'valid' : 'invalid');
+          setSourceRecordLabel(
+            found && labelField && labelSelection
+              ? deriveRecordDisplayLabel(record, labelField.name, labelField.type)
+              : null,
           );
-          if (response?.[sourceObject.nameSingular]?.id) {
+          if (found) {
             persistMirrorDraft(mirrorDraft);
           }
         })
         .catch(() => {
-          if (!cancelled) setSourceRecordStatus('invalid');
+          if (!cancelled) {
+            setSourceRecordStatus('invalid');
+            setSourceRecordLabel(null);
+          }
         });
     }, 500);
     return () => {
@@ -950,7 +1030,7 @@ export const FormulaSetupWizard = ({
                 sourceRecordStatus === 'checking' ? (
                   <MutedText as="div">Checking record…</MutedText>
                 ) : sourceRecordStatus === 'valid' ? (
-                  <OkText as="div">Record found</OkText>
+                  <OkText as="div">{sourceRecordLabel ?? 'Record found'}</OkText>
                 ) : sourceRecordStatus === 'invalid' ? (
                   <ErrText as="div">
                     No record with that id on {sourceObject?.labelSingular}

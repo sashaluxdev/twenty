@@ -349,6 +349,35 @@ export const pickableMirrorSourceFields = <T extends { type: string }>(
   fields: T[],
 ): T[] => fields.filter((field) => isMirrorTargetKind(field.type));
 
+// Derives a human display label for a fetched source record, given the object's
+// label-identifier field name + kind, so the wizard's record validation can
+// confirm the RIGHT record was picked (not merely that one exists). TEXT (and
+// similar scalars) → the string value; FULL_NAME → "firstName lastName" trimmed.
+// Returns null whenever the label field is unresolved or its value is empty, so
+// the caller degrades to a generic "Record found" and label resolution can never
+// block the existence gate (design 2026-07-06).
+export const deriveRecordDisplayLabel = (
+  record: unknown,
+  labelFieldName: string | null,
+  labelFieldKind: string | null,
+): string | null => {
+  if (!record || typeof record !== 'object' || !labelFieldName) return null;
+  const value = (record as Record<string, unknown>)[labelFieldName];
+
+  if (labelFieldKind === 'FULL_NAME') {
+    if (!value || typeof value !== 'object') return null;
+    const composite = value as { firstName?: unknown; lastName?: unknown };
+    const firstName =
+      typeof composite.firstName === 'string' ? composite.firstName : '';
+    const lastName =
+      typeof composite.lastName === 'string' ? composite.lastName : '';
+    const display = `${firstName} ${lastName}`.trim();
+    return display.length > 0 ? display : null;
+  }
+
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+};
+
 // Reconstructs FormatOptions from a persisted settings object (+ currency code),
 // overlaying whatever is present onto the format's defaults. Used to resume the
 // wizard and to seed the definition editor's settings form from the live field.

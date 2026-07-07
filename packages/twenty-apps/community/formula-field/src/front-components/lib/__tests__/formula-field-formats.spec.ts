@@ -6,6 +6,7 @@ import {
   buildFieldSettings,
   cloneMirrorOptions,
   deriveFieldName,
+  deriveRecordDisplayLabel,
   getOutputFormat,
   isValidCustomUnicodeDateFormat,
   isValidFieldName,
@@ -304,6 +305,62 @@ describe('pickableMirrorSourceFields', () => {
         { name: 'owner', type: 'RELATION' },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe('deriveRecordDisplayLabel', () => {
+  it('returns the string value for a TEXT label field', () => {
+    expect(
+      deriveRecordDisplayLabel({ name: 'Acme Inc' }, 'name', 'TEXT'),
+    ).toBe('Acme Inc');
+  });
+
+  it('joins firstName + lastName for a FULL_NAME label field', () => {
+    expect(
+      deriveRecordDisplayLabel(
+        { name: { firstName: 'Ada', lastName: 'Lovelace' } },
+        'name',
+        'FULL_NAME',
+      ),
+    ).toBe('Ada Lovelace');
+  });
+
+  it('handles a FULL_NAME with only one name present', () => {
+    expect(
+      deriveRecordDisplayLabel(
+        { name: { firstName: 'Ada', lastName: '' } },
+        'name',
+        'FULL_NAME',
+      ),
+    ).toBe('Ada');
+    expect(
+      deriveRecordDisplayLabel(
+        { name: { firstName: '', lastName: 'Lovelace' } },
+        'name',
+        'FULL_NAME',
+      ),
+    ).toBe('Lovelace');
+  });
+
+  it('returns null for a FULL_NAME with both names empty', () => {
+    expect(
+      deriveRecordDisplayLabel(
+        { name: { firstName: '', lastName: '' } },
+        'name',
+        'FULL_NAME',
+      ),
+    ).toBeNull();
+  });
+
+  it('degrades to null when the label cannot be resolved', () => {
+    // No label field name resolved.
+    expect(deriveRecordDisplayLabel({ name: 'Acme' }, null, 'TEXT')).toBeNull();
+    // Value absent / empty / non-string.
+    expect(deriveRecordDisplayLabel({}, 'name', 'TEXT')).toBeNull();
+    expect(deriveRecordDisplayLabel({ name: '   ' }, 'name', 'TEXT')).toBeNull();
+    expect(deriveRecordDisplayLabel({ name: 42 }, 'name', 'TEXT')).toBeNull();
+    // Non-object record.
+    expect(deriveRecordDisplayLabel(null, 'name', 'TEXT')).toBeNull();
   });
 });
 
