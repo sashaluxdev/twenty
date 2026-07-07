@@ -342,6 +342,17 @@ export const DropdownPanel = styled.div`
   overflow: hidden;
 `;
 
+// Scrollable variant of DropdownPanel: bounds the panel to a viewport and
+// scrolls overflow so a raised suggestion cap (see SUGGESTION_LIMIT) never
+// grows the panel unbounded and every match stays reachable. Extends the base
+// so the border/background/shadow stay identical; overflow-y auto overrides the
+// base's `overflow: hidden` on the y-axis while corner clipping is preserved.
+export const ScrollableDropdownPanel = styled(DropdownPanel)`
+  max-height: 240px;
+  overflow-x: hidden;
+  overflow-y: auto;
+`;
+
 // Sub-column colors (api-name column blue, type column font-color-light)
 // are consumer-applied via TOKENS on the inner spans — same documented gap
 // as DangerPanel's list-item color.

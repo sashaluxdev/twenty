@@ -4,8 +4,8 @@ import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { caretFromDiff } from 'src/front-components/lib/caret-from-diff';
 import {
   DropdownOption,
-  DropdownPanel,
   MonoInput,
+  ScrollableDropdownPanel,
   TextArea,
 } from 'src/front-components/lib/ui';
 import { TOKENS } from 'src/front-components/lib/ui-tokens';
@@ -50,6 +50,13 @@ const FUNCTION_SUGGESTIONS: FieldOption[] = [
 // DATE / DATE_TIME parse to epoch-days per the Excel serial model, ADR 0011, so
 // they work in arithmetic and IF comparisons) plus the string-comparable SELECT
 // and TEXT kinds — the ones that engine string comparisons (`= "..."`) target.
+// Single cap for every suggestion context (field/function AND SELECT-option).
+// Raised well past the old hard 8-item truncation so realistic option/field
+// sets are shown in full; the dropdown scrolls (ScrollableDropdownPanel), so a
+// generous bound only guards against pathological lists — it never hides real
+// matches behind an arbitrary 8.
+export const SUGGESTION_LIMIT = 50;
+
 const SUGGESTIBLE_FIELD_TYPES = new Set([
   'NUMBER',
   'NUMERIC',
@@ -230,7 +237,7 @@ const computeOptionSuggestions = (
         option.value.toLowerCase().includes(partial) ||
         option.label.toLowerCase().includes(partial),
     )
-    .slice(0, 8)
+    .slice(0, SUGGESTION_LIMIT)
     .map((option) => ({
       name: option.value,
       label: option.label,
@@ -269,7 +276,7 @@ export const computeSuggestions = (
       const bPrefix = b.name.toLowerCase().startsWith(query) ? 0 : 1;
       return aPrefix - bPrefix;
     })
-    .slice(0, 8);
+    .slice(0, SUGGESTION_LIMIT);
 };
 
 // Where an accepted suggestion is spliced in, and the text to splice. For an
@@ -306,6 +313,36 @@ export const nextCaretFromSelection = (
   currentCaret: number,
 ): number => selectionStart ?? currentCaret;
 
+// Editor state snapshot used to decide whether a suggestions-effect run is the
+// echo of a just-accepted suggestion (which must stay closed) or genuine new
+// input (which should reopen the dropdown).
+export type EditorState = { value: string; caret: number };
+
+// True when the current (value, caret) is exactly the state produced by the
+// last accepted suggestion. WHY: inserting a bare identifier (e.g. `stage`)
+// still satisfies the completion trigger, so the suggestions effect would
+// otherwise immediately reopen the dropdown it just closed. Suppress only the
+// exact echo — any later value/caret change (typing one more char, moving the
+// caret) no longer matches, so normal reopen behavior resumes.
+export const shouldSuppressReopen = (
+  current: EditorState,
+  accepted: EditorState | null,
+): boolean =>
+  accepted !== null &&
+  accepted.value === current.value &&
+  accepted.caret === current.caret;
+
+// Number of textarea rows for a given expression: one row per line, floored at
+// 2 and capped at 10. Pure and content-derived (no DOM measurement) so it works
+// inside the remote-dom sandbox where scrollHeight is unreliable. `resize:
+// vertical` on the archetype remains the manual escape hatch past the cap.
+const MIN_TEXTAREA_ROWS = 2;
+const MAX_TEXTAREA_ROWS = 10;
+export const rowsForValue = (value: string): number => {
+  const lineCount = value.split('\n').length;
+  return Math.min(Math.max(lineCount, MIN_TEXTAREA_ROWS), MAX_TEXTAREA_ROWS);
+};
+
 type FormulaFieldInputProps = {
   value: string;
   onChange: (next: string) => void;
@@ -328,6 +365,10 @@ export const FormulaFieldInput = ({
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [pendingCaret, setPendingCaret] = useState<number | null>(null);
+  // (value, caret) produced by the last accepted suggestion. While the editor
+  // still sits on this exact state, the suggestions effect must not reopen the
+  // dropdown insert() just closed. Cleared on any other value/caret change.
+  const acceptedRef = useRef<EditorState | null>(null);
 
   // Restore caret position after a programmatic insert. The remote-dom sandbox
   // proxies input elements and does not always expose setSelectionRange /
@@ -360,15 +401,28 @@ export const FormulaFieldInput = ({
 
   useEffect(() => {
     setActiveIndex(0);
+    if (shouldSuppressReopen({ value, caret }, acceptedRef.current)) {
+      // Echo of the just-accepted suggestion — keep the dropdown closed.
+      setOpen(false);
+      return;
+    }
+    // Moved past the accepted state (typing/caret move): resume normal behavior.
+    acceptedRef.current = null;
     setOpen(suggestions.length > 0);
-  }, [suggestions]);
+  }, [suggestions, value, caret]);
 
   const insert = useCallback(
     (field: FieldOption) => {
       const { start, insertText } = computeInsertRange(value, caret, field);
       const next = value.slice(0, start) + insertText + value.slice(caret);
+      const nextCaret = start + insertText.length;
       onChange(next);
-      setPendingCaret(start + insertText.length);
+      // Set caret state synchronously (not only via pendingCaret) so the very
+      // first suggestions-effect run after this insert already sees the
+      // accepted (value, caret) and suppresses the reopen without a flash.
+      setCaret(nextCaret);
+      setPendingCaret(nextCaret);
+      acceptedRef.current = { value: next, caret: nextCaret };
       setOpen(false);
     },
     [value, caret, onChange],
@@ -434,12 +488,16 @@ export const FormulaFieldInput = ({
   return (
     <div style={layout.wrapper}>
       {multiline ? (
-        <TextArea {...(commonProps as any)} rows={2} style={layout.textarea} />
+        <TextArea
+          {...(commonProps as any)}
+          rows={rowsForValue(value)}
+          style={layout.textarea}
+        />
       ) : (
         <MonoInput {...(commonProps as any)} style={layout.input} />
       )}
       {open ? (
-        <DropdownPanel style={layout.dropdown}>
+        <ScrollableDropdownPanel style={layout.dropdown}>
           {suggestions.map((field, index) => (
             <DropdownOption
               key={field.name}
@@ -456,7 +514,7 @@ export const FormulaFieldInput = ({
               <span style={layout.optionType}>{field.type.toLowerCase()}</span>
             </DropdownOption>
           ))}
-        </DropdownPanel>
+        </ScrollableDropdownPanel>
       ) : null}
     </div>
   );
@@ -474,7 +532,9 @@ const layout: Record<string, React.CSSProperties> = {
     width: '100%',
     boxSizing: 'border-box',
     fontFamily: 'ui-monospace, monospace',
-    resize: 'none',
+    // rows auto-grows with content (rowsForValue); vertical resize stays as the
+    // manual escape hatch for users who want a taller box than the cap.
+    resize: 'vertical',
   },
   dropdown: {
     position: 'absolute',
