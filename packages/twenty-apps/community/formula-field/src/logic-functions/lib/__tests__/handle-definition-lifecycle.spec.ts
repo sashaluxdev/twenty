@@ -5,6 +5,7 @@ import {
   handleDefinitionDestroyed,
   handleDefinitionRestored,
 } from 'src/logic-functions/lib/handle-definition-lifecycle';
+import { __clearMetadataCacheForTests } from 'src/logic-functions/lib/metadata-objects';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
@@ -114,6 +115,10 @@ const useMetadata = (objects: ObjectFixture[]): FakeMetadataClient => {
 describe('handleDefinitionDeleted (naive trash — no field mutation)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Mocks MetadataApiClient directly (not the fake seam), so it exercises
+    // loadAllObjectsWithFields' real cache — clear it between tests so one
+    // test's fixtures never leak into the next.
+    __clearMetadataCacheForTests();
   });
 
   it('performs no field metadata mutations but still refreshes statuses', async () => {
@@ -155,6 +160,10 @@ describe('handleDefinitionDeleted (naive trash — no field mutation)', () => {
 describe('handleDefinitionDestroyed (permanent — deactivate + clean overrides)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Mocks MetadataApiClient directly (not the fake seam), so it exercises
+    // loadAllObjectsWithFields' real cache — clear it between tests so one
+    // test's fixtures never leak into the next.
+    __clearMetadataCacheForTests();
   });
 
   it('deactivates the owned field pair and deletes override rows', async () => {
@@ -197,6 +206,10 @@ describe('handleDefinitionDestroyed (permanent — deactivate + clean overrides)
 describe('handleDefinitionRestored (reactivates only inactive fields)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Mocks MetadataApiClient directly (not the fake seam), so it exercises
+    // loadAllObjectsWithFields' real cache — clear it between tests so one
+    // test's fixtures never leak into the next.
+    __clearMetadataCacheForTests();
   });
 
   const restored: FormulaDefinitionRecord = {

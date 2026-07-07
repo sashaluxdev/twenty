@@ -114,6 +114,51 @@ describe('detectVariationDivergence', () => {
     expect(client.mutations).toBe(0);
   });
 
+  it('fetches the variation ONCE for a two-field edit and pins both overrides', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', employees: 50, domainName: { primaryLinkLabel: '', primaryLinkUrl: 'acme.com', secondaryLinks: [] }, primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', employees: 75, domainName: { primaryLinkLabel: '', primaryLinkUrl: 'custom.com', secondaryLinks: [] }, primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: {
+        employees: 75,
+        domainName: { primaryLinkLabel: '', primaryLinkUrl: 'custom.com', secondaryLinks: [] },
+      },
+      updatedFields: ['employees', 'domainName'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    // Both diverging fields produced an override row.
+    const overrides = Array.from(
+      (client as any).store.get('formulaOverride').values(),
+    ) as any[];
+    expect(overrides.map((o) => o.targetField).sort()).toEqual([
+      'domainName',
+      'employees',
+    ]);
+
+    // The variation ('v1') was read exactly ONCE for the pair — a single
+    // consistent snapshot, not one staggered read per field.
+    const variationReads = client.querySelections.filter(
+      (sel: any) => sel.company?.__args?.filter?.id?.eq === 'v1',
+    ).length;
+    expect(variationReads).toBe(1);
+
+    // Total query breakdown for a 2-field human divergence:
+    //   1x formulaDefinitions  (computeSyncableFields -> loadAllEnabledFormulas)
+    //   1x companies connection (fetchPrimaryRecordInclTrashed, primary incl trashed)
+    //   1x company singular     (ONE batched fresh-fetch of the variation)
+    //   2x formulaOverrides     (findOverride, once per field during upsert)
+    // = 5 queries; the variation read is the single `company` singular above.
+    expect(client.queries).toBe(5);
+  });
+
   it('skips a superseded stale echo (stored value already moved past the event value)', async () => {
     client.seed('company', [
       { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },

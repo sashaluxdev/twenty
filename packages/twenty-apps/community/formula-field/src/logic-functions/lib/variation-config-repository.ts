@@ -54,7 +54,7 @@ export const findVariationConfigByTargetObject = async (
   const response = await withRetry(() =>
     client.query({
       variationConfigs: {
-        __args: { first: 1, filter: { name: { eq: targetObject } } },
+        __args: { first: 1, filter: { targetObject: { eq: targetObject } } },
         edges: { node: VARIATION_CONFIG_FIELDS_SELECTION },
       },
     }),

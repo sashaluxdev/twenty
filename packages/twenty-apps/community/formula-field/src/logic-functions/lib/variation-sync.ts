@@ -441,17 +441,25 @@ export const detectVariationDivergence = async ({
     return; // Nothing to compare a diverging edit against.
   }
 
+  // One kind-aware fetch of the variation for ALL checked fields, before the
+  // loop — a human editing 5 fields is now 1 read, not 5. Beyond cost, a single
+  // consistent snapshot is BETTER for the echo-race guard than N staggered
+  // reads: every field compares against the SAME point-in-time state, so a
+  // write landing mid-loop can't make field A look superseded while field B
+  // still reads live.
+  const freshVariation = await fetchRecordById(
+    client,
+    targetObject,
+    variationRecordId,
+    fieldsToCheckInfo.map((field) => field.name),
+    selectionOverridesFor(fieldsToCheckInfo),
+  );
+  if (!freshVariation) {
+    return; // Variation vanished -> nothing to compare a diverging edit against.
+  }
+
   for (const field of fieldsToCheckInfo) {
     const eventRaw = navigatePath(after ?? {}, field.name) ?? null;
-
-    const freshVariation = await fetchRecordById(
-      client,
-      targetObject,
-      variationRecordId,
-      [field.name],
-      { [field.name]: selectionEntryForMirrorKind(field.kind) },
-    );
-    if (!freshVariation) continue;
     const currentRaw = navigatePath(freshVariation, field.name) ?? null;
 
     // Superseded write in flight: the stored value already moved past what

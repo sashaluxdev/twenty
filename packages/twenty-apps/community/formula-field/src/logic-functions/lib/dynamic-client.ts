@@ -1,7 +1,10 @@
 import { CoreApiClient } from 'twenty-client-sdk/core';
 
 import { assertSafeGraphqlIdentifier } from 'src/logic-functions/lib/identifier';
-import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
+import {
+  loadAllObjectsWithFields,
+  workspaceCacheKey,
+} from 'src/logic-functions/lib/metadata-objects';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 
 // FormulaClient over RAW GraphQL instead of the generated genql client.
@@ -152,38 +155,10 @@ const execute = async (
 // picked up within a minute.
 const FIELD_KINDS_TTL_MS = 60_000;
 
-// finding m4: this cache is process-global, and a single worker process serves
-// MANY workspaces. Keying it by workspace stops workspace A's field kinds from
-// being served to workspace B within the TTL (which would build wrong
-// sub-selections -> silent null reads). The workspace subdomain / app-token
-// workspaceId claim is the cheapest identifier the logic-function runtime
-// exposes; the front-component sandbox (a single workspace per process, and no
-// process.env) falls back to a constant, which is safe there.
-const workspaceCacheKey = (): string => {
-  const env = (
-    globalThis as {
-      process?: { env?: Record<string, string | undefined> };
-    }
-  ).process?.env;
-  if (env?.TWENTY_WORKSPACE_SUBDOMAIN) {
-    return env.TWENTY_WORKSPACE_SUBDOMAIN;
-  }
-  const token = env?.TWENTY_APP_ACCESS_TOKEN;
-  if (token && typeof Buffer !== 'undefined') {
-    try {
-      const payload = JSON.parse(
-        Buffer.from(token.split('.')[1] ?? '', 'base64').toString('utf8'),
-      );
-      if (typeof payload?.workspaceId === 'string') {
-        return payload.workspaceId;
-      }
-    } catch {
-      // Malformed token -> fall through to the shared key.
-    }
-  }
-  return 'global';
-};
-
+// finding m4: keyed by workspace (workspaceCacheKey, shared from
+// metadata-objects) so workspace A's field kinds are never served to workspace
+// B within the TTL — that would build wrong sub-selections -> silent null
+// reads.
 type FieldKindsEntry = {
   byObject: Map<string, Map<string, string>>;
   loadedAt: number;

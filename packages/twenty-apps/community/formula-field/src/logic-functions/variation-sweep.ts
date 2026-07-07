@@ -1,7 +1,10 @@
 import { defineLogicFunction } from 'twenty-sdk/define';
 
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
-import { loadAllEnabledVariationConfigs } from 'src/logic-functions/lib/variation-config-repository';
+import {
+  loadAllEnabledVariationConfigs,
+  updateVariationConfigBookkeeping,
+} from 'src/logic-functions/lib/variation-config-repository';
 import { sweepVariationConfig } from 'src/logic-functions/lib/variation-sync';
 
 // The convergence backstop for variations, mirroring formula-sweep.ts: hourly,
@@ -17,11 +20,27 @@ const handler = async (): Promise<Record<string, unknown>> => {
   let frozen = 0;
 
   for (const config of configs) {
-    const outcome = await sweepVariationConfig(client, config);
-    evaluated += outcome.evaluated;
-    written += outcome.written;
-    errored += outcome.errored;
-    frozen += outcome.frozen;
+    // Per-config fault isolation: one config throwing (e.g. a metadata load
+    // failure) must not kill the whole hour's sweep for every remaining
+    // config. This deliberately hardens beyond formula-sweep.ts's sibling,
+    // which loops without a guard. Best-effort persist the error to the
+    // config's lastError, itself guarded so bookkeeping can never kill the loop.
+    try {
+      const outcome = await sweepVariationConfig(client, config);
+      evaluated += outcome.evaluated;
+      written += outcome.written;
+      errored += outcome.errored;
+      frozen += outcome.frozen;
+    } catch (error) {
+      errored += 1;
+      try {
+        await updateVariationConfigBookkeeping(client, config.id, {
+          lastError: String(error),
+        });
+      } catch {
+        // Swallow: surfacing the error is best-effort; the sweep must continue.
+      }
+    }
   }
 
   return { configs: configs.length, evaluated, written, errored, frozen };
