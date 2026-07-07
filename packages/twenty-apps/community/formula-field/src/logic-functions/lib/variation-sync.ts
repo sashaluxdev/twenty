@@ -12,7 +12,10 @@ import {
   type SyncableFieldInfo,
 } from 'src/logic-functions/lib/syncable-fields';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
-import { updateVariationConfigBookkeeping } from 'src/logic-functions/lib/variation-config-repository';
+import {
+  findVariationConfigByTargetObject,
+  updateVariationConfigBookkeeping,
+} from 'src/logic-functions/lib/variation-config-repository';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import { withRetry } from 'src/logic-functions/lib/with-retry';
 
@@ -564,4 +567,115 @@ export const sweepVariationConfig = async (
   });
 
   return { configId: config.id, evaluated, written, errored, frozen, skippedNestedPrimary };
+};
+
+export type VariationRecordUpdatedArgs = {
+  client: FormulaClient;
+  objectName: string;
+  recordId: string;
+  after: Record<string, unknown> | null | undefined;
+  updatedFields: string[] | undefined;
+  actorWorkspaceMemberId?: string | null;
+};
+
+// Entry point for the *.updated wildcard trigger. Decides whether the changed
+// record is a primary (fan out the change to its variations) or a variation
+// (check whether a human just diverged one of its fields) by a FRESH read of
+// its relation pointer — never trusted from the event payload (Global
+// Constraints): a pointer field is exactly the kind of value an echo-race could
+// make stale.
+export const handleVariationRecordUpdated = async ({
+  client,
+  objectName,
+  recordId,
+  after,
+  updatedFields,
+  actorWorkspaceMemberId,
+}: VariationRecordUpdatedArgs): Promise<{
+  role: 'none' | 'primary' | 'variation';
+  outcomes: SyncOutcome[];
+}> => {
+  const config = await findVariationConfigByTargetObject(client, objectName);
+  if (!config || !config.enabled) {
+    return { role: 'none', outcomes: [] };
+  }
+
+  const relationFieldName = config.relationFieldName ?? 'primaryRecord';
+  const pointerField = `${relationFieldName}Id`;
+
+  const current = await fetchRecordById(client, objectName, recordId, [pointerField], {});
+  const primaryRecordId = current
+    ? ((navigatePath(current, pointerField) as string | null | undefined) ?? null)
+    : null;
+
+  if (!primaryRecordId) {
+    const outcomes = await syncPrimaryUpdateToVariations({
+      client,
+      targetObject: objectName,
+      primaryRecordId: recordId,
+      updatedFields,
+      relationFieldName,
+    });
+    return { role: 'primary', outcomes };
+  }
+
+  await detectVariationDivergence({
+    client,
+    targetObject: objectName,
+    variationRecordId: recordId,
+    primaryRecordId,
+    after,
+    updatedFields,
+    actorWorkspaceMemberId,
+    relationFieldName,
+  });
+  return { role: 'variation', outcomes: [] };
+};
+
+export type VariationRecordCreatedArgs = {
+  client: FormulaClient;
+  objectName: string;
+  recordId: string;
+  after: Record<string, unknown> | null | undefined;
+};
+
+// Entry point for the *.created wildcard trigger. A create event's `after` is
+// trusted for the pointer scalar directly (unlike the update path) — there is
+// no prior state for a stale echo to race against on a brand-new record.
+export const handleVariationRecordCreated = async ({
+  client,
+  objectName,
+  recordId,
+  after,
+}: VariationRecordCreatedArgs): Promise<
+  (SyncOutcome & { frozen?: boolean; skippedNestedPrimary?: boolean }) | null
+> => {
+  const config = await findVariationConfigByTargetObject(client, objectName);
+  if (!config || !config.enabled) {
+    return null;
+  }
+
+  const relationFieldName = config.relationFieldName ?? 'primaryRecord';
+  const pointerField = `${relationFieldName}Id`;
+  const primaryRecordId = (after?.[pointerField] as string | undefined) ?? null;
+
+  // No pointer -> this new record IS a primary (or a plain record); nothing to
+  // sync onto it.
+  if (!primaryRecordId) {
+    return null;
+  }
+
+  // Self-reference guard: reject wiring a record to itself (data raced in via
+  // the API — the widget's own create path never sets this).
+  if (primaryRecordId === recordId) {
+    return null;
+  }
+
+  return syncNewVariationRecord({
+    client,
+    targetObject: objectName,
+    variationRecordId: recordId,
+    primaryRecordId,
+    relationFieldName,
+  });
 };
