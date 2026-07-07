@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppPath } from 'twenty-shared';
+import { AppPath } from 'twenty-shared/types';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { enqueueSnackbar, navigate, useRecordId } from 'twenty-sdk/front-component';
 
