@@ -17,6 +17,8 @@ describe('detectVariationDivergence', () => {
           { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
           { id: 'field-employees', name: 'employees', type: 'NUMBER', isActive: true, isSystem: false },
           { id: 'field-domain', name: 'domainName', type: 'LINKS', isActive: true, isSystem: false },
+          { id: 'field-budget', name: 'budget', type: 'CURRENCY', isActive: true, isSystem: false },
+          { id: 'field-renew', name: 'renewDate', type: 'DATE', isActive: true, isSystem: false },
           { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
         ],
       },
@@ -72,6 +74,65 @@ describe('detectVariationDivergence', () => {
       primaryLinkUrl: 'custom.com',
       secondaryLinks: [],
     });
+  });
+
+  it('pins a text override (JSON slot) when a human edits a CURRENCY variation field', async () => {
+    // Variation sync never evaluates, so CURRENCY -- despite being an
+    // ENGINE_FAMILY kind for the formula engine -- goes through the SAME
+    // overrideValueText JSON slot as any other composite (contrast
+    // currency-target.spec.ts, where the formula engine's own override path
+    // pins the numeric amountMicros instead).
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', budget: { amountMicros: 10_000_000, currencyCode: 'USD' }, primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', budget: { amountMicros: 5_000_000, currencyCode: 'USD' }, primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { budget: { amountMicros: 5_000_000, currencyCode: 'USD' } },
+      updatedFields: ['budget'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    const stored: any = Array.from((client as any).store.get('formulaOverride').values()).find(
+      (o: any) => o.targetField === 'budget',
+    );
+    expect(stored.overrideValue).toBeNull();
+    expect(JSON.parse(stored.overrideValueText)).toEqual({
+      amountMicros: 5_000_000,
+      currencyCode: 'USD',
+    });
+  });
+
+  it('pins a text override (JSON slot) when a human edits a DATE variation field', async () => {
+    // Same contrast as CURRENCY above: date-target.spec.ts's formula-engine
+    // override stores epoch-days numerically; here the raw "yyyy-MM-dd" scalar
+    // round-trips untouched as JSON text.
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', renewDate: '2026-08-02', primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', renewDate: '2026-12-25', primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { renewDate: '2026-12-25' },
+      updatedFields: ['renewDate'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    const stored: any = Array.from((client as any).store.get('formulaOverride').values()).find(
+      (o: any) => o.targetField === 'renewDate',
+    );
+    expect(stored.overrideValue).toBeNull();
+    expect(JSON.parse(stored.overrideValueText)).toBe('2026-12-25');
   });
 
   it('does NOT create an override when the value equals the primary (app echo)', async () => {
