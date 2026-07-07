@@ -7,7 +7,6 @@ import {
   getLayoutConvergenceKeys,
   resetLayoutConvergenceThrottle,
 } from 'src/logic-functions/lib/fx-status-field';
-import { __clearMetadataCacheForTests } from 'src/logic-functions/lib/metadata-objects';
 
 // Layout convergence drives the record-page "Fields" view: it creates or heals
 // the target field's viewField row so the chip lands in the right group, at the
@@ -147,10 +146,6 @@ describe('ensureFieldLayoutVisibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetLayoutConvergenceThrottle();
-    // This spec mocks MetadataApiClient directly (not the fake seam), so it
-    // drives loadAllObjectsWithFields' real cache — clear it between tests so
-    // one test's fixtures never leak into the next.
-    __clearMetadataCacheForTests();
   });
 
   it('should create a missing viewField under the anchor group at anchor+0.5 when an anchor is given', async () => {
@@ -333,10 +328,6 @@ describe('convergeTrashedDefinitionLayout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetLayoutConvergenceThrottle();
-    // This spec mocks MetadataApiClient directly (not the fake seam), so it
-    // drives loadAllObjectsWithFields' real cache — clear it between tests so
-    // one test's fixtures never leak into the next.
-    __clearMetadataCacheForTests();
   });
 
   const objectsWith = (
