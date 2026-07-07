@@ -248,3 +248,117 @@ export const syncPrimaryUpdateToVariations = async ({
   }
   return outcomes;
 };
+
+export type PrimaryFetchResult = {
+  record: (Record<string, unknown> & { id: string }) | null;
+  // True when the primary is trashed OR no longer exists at all (destroyed) —
+  // freeze semantics do not distinguish the two (design 2026-07-07): sync skips
+  // the variation entirely either way, no writes, values stay as they were.
+  frozen: boolean;
+};
+
+// Fetches the primary INCLUDING trashed rows, via the plural connection with an
+// explicit (empty) `deletedAt` filter key — the same withDeleted() convention
+// already proven for FakeClient/the server elsewhere in this app (see
+// FakeClient.connection). Also always selects the primary's OWN relation
+// pointer so callers get the single-level guard for free.
+export const fetchPrimaryRecordInclTrashed = async (
+  client: FormulaClient,
+  targetObject: string,
+  primaryRecordId: string,
+  fields: string[],
+  selectionOverrides: Record<string, unknown>,
+  relationFieldName: string,
+): Promise<PrimaryFetchResult> => {
+  const pluralName = pluralize(targetObject);
+  const pointerField = `${relationFieldName}Id`;
+  const response = await withRetry(() =>
+    client.query({
+      [pluralName]: {
+        __args: {
+          first: 1,
+          filter: { id: { eq: primaryRecordId }, deletedAt: {} },
+        },
+        edges: {
+          node: {
+            ...fieldSelection(fields),
+            ...selectionOverrides,
+            deletedAt: true,
+            [pointerField]: true,
+          },
+        },
+      },
+    }),
+  );
+  const node = response?.[pluralName]?.edges?.[0]?.node as
+    | (Record<string, unknown> & { id: string; deletedAt?: string | null })
+    | undefined;
+
+  if (!node) {
+    return { record: null, frozen: true };
+  }
+  if (node.deletedAt) {
+    return { record: node, frozen: true };
+  }
+  return { record: node, frozen: false };
+};
+
+export type NewVariationSyncArgs = {
+  client: FormulaClient;
+  targetObject: string;
+  variationRecordId: string;
+  primaryRecordId: string;
+  relationFieldName: string;
+};
+
+// Variation created: full initial sync of every syncable field. Covers
+// API-created variations directly (the widget's create path, built in Plan 3,
+// relies on this SAME handler rather than duplicating sync client-side).
+export const syncNewVariationRecord = async ({
+  client,
+  targetObject,
+  variationRecordId,
+  primaryRecordId,
+  relationFieldName,
+}: NewVariationSyncArgs): Promise<
+  SyncOutcome & { frozen?: boolean; skippedNestedPrimary?: boolean }
+> => {
+  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
+  const pointerField = `${relationFieldName}Id`;
+
+  const { record: primary, frozen } = await fetchPrimaryRecordInclTrashed(
+    client,
+    targetObject,
+    primaryRecordId,
+    syncable.map((field) => field.name),
+    selectionOverridesFor(syncable),
+    relationFieldName,
+  );
+
+  if (frozen || !primary) {
+    return {
+      variationRecordId,
+      changed: false,
+      changedFields: [],
+      error: null,
+      frozen: true,
+    };
+  }
+
+  // Single-level guard: the chosen primary must not itself be a variation. A
+  // variation cannot be a primary — this can only happen if data raced in via
+  // the API (the widget hides "create variation" on a record with a pointer,
+  // and the create path re-checks server-side before calling this function).
+  if (navigatePath(primary, pointerField)) {
+    return {
+      variationRecordId,
+      changed: false,
+      changedFields: [],
+      error: null,
+      skippedNestedPrimary: true,
+    };
+  }
+
+  const outcome = await syncOneVariation(client, targetObject, primary, variationRecordId, syncable);
+  return outcome;
+};
