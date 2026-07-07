@@ -3,6 +3,7 @@ import { selectionEntryForMirrorKind } from 'src/logic-functions/lib/mirror-kind
 import { navigatePath } from 'src/logic-functions/lib/coercion';
 import {
   loadActiveOverrideFieldsForRecord,
+  upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
 import { pluralize } from 'src/logic-functions/lib/recompute';
 import {
@@ -361,4 +362,107 @@ export const syncNewVariationRecord = async ({
 
   const outcome = await syncOneVariation(client, targetObject, primary, variationRecordId, syncable);
   return outcome;
+};
+
+// The FormulaOverride value slot for a raw variation value: overrideValue (a
+// NUMBER column) can only literally hold a plain JS number. Since variation
+// sync never evaluates anything, only a bare NUMBER field's raw value already
+// IS a number — every other kind (including CURRENCY's {amountMicros,
+// currencyCode} object and DATE/DATE_TIME's string scalars) goes to
+// overrideValueText as JSON. This deliberately differs from the formula
+// engine's "ENGINE_FAMILY_KINDS -> numeric slot" convention, which only holds
+// because a formula EVALUATES to a float; variation sync just copies bytes.
+const overrideSlotFor = (
+  kind: string,
+  rawValue: unknown,
+): { numeric?: number; text?: string } => {
+  if (kind === 'NUMBER' && typeof rawValue === 'number') {
+    return { numeric: rawValue };
+  }
+  return { text: JSON.stringify(rawValue ?? null) };
+};
+
+export type DetectDivergenceArgs = {
+  client: FormulaClient;
+  targetObject: string;
+  variationRecordId: string;
+  primaryRecordId: string;
+  after: Record<string, unknown> | null | undefined;
+  updatedFields: string[] | undefined;
+  // Set when the write came from a real person, not the app's own sync write.
+  actorWorkspaceMemberId?: string | null;
+  relationFieldName: string;
+};
+
+// A human edited a variation directly. Tells a genuine edit apart from the
+// app's own sync write using the SAME compare-value-not-actor rule the mirror
+// engine uses (an app write can inherit a human actor's identity on its event,
+// so the actor alone can't decide this): fresh-fetch the CURRENT stored value
+// (echo-race guard — a stale event must not be acted on once superseded),
+// compare it to the primary's current value; equal means it's the app's own
+// passthrough write, different means a human pinned a manual value.
+export const detectVariationDivergence = async ({
+  client,
+  targetObject,
+  variationRecordId,
+  primaryRecordId,
+  after,
+  updatedFields,
+  actorWorkspaceMemberId,
+  relationFieldName,
+}: DetectDivergenceArgs): Promise<void> => {
+  if (!actorWorkspaceMemberId || !updatedFields || updatedFields.length === 0) {
+    return;
+  }
+
+  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
+  const syncableByName = new Map(syncable.map((field) => [field.name, field]));
+  const fieldsToCheck = updatedFields.filter((field) => syncableByName.has(field));
+  if (fieldsToCheck.length === 0) {
+    return;
+  }
+
+  const fieldsToCheckInfo = fieldsToCheck.map((field) => syncableByName.get(field)!);
+  const { record: primary, frozen } = await fetchPrimaryRecordInclTrashed(
+    client,
+    targetObject,
+    primaryRecordId,
+    fieldsToCheckInfo.map((field) => field.name),
+    selectionOverridesFor(fieldsToCheckInfo),
+    relationFieldName,
+  );
+  if (frozen || !primary) {
+    return; // Nothing to compare a diverging edit against.
+  }
+
+  for (const field of fieldsToCheckInfo) {
+    const eventRaw = navigatePath(after ?? {}, field.name) ?? null;
+
+    const freshVariation = await fetchRecordById(
+      client,
+      targetObject,
+      variationRecordId,
+      [field.name],
+      { [field.name]: selectionEntryForMirrorKind(field.kind) },
+    );
+    if (!freshVariation) continue;
+    const currentRaw = navigatePath(freshVariation, field.name) ?? null;
+
+    // Superseded write in flight: the stored value already moved past what
+    // this event reports -> a newer write is converging, skip the stale echo.
+    if (!deepJsonEqual(currentRaw, eventRaw)) continue;
+
+    const primaryRaw = navigatePath(primary, field.name) ?? null;
+    // Current value equals the primary's -> the app's own sync write, not a
+    // human pin.
+    if (deepJsonEqual(primaryRaw, currentRaw)) continue;
+
+    await upsertOverride(
+      client,
+      targetObject,
+      field.name,
+      variationRecordId,
+      overrideSlotFor(field.kind, currentRaw),
+    );
+  }
 };

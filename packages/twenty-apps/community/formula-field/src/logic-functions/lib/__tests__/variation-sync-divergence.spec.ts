@@ -1,0 +1,137 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { detectVariationDivergence } from 'src/logic-functions/lib/variation-sync';
+import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+
+describe('detectVariationDivergence', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+    client.setObjectsWithFields([
+      {
+        id: 'obj-company',
+        nameSingular: 'company',
+        labelIdentifierFieldMetadataId: 'field-name',
+        fields: [
+          { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
+          { id: 'field-employees', name: 'employees', type: 'NUMBER', isActive: true, isSystem: false },
+          { id: 'field-domain', name: 'domainName', type: 'LINKS', isActive: true, isSystem: false },
+          { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
+        ],
+      },
+    ]);
+  });
+
+  it('pins a NUMBER override (numeric slot) when a human edits a variation field away from the primary', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', employees: 75, primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { employees: 75 },
+      updatedFields: ['employees'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    const override = client.get('formulaOverride', 'ov-employees') ?? Array.from((client as any).store?.get?.('formulaOverride')?.values?.() ?? []).find((o: any) => o.targetField === 'employees');
+    expect(override.overrideValue).toBe(75);
+    expect(override.overrideValueText).toBeNull();
+    expect(override.active).toBe(true);
+  });
+
+  it('pins a text override (JSON slot) when a human edits a composite (LINKS) variation field', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', domainName: { primaryLinkLabel: '', primaryLinkUrl: 'acme.com', secondaryLinks: [] }, primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', domainName: { primaryLinkLabel: '', primaryLinkUrl: 'custom.com', secondaryLinks: [] }, primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { domainName: { primaryLinkLabel: '', primaryLinkUrl: 'custom.com', secondaryLinks: [] } },
+      updatedFields: ['domainName'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    const stored: any = Array.from((client as any).store.get('formulaOverride').values()).find(
+      (o: any) => o.targetField === 'domainName',
+    );
+    expect(stored.overrideValue).toBeNull();
+    expect(JSON.parse(stored.overrideValueText)).toEqual({
+      primaryLinkLabel: '',
+      primaryLinkUrl: 'custom.com',
+      secondaryLinks: [],
+    });
+  });
+
+  it('does NOT create an override when the value equals the primary (app echo)', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', employees: 50, primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { employees: 50 },
+      updatedFields: ['employees'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    expect(client.mutations).toBe(0);
+  });
+
+  it('does NOT create an override when there is no actor (API-key write)', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', employees: 75, primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { employees: 75 },
+      updatedFields: ['employees'],
+      actorWorkspaceMemberId: null,
+      relationFieldName: 'primaryRecord',
+    });
+
+    expect(client.mutations).toBe(0);
+  });
+
+  it('skips a superseded stale echo (stored value already moved past the event value)', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },
+      // Stored value (75) has already moved past what this stale event reports (60).
+      { id: 'v1', name: 'Acme (variation)', employees: 75, primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { employees: 60 },
+      updatedFields: ['employees'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    expect(client.mutations).toBe(0);
+  });
+});
