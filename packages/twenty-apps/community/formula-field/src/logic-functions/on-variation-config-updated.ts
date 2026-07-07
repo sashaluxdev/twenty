@@ -29,7 +29,7 @@ const handler = async (
 };
 
 export default defineLogicFunction({
-  universalIdentifier: 'bbfb4496-8062-4e91-a211-3007385f9f85',
+  universalIdentifier: 'a7e1ae01-88ed-451a-b635-f6dea328b1ed',
   name: 'on-variation-config-updated',
   description: 'Re-validate and re-converge an edited variation config.',
   timeoutSeconds: 120,
