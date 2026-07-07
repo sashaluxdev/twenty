@@ -59,6 +59,26 @@ describe('computeSyncableFields', () => {
     expect(result.map((field) => field.name).sort()).toEqual(['employees']);
   });
 
+  it('excludes a unique field of an otherwise-syncable kind, but keeps a non-unique field of the same kind', async () => {
+    const client = new FakeClient();
+    client.setObjectsWithFields([
+      {
+        id: 'obj-company',
+        nameSingular: 'company',
+        labelIdentifierFieldMetadataId: 'field-name',
+        fields: [
+          { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
+          { id: 'field-domain', name: 'domainName', type: 'LINKS', isActive: true, isSystem: false, isUnique: true },
+          { id: 'field-website', name: 'website', type: 'LINKS', isActive: true, isSystem: false, isUnique: false },
+        ],
+      },
+    ]);
+
+    const result = await computeSyncableFields(client, 'company', 'primaryRecord');
+
+    expect(result.map((field) => field.name).sort()).toEqual(['website']);
+  });
+
   it('returns an empty array for an unknown object', async () => {
     const client = new FakeClient();
     client.setObjectsWithFields([]);

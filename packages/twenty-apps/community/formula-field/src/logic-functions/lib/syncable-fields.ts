@@ -24,8 +24,13 @@ export type SyncableFieldInfo = { name: string; kind: string };
 // field itself, inactive/system fields, anything outside the syncable kind
 // allowlist (which already excludes RELATION/MORPH_RELATION/ACTOR/RICH_TEXT/
 // POSITION/TS_VECTOR by construction — they are simply not in either source
-// set), and any field an enabled FormulaDefinition targets on this object (the
-// formula owns that column; the two write sets must stay disjoint).
+// set), any field an enabled FormulaDefinition targets on this object (the
+// formula owns that column; the two write sets must stay disjoint), and any
+// UNIQUE-constrained field (e.g. Company domainName) — a unique value can
+// never be legitimately mirrored onto a second record without colliding with
+// the primary's own value, and since syncOneVariation writes every syncable
+// field in one atomic batch, a single unique field in the set would reject
+// the ENTIRE variation update, not just that field.
 export const computeSyncableFields = async (
   client: FormulaClient,
   targetObject: string,
@@ -54,5 +59,6 @@ export const computeSyncableFields = async (
     .filter((field) => field.name !== relationFieldName)
     .filter((field) => !formulaTargetFields.has(field.name))
     .filter((field) => SYNCABLE_KINDS.has(field.type))
+    .filter((field) => !field.isUnique)
     .map((field) => ({ name: field.name, kind: field.type }));
 };

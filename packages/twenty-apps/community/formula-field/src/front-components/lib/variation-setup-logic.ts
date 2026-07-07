@@ -16,7 +16,17 @@ export type VariationTargetObject = {
   isActive: boolean;
   isSystem: boolean;
   labelIdentifierFieldMetadataId: string | null;
-  fields: { id: string; name: string; type: string; isActive: boolean; isSystem: boolean }[];
+  // Optional (mirrors MetadataFieldInfo.isUnique in metadata-objects.ts): keeps
+  // this consistent with the server type and avoids forcing every fixture in
+  // variation-setup-logic.spec.ts to set it.
+  fields: {
+    id: string;
+    name: string;
+    type: string;
+    isActive: boolean;
+    isSystem: boolean;
+    isUnique?: boolean;
+  }[];
 };
 
 export type RelationFieldNameCheck =
@@ -117,6 +127,11 @@ export const countSyncableFields = (
     .filter((field) => field.name !== relationFieldName)
     .filter((field) => field.name !== INVERSE_FIELD_NAME)
     .filter((field) => SYNCABLE_KINDS.has(field.type))
+    // A unique value can never be legitimately mirrored onto a second record
+    // (it would collide with the primary's own value), and the server's
+    // atomic batch write means one unique field would reject the whole
+    // variation sync — so it can't count toward "syncable" here either.
+    .filter((field) => !field.isUnique)
     .length;
 
 // Self-contained eligibility filter: drops non-active and system objects

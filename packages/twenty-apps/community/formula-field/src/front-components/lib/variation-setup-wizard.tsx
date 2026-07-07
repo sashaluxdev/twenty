@@ -125,6 +125,7 @@ export const VariationSetupWizard = ({
                         type: true,
                         isActive: true,
                         isSystem: true,
+                        isUnique: true,
                       },
                     },
                   },
@@ -145,6 +146,7 @@ export const VariationSetupWizard = ({
                 type: fieldNode.type,
                 isActive: fieldNode.isActive !== false,
                 isSystem: fieldNode.isSystem === true,
+                isUnique: fieldNode.isUnique === true,
               }));
             loadedObjects.push({
               id: node.id,

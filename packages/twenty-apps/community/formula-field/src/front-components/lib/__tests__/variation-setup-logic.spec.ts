@@ -178,6 +178,19 @@ describe('countSyncableFields', () => {
 
     expect(result).toBe(0);
   });
+
+  it('excludes a unique field of an otherwise-syncable kind, but counts a non-unique field of the same kind', () => {
+    const targetObject = buildTargetObject({
+      fields: [
+        { id: 'field-domain', name: 'domainName', type: 'LINKS', isActive: true, isSystem: false, isUnique: true },
+        { id: 'field-website', name: 'website', type: 'LINKS', isActive: true, isSystem: false, isUnique: false },
+      ],
+    });
+
+    const result = countSyncableFields(targetObject, 'primaryRecord');
+
+    expect(result).toBe(1);
+  });
 });
 
 describe('eligibleTargetObjects', () => {
@@ -283,6 +296,21 @@ describe('eligibleTargetObjects', () => {
     });
 
     const result = eligibleTargetObjects([systemObject], []);
+
+    expect(result).toEqual([]);
+  });
+
+  it('excludes an object whose only otherwise-syncable field is unique (would be rejected on save)', () => {
+    const uniqueOnlyObject = buildTargetObject({
+      id: 'obj-unique-only',
+      nameSingular: 'uniqueOnlyThing',
+      labelSingular: 'Unique Only Thing',
+      fields: [
+        { id: 'field-domain', name: 'domainName', type: 'LINKS', isActive: true, isSystem: false, isUnique: true },
+      ],
+    });
+
+    const result = eligibleTargetObjects([uniqueOnlyObject], []);
 
     expect(result).toEqual([]);
   });

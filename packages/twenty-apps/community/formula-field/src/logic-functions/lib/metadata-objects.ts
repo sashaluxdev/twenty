@@ -18,6 +18,11 @@ export type MetadataFieldInfo = {
   // System-owned fields (id, createdAt, position, search vector, etc.) are
   // never syncable — they are platform-managed, not user data.
   isSystem: boolean;
+  // Optional (not required): metadata-objects.ts is a shared loader, and
+  // making this required would force every `__setFakeObjectsWithFieldsForTests`
+  // fixture across the suite to set it. `!field.isUnique` downstream treats
+  // undefined the same as false, so optional is safe.
+  isUnique?: boolean;
 };
 
 export type MetadataObjectInfo = {
@@ -138,6 +143,7 @@ export const loadAllObjectsWithFields = async (): Promise<
               type: true,
               isActive: true,
               isSystem: true,
+              isUnique: true,
             },
           },
         },
@@ -159,6 +165,7 @@ export const loadAllObjectsWithFields = async (): Promise<
             type: field.type,
             isActive: field.isActive !== false,
             isSystem: field.isSystem === true,
+            isUnique: field.isUnique === true,
           });
         }
       }
