@@ -3,7 +3,10 @@
 Read this first. It captures everything a fresh session needs to continue work on
 this app without re-deriving it. Written 2026-07-02; updated 2026-07-04 after
 the build-pipeline roadmap completed (TODAY() ADR 0012 + drag-to-reorder ADR
-0013 landed, whole-branch audit clean).
+0013 landed, whole-branch audit clean); updated 2026-07-07 after pre-deploy
+fixes, STRING LITERALS and FIELD MIRRORING features (both live-verified), and
+editor UX fixes all landed. SDD ledger for that arc: `.superpowers/sdd/progress.md`
+(git-ignored scratch — survives until a clean).
 
 ## What this is
 
@@ -160,7 +163,7 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   false-OFFLINE truncation); m4 fieldKinds cache workspace-keyed. Remaining
   known: m5 cross-referenced-record recompute recomputes the whole object
   (scaling cliff, not blocking — future batching).
-- **Tests**: 301 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
+- **Tests**: 556 unit/fuzz tests (`*.spec.ts`) + a fetch-based install
   integration suite (`src/__tests__/app-install.integration-test.ts`). Lint clean.
 - **Roadmap COMPLETE as of 2026-07-04** (items 1-5 below all DONE; branch
   audited whole — final review verdict READY TO MERGE, no Critical/Important
@@ -212,9 +215,76 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   Status text colors, toggle, dropdown, drag rows) in `lib/ui.tsx` +
   `lib/ui-tokens.ts`. See "Widget styling rules" gotcha before editing any
   widget styling.
-  Awaiting user verification + next design inputs.
+- **PRE-DEPLOY FIXES (2026-07-06, live-verified)**: TODAY() stale formulas
+  auto-refresh on view (definition-editor refresh must use the dynamic
+  client); naive delete (trash) no longer DEACTIVATES fields — trashed
+  targets keep dependents OFFLINE and the field is HIDDEN via layout
+  convergence (60s-throttled trashed-def probe: with a page already open,
+  hide takes up to ~60s; fresh page open converges immediately); expression
+  caret is derived from the value DIFF (`lib/caret-from-diff.ts` +
+  `nextCaretFromSelection`) because the sandbox never mirrors
+  `selectionStart` — autocomplete works mid-string.
+- **STRING LITERALS (2026-07-06, spec
+  `docs/superpowers/specs/2026-07-06-string-literals-design.md`)**: `'...'`
+  / `"..."` literals are legal ONLY as comparison operands at an IF
+  condition's top level — the engine value domain stays `number | null`.
+  Case-sensitive equality. Save-time AND inline (front) kind validation:
+  comparing a NUMBER-kind field to a string is rejected with a kind
+  message. Editor autocompletes SELECT option values after `field = `
+  (option context yields to field completion when the LHS isn't a SELECT).
+- **FIELD MIRRORING (2026-07-07, spec
+  `docs/superpowers/specs/2026-07-06-field-mirroring-design.md`, live-verified
+  13 PASS / 0 FAIL incl. no composite write-storm)**: a definition whose
+  expression is ONE bare whole-field ref (`status` or
+  `[company:<uuid>:status]`, no subpath/operators) onto a NON-engine-family
+  target is a MIRROR: raw passthrough recompute (kind-aware composite
+  sub-selections via `selectionEntryForMirrorKind`), `deepJsonEqual` no-op
+  suppression (256-depth cap, `lib/deep-equal.ts`), verbatim write. Kind
+  allowlist (12 kinds, strict same-kind) in
+  `src/logic-functions/lib/mirror-kinds.ts`. Engine family
+  (NUMBER/CURRENCY/DATE/DATE_TIME) byte-for-byte untouched. Bookkeeping:
+  `lastValueText` TEXT on FormulaDefinition (truncated 500; `lastValue`
+  stays null) + `overrideValueText` TEXT on FormulaOverride (JSON round-trip
+  restore; human-edit detection via deep equality). Wizard gained a "Mirror
+  another field" mode: source object → field (allowlisted) → cross-object
+  requires a source record UUID validated WITH the record's display label
+  (resolved via `labelIdentifierFieldMetadataId`, TEXT + FULL_NAME kinds,
+  degrades to "Record found"); created field CLONES source type/settings/
+  options (option ids are SERVER-ASSIGNED — omit them); mirror draft
+  persists in `targetFieldSettings.mirror` and is CLEARED when toggling
+  back to Format mode. Front + server mirror validation messages match
+  verbatim (`validate-expression.ts` carries targetFieldType).
+- **EDITOR UX FIXES (2026-07-07, user-reported, live-verified)**: suggestion
+  cap raised 8 → `SUGGESTION_LIMIT` (50) with a scrollable
+  `ScrollableDropdownPanel` (240px max-height); accepting a suggestion now
+  CLOSES the dropdown (`shouldSuppressReopen` keys on the exact
+  just-accepted value+caret; any other edit clears it); expression textarea
+  auto-grows via pure `rowsForValue` (clamped 2..10, newline-count based —
+  no DOM measurement, sandbox-proof).
+  Awaiting next design inputs (Excel logic pack under consideration — see
+  "What is NOT done").
 
 ## What is NOT done (next work)
+
+**Next-work candidates (2026-07-07, user exploring — NOT committed):**
+
+- **Excel logic pack** — AND / OR / NOT / IFS / SWITCH (compose in the IF
+  condition context) + numeric ROUND / ABS / MIN / MAX / INT + named date
+  helpers. Assessed cheap: rides the reserved-function machinery IF/TODAY
+  built; value domain untouched; roughly one plan of 4-6 tasks.
+- **LET** — moderate: needs a binding environment in the (currently
+  stateless) evaluator + bound-name rules for dependency extraction and
+  autocomplete; own small ADR.
+- **Text-returning functions (CONCAT/LEFT/UPPER/…)** — expensive: breaks the
+  `number | null` value domain the write/convergence/override stack assumes.
+  Mirroring's lastValueText/overrideValueText/raw-write lane laid real
+  plumbing, but this is a value-domain-expansion ADR + dedicated 1-2 week
+  plan. Cross-record aggregations (SUMIF over relations) bigger still.
+- **Outstanding 30s manual check**: the record-widget two-step expression
+  save-confirm ignores SYNTHETIC clicks (Playwright), so the 2026-07-07
+  live verify could not exercise it (definition-editor save + sibling
+  Override toggle work; no evidence of real breakage) — a human click
+  confirms it.
 
 **Build pipeline (user-approved order, 2026-07-03):**
 
@@ -416,6 +486,14 @@ written at the app root (`README.md`).
 - **createOneField input**: `{ input: { field: { objectMetadataId, type,
   name, label, settings?, ... } } }`; `settings` is a JSON scalar with
   LOWERCASE `dataType` ('int'|'float'); CURRENCY needs no settings/default.
+  SELECT/MULTI_SELECT `options` need NO ids — the server assigns v4 ids
+  before validation (verified in twenty-server's
+  from-create-field-input-to-flat-field-metadatas-to-create.util.ts); send
+  `{label, value, color, position}` only.
+- **Record display labels**: metadata `Object.labelIdentifierFieldMetadataId`
+  names the label field (TEXT or FULL_NAME in practice); FULL_NAME needs a
+  `{firstName lastName}` sub-selection like any composite. Used by the
+  wizard's cross-record source validation.
 - CURRENCY fields are micros (×1e6). Soft-deleted records keep unique indexes.
 - **`twenty-sdk/ui` crashes the front-component sandbox at runtime**:
   `"Dynamic require of \"react\" is not supported"` — it builds and typechecks
@@ -448,7 +526,7 @@ written at the app root (`README.md`).
 - Recompute + data access: `src/logic-functions/lib/{recompute,handle-record-update,
   handle-formula-change,handle-definition-lifecycle,formula-status,fx-status-field,
   formula-repository,override-repository,save-validation,coercion,value-io,
-  dynamic-client,with-retry,types}.ts`
+  dynamic-client,with-retry,types,mirror-kinds,deep-equal}.ts`
 - Triggers: `src/logic-functions/{on-record-updated,on-record-created,
   on-formula-definition-created,on-formula-definition-updated,
   on-formula-definition-deleted,on-formula-definition-restored,
@@ -462,13 +540,12 @@ written at the app root (`README.md`).
 
 ## Demo data (local, Apple workspace)
 
-- **Environment was RESET to a fresh seed slate on 2026-07-02** (user request:
-  clear accumulated test byproducts). Old demo records/fields
-  (Fleet budget, Pet care budget, Fuel efficiency, Formula Demo Deal ids) are
-  GONE. Current state: seed data + app installed + one demo formula
-  "Opportunity score (demo)" = `formulaInputA + formulaInputB * 2` on
-  opportunity.formulaScore (verified: inputs 5/10 → 25 on "Enterprise iPad
-  Deployment").
+- **Current state (2026-07-07)**: seed data + app installed + the user's 7
+  REAL formula definitions (do not modify/delete). All 2026-07-06/07 test
+  artifacts were Delete-Completely'd by the verify agents; a few residual
+  INACTIVE FormulaOverride rows and deactivated zz* pet field metadata rows
+  from earlier sessions remain — benign. (Environment was last fully reset
+  2026-07-02.)
 - **`dev --once` does NOT fire the post-install logic function** (only a real
   install does, e.g. the integration test's app:install). After a DB reset +
   dev sync, seed the demo formula manually via createFormulaDefinition (the
