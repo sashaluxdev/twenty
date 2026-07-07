@@ -1,4 +1,8 @@
 import { type FormulaClient } from 'src/logic-functions/lib/types';
+import {
+  type MetadataObjectInfo,
+  __setFakeObjectsWithFieldsForTests,
+} from 'src/logic-functions/lib/metadata-objects';
 
 // In-memory fake of the CoreApiClient's query/mutation surface, enough to drive
 // the recompute engine and change handlers in unit tests. It stores records per
@@ -47,6 +51,10 @@ export class FakeClient implements FormulaClient {
 
   setFieldKinds(object: string, kinds: Record<string, string>): void {
     this.fieldKindsByObject.set(object, new Map(Object.entries(kinds)));
+  }
+
+  setObjectsWithFields(objects: MetadataObjectInfo[]): void {
+    __setFakeObjectsWithFieldsForTests(objects);
   }
 
   fieldKinds = async (object: string): Promise<Map<string, string>> =>
