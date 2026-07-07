@@ -264,6 +264,64 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   Awaiting next design inputs (Excel logic pack under consideration — see
   "What is NOT done").
 
+- **Record variations (per-object primary→variation field mirroring) — DONE +
+  LIVE-VERIFIED 2026-07-07** (spec `docs/superpowers/specs/2026-07-07-record-
+  variations-design.md`; 4-plan trail Plan 1 engine → Plan 2 opt-in → Plan 3
+  widget → Plan 4 live verify; 651 unit tests):
+  - **What it is**: opt in any object to mirror a "primary" record's syncable
+    fields onto child "variation" records via a SELF-REFERENCING `primaryRecord`
+    MANY_TO_ONE relation (+ inverse `Variations` collection). Variations track
+    the primary until a field is edited (diverges via an ACTIVE `formulaOverride`
+    row), then can be re-synced per field; deleting the primary FREEZES them.
+  - **Data model**: `VariationConfig` object (`src/objects/variation-config.
+    object.ts`), one row per object — `name`(=targetObject, the key), `targetObject`,
+    `relationFieldName`, `enabled`, `createdRelationField` (provenance),
+    `lastSyncedAt`/`lastError`/`status`/`statusReason` bookkeeping. Index view +
+    nav "Variation configs".
+  - **Sync engine (Plan 1)**: wildcard `*.created`/`*.updated` triggers +
+    hourly `variation-sweep` cron. Syncable set = `MIRRORABLE ∪ ENGINE_FAMILY`
+    kinds MINUS label-identifier / the relation field / the `variations` inverse
+    / any enabled-formula target / **UNIQUE fields**. Single-level guard (a
+    variation-of-a-variation is skipped, surfaced in `statusReason`).
+    `fetchPrimaryRecordInclTrashed` reads the primary incl. trashed for freeze
+    detection.
+  - **Opt-in wizard + config editor** (`variation-config-editor.tsx` role-branches
+    wizard/status panel; `lib/variation-setup-wizard.tsx`): pick object → relation
+    field name (default `primaryRecord`, live-validated, resumes onto a pre-existing
+    relation field without claiming provenance) → `createOneField` +
+    `relationCreationPayload` creates the self-ref pair → places the `Variations`
+    record-page tab (`lib/ensure-variation-tab.ts`). `lib/variation-setup-logic.ts`
+    = the tested pure core (eligibility self-filters active/non-system/unique).
+  - **Lifecycle** (`lib/handle-variation-config-change.ts`, `handle-variation-
+    config-lifecycle.ts`): created/updated validate then converge immediately
+    (write-avoidant recursion guards, same shield as formulas); disable → sync
+    stops, relation field + values + overrides all KEPT; trash → same as disable
+    (repo default-filter drops soft-deleted configs); destroy → deactivates the
+    relation field ONLY if `createdRelationField` (server cascades to the inverse),
+    **never deletes override rows** (shared `(object,field,record)` key space with
+    formulas — deletion unsafe); restore → heals the field + one sweep.
+  - **Dual-role widget** (`variation-widget.tsx` + `lib/variation-widget-data.ts`):
+    on a primary → list variations + "Create variation" (writes pointer+label only;
+    initial sync is SERVER-side via `*.created`); on a variation → primary link
+    (SDK `navigate(AppPath.RecordShowPage, …)`), frozen banner when the primary is
+    deleted, diverged-field list + per-field "Re-sync" (deactivate override THEN
+    copy the primary's value). Renders nothing on unconfigured/own objects.
+  - **Two live-found bugs fixed this session** (both were mock-vs-real-server gaps
+    invisible to unit tests): (1) `fetchPrimaryRecordInclTrashed` used a
+    server-invalid empty `deletedAt: {}` filter — now `{ id:{eq}, or:[{deletedAt:
+    {is:NULL}},{deletedAt:{is:NOT_NULL}}] }` (server-`withDeleted()`), and the
+    FakeClient mock now rejects invalid-operator `deletedAt` filters so the class
+    is caught in units + a serialization guard pins it; (2) syncing UNIQUE fields
+    (Company `domainName` LINKS) collided with the primary in the atomic batch and
+    broke ALL sync — unique fields are now excluded from the syncable set.
+  - **v1 limits**: variations get NO name on exotic label kinds (only TEXT /
+    FULL_NAME are numbered "(variation N)"); no native record-grid diverged badges
+    (the widget is the sole surface); per-field opt-out is out of scope; the widget's
+    async effects lack `.catch` (a non-retryable read failure can strand on
+    "Loading…" — mirrors the formula-editor precedent; backlog). Human-edit→override
+    DETECTION isn't drivable by synthetic Playwright events (the override CONSUMPTION
+    + diverged-listing paths are verified) — a 30s manual field-edit confirms it.
+
 ## What is NOT done (next work)
 
 **Next-work candidates (2026-07-07, user exploring — NOT committed):**
