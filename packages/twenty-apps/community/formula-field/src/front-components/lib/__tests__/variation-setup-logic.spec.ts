@@ -15,6 +15,8 @@ const buildTargetObject = (
   id: 'obj-company',
   nameSingular: 'company',
   labelSingular: 'Company',
+  isActive: true,
+  isSystem: false,
   labelIdentifierFieldMetadataId: 'field-name',
   fields: [
     { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
@@ -188,6 +190,14 @@ describe('eligibleTargetObjects', () => {
         { id: 'field-a', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
       ],
     });
+    const formulaOverrideObject = buildTargetObject({
+      id: 'obj-formula-override',
+      nameSingular: 'formulaOverride',
+      labelSingular: 'Formula Override',
+      fields: [
+        { id: 'field-fo', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
+      ],
+    });
     const variationConfigObject = buildTargetObject({
       id: 'obj-variation-config',
       nameSingular: 'variationConfig',
@@ -232,6 +242,7 @@ describe('eligibleTargetObjects', () => {
     const result = eligibleTargetObjects(
       [
         formulaDefinitionObject,
+        formulaOverrideObject,
         variationConfigObject,
         alreadyConfiguredObject,
         zeroSyncableObject,
@@ -242,5 +253,37 @@ describe('eligibleTargetObjects', () => {
     );
 
     expect(result.map((object) => object.nameSingular)).toEqual(['apple', 'zebra']);
+  });
+
+  it('excludes an inactive object that would otherwise be eligible', () => {
+    const inactiveObject = buildTargetObject({
+      id: 'obj-inactive',
+      nameSingular: 'inactiveThing',
+      labelSingular: 'Inactive Thing',
+      isActive: false,
+      fields: [
+        { id: 'field-g', name: 'score', type: 'NUMBER', isActive: true, isSystem: false },
+      ],
+    });
+
+    const result = eligibleTargetObjects([inactiveObject], []);
+
+    expect(result).toEqual([]);
+  });
+
+  it('excludes a system object that would otherwise be eligible', () => {
+    const systemObject = buildTargetObject({
+      id: 'obj-system',
+      nameSingular: 'systemThing',
+      labelSingular: 'System Thing',
+      isSystem: true,
+      fields: [
+        { id: 'field-h', name: 'score', type: 'NUMBER', isActive: true, isSystem: false },
+      ],
+    });
+
+    const result = eligibleTargetObjects([systemObject], []);
+
+    expect(result).toEqual([]);
   });
 });

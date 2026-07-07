@@ -13,6 +13,8 @@ export type VariationTargetObject = {
   id: string;
   nameSingular: string;
   labelSingular: string;
+  isActive: boolean;
+  isSystem: boolean;
   labelIdentifierFieldMetadataId: string | null;
   fields: { id: string; name: string; type: string; isActive: boolean; isSystem: boolean }[];
 };
@@ -117,12 +119,11 @@ export const countSyncableFields = (
     .filter((field) => SYNCABLE_KINDS.has(field.type))
     .length;
 
-// Objects arriving here are assumed already filtered to active/non-system by
-// the metadata query the UI layer runs (mirroring formula-setup-wizard.tsx's
-// node.isActive && !node.isSystem filter before it ever builds its option
-// list) — VariationTargetObject deliberately carries no isActive/isSystem at
-// the object level, so this function only applies the filters it can from
-// the given contract.
+// Self-contained eligibility filter: drops non-active and system objects
+// itself (countSyncableFields alone does NOT screen out a system object that
+// happens to carry active non-system TEXT/NUMBER fields), plus app-owned and
+// already-configured objects, keeping only those with at least one syncable
+// field, then sorts by label.
 export const eligibleTargetObjects = (
   objects: VariationTargetObject[],
   existingConfigTargetObjects: string[],
@@ -130,6 +131,7 @@ export const eligibleTargetObjects = (
   const configuredObjects = new Set(existingConfigTargetObjects);
 
   return objects
+    .filter((object) => object.isActive && !object.isSystem)
     .filter((object) => !EXCLUDED_OBJECTS.has(object.nameSingular))
     .filter((object) => !configuredObjects.has(object.nameSingular))
     .filter((object) => countSyncableFields(object, 'primaryRecord') > 0)
