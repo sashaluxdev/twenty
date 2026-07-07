@@ -1,4 +1,5 @@
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
+import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import { selectionEntryForMirrorKind } from 'src/logic-functions/lib/mirror-kinds';
 import { navigatePath } from 'src/logic-functions/lib/coercion';
 import {
@@ -11,6 +12,8 @@ import {
   type SyncableFieldInfo,
 } from 'src/logic-functions/lib/syncable-fields';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
+import { updateVariationConfigBookkeeping } from 'src/logic-functions/lib/variation-config-repository';
+import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import { withRetry } from 'src/logic-functions/lib/with-retry';
 
 // Record-variations sync engine (design 2026-07-07). NOT a set of
@@ -465,4 +468,100 @@ export const detectVariationDivergence = async ({
       overrideSlotFor(field.kind, currentRaw),
     );
   }
+};
+
+export type SweepOutcome = {
+  configId: string;
+  evaluated: number;
+  written: number;
+  errored: number;
+  frozen: number;
+  skippedNestedPrimary: number;
+};
+
+// Hourly convergence backstop, per enabled config: page every variation of the
+// object, re-sync it against its (possibly-fresh) primary, skipping active
+// overrides (syncOneVariation already does this) — same posture as
+// formula-sweep.ts/recomputeAllRecords, generalized to variations.
+export const sweepVariationConfig = async (
+  client: FormulaClient,
+  config: VariationConfigRecord,
+  pageSize = 100,
+): Promise<SweepOutcome> => {
+  const targetObject = config.targetObject ?? '';
+  const relationFieldName = config.relationFieldName ?? 'primaryRecord';
+  const pluralName = pluralize(targetObject);
+  const pointerField = `${relationFieldName}Id`;
+  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
+
+  let evaluated = 0;
+  let written = 0;
+  let errored = 0;
+  let frozen = 0;
+  let skippedNestedPrimary = 0;
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        [pluralName]: {
+          __args: {
+            first: pageSize,
+            filter: { [pointerField]: { is: graphqlEnum('NOT_NULL') } },
+            ...(after ? { after } : {}),
+          },
+          edges: { node: { id: true, [pointerField]: true } },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+    const connection = response?.[pluralName];
+    const edges: Array<{ node?: Record<string, unknown> }> = connection?.edges ?? [];
+
+    for (const edge of edges) {
+      const variationId = edge?.node?.id as string | undefined;
+      const primaryRecordId = edge?.node?.[pointerField] as string | undefined;
+      if (!variationId || !primaryRecordId) continue;
+      evaluated += 1;
+
+      try {
+        const { record: primary, frozen: isFrozen } = await fetchPrimaryRecordInclTrashed(
+          client,
+          targetObject,
+          primaryRecordId,
+          syncable.map((field) => field.name),
+          selectionOverridesFor(syncable),
+          relationFieldName,
+        );
+        if (isFrozen || !primary) {
+          frozen += 1;
+          continue;
+        }
+        if (navigatePath(primary, pointerField)) {
+          skippedNestedPrimary += 1;
+          continue;
+        }
+        const outcome = await syncOneVariation(client, targetObject, primary, variationId, syncable);
+        if (outcome.error) errored += 1;
+        else if (outcome.changed) written += 1;
+      } catch {
+        errored += 1;
+      }
+    }
+
+    if (!connection?.pageInfo?.hasNextPage) break;
+    after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  const statusReason =
+    skippedNestedPrimary > 0
+      ? `${skippedNestedPrimary} variation(s) skipped: primary itself is a variation`
+      : '';
+  await updateVariationConfigBookkeeping(client, config.id, {
+    lastSyncedAt: new Date().toISOString(),
+    lastError: '',
+    statusReason,
+  });
+
+  return { configId: config.id, evaluated, written, errored, frozen, skippedNestedPrimary };
 };
