@@ -502,6 +502,10 @@ export const sweepVariationConfig = async (
   let errored = 0;
   let frozen = 0;
   let skippedNestedPrimary = 0;
+  // First per-record error only, matching formula-sweep.ts's precedent — a
+  // sweep can fault many records, but only the first is worth surfacing on
+  // the config's lastError.
+  let firstError = '';
   let after: string | undefined;
 
   for (;;) {
@@ -545,10 +549,13 @@ export const sweepVariationConfig = async (
           continue;
         }
         const outcome = await syncOneVariation(client, targetObject, primary, variationId, syncable);
-        if (outcome.error) errored += 1;
-        else if (outcome.changed) written += 1;
-      } catch {
+        if (outcome.error) {
+          errored += 1;
+          if (!firstError) firstError = outcome.error;
+        } else if (outcome.changed) written += 1;
+      } catch (error) {
         errored += 1;
+        if (!firstError) firstError = String(error);
       }
     }
 
@@ -562,7 +569,7 @@ export const sweepVariationConfig = async (
       : '';
   await updateVariationConfigBookkeeping(client, config.id, {
     lastSyncedAt: new Date().toISOString(),
-    lastError: '',
+    lastError: firstError,
     statusReason,
   });
 
