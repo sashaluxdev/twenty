@@ -79,6 +79,48 @@ export const loadOverriddenRecordIds = async (
   return ids;
 };
 
+// The set of field names with an ACTIVE override on this ONE record — the
+// inverse shape of loadOverriddenRecordIds (one field, many records). Variation
+// sync needs this to skip only the pinned fields on a specific variation while
+// still syncing everything else on it.
+export const loadActiveOverrideFieldsForRecord = async (
+  client: FormulaClient,
+  targetObject: string,
+  recordId: string,
+  pageSize = 500,
+): Promise<Set<string>> => {
+  const fields = new Set<string>();
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        formulaOverrides: {
+          __args: {
+            first: pageSize,
+            filter: {
+              targetObject: { eq: targetObject },
+              recordId: { eq: recordId },
+              active: { eq: true },
+            },
+            ...(after ? { after } : {}),
+          },
+          edges: { node: { targetField: true } },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+    const connection = response?.formulaOverrides;
+    for (const edge of connection?.edges ?? []) {
+      if (edge?.node?.targetField) fields.add(edge.node.targetField);
+    }
+    if (!connection?.pageInfo?.hasNextPage) break;
+    after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  return fields;
+};
+
 // Returns the override row for a record (active or not), or null.
 export const findOverride = async (
   client: FormulaClient,
