@@ -5,20 +5,25 @@ import { enqueueSnackbar, navigate, useRecordId } from 'twenty-sdk/front-compone
 
 import { VARIATION_WIDGET_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
 import {
+  BannerWarning,
   ErrText,
   HintText,
   MutedText,
   PrimaryButton,
   RowDivider,
   SectionTitle,
+  SecondaryButton,
   WidgetRoot,
 } from 'src/front-components/lib/ui';
 import { TOKENS } from 'src/front-components/lib/ui-tokens';
 import {
   buildVariationLabelData,
+  loadDivergedFields,
   loadVariationList,
   resolveLabelField,
   resolveWidgetRole,
+  resyncDivergedField,
+  type DivergedField,
   type LabelFieldInfo,
   type VariationListEntry,
   type WidgetRole,
@@ -31,10 +36,10 @@ import { loadAllEnabledVariationConfigs } from 'src/logic-functions/lib/variatio
 // Record-page "Variations" tab (object-agnostic — ensureVariationTabOnObject
 // attaches it to any object with an enabled VariationConfig, design 2026-07-07).
 // A PRIMARY record (no primaryRecordId pointer) lists its variations and can
-// spawn new ones; a VARIATION record's own management view is Plan 3 Task 4
-// (this task renders only a placeholder for that branch). All list/create data
-// logic lives in variation-widget-data.ts (Plan 3 Task 1) — this component is a
-// thin shell over it.
+// spawn new ones; a VARIATION record gets its own management view (primary
+// link, frozen banner, diverged fields + re-sync — Plan 3 Task 4). All
+// list/create/diverge data logic lives in variation-widget-data.ts (Plan 3
+// Task 1) — this component is a thin shell over it.
 //
 // The execution context exposes only the record id, not which object's page
 // the widget is on — exactly the same gap formula-editor.tsx has for its own
@@ -81,6 +86,9 @@ const VariationWidget = () => {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [divergedFields, setDivergedFields] = useState<DivergedField[]>([]);
+  const [resyncingField, setResyncingField] = useState<string | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   // The record id never changes for a mounted widget — resolve its host object
   // once (formula-editor.tsx's exact pattern).
   const resolvedHost = useRef<string | null>(null);
@@ -136,6 +144,57 @@ const VariationWidget = () => {
     const interval = setInterval(load, 4000);
     return () => clearInterval(interval);
   }, [load]);
+
+  useEffect(() => {
+    // load() resolves a fresh `role` object every poll tick and after every
+    // resync trigger below — resolveWidgetRole never returns the same
+    // reference twice, so keying off `role` here rides that existing cadence
+    // instead of adding a second poll loop.
+    if (!recordId || role?.kind !== 'variation') return;
+    const client = createDynamicCoreClient();
+    loadDivergedFields(client, role.config, recordId).then(setDivergedFields);
+  }, [recordId, role]);
+
+  const handleResyncField = useCallback(
+    async (field: DivergedField) => {
+      if (!recordId || role?.kind !== 'variation') return;
+      setResyncingField(field.name);
+      setRowErrors((previous) => {
+        if (!(field.name in previous)) return previous;
+        const next = { ...previous };
+        delete next[field.name];
+        return next;
+      });
+      try {
+        const client = createDynamicCoreClient();
+        const outcome = await resyncDivergedField(client, role.config, recordId, field);
+        if ('frozen' in outcome) {
+          // No write happened — re-resolve the role right away so the widget
+          // flips to the frozen banner instead of waiting for the next poll.
+          load();
+          setRowErrors((previous) => ({
+            ...previous,
+            [field.name]: 'Primary is deleted — cannot re-sync.',
+          }));
+          return;
+        }
+        if (outcome.error) {
+          const message = outcome.error;
+          setRowErrors((previous) => ({ ...previous, [field.name]: message }));
+          return;
+        }
+        setTimeout(load, 1000);
+      } catch (error) {
+        setRowErrors((previous) => ({
+          ...previous,
+          [field.name]: error instanceof Error ? error.message : String(error),
+        }));
+      } finally {
+        setResyncingField(null);
+      }
+    },
+    [recordId, role, load],
+  );
 
   const handleOpenVariation = useCallback(async (variationRecordId: string) => {
     const host = resolvedHost.current;
@@ -214,14 +273,50 @@ const VariationWidget = () => {
   }
 
   if (role.kind === 'variation') {
-    // Task 4 replaces this branch with the variation's own management view
-    // (diverged fields, re-sync, primary link).
     return (
       <WidgetRoot style={layout.container}>
-        <MutedText as="div">
-          This record is a variation. The variation view arrives with the next
-          app update.
-        </MutedText>
+        <SectionTitle style={layout.title}>
+          Variation of{' '}
+          <button
+            type="button"
+            style={{ ...layout.linkButton, color: TOKENS.colorBlue }}
+            onClick={() => handleOpenVariation(role.primaryRecordId)}
+          >
+            {role.primaryLabel ?? '(unnamed)'}
+          </button>
+        </SectionTitle>
+        {role.frozen ? (
+          <BannerWarning style={layout.banner}>
+            The primary record is deleted. Fields are frozen at their last
+            synced values; restoring the primary resumes sync automatically.
+          </BannerWarning>
+        ) : null}
+        {divergedFields.length === 0 ? (
+          <HintText as="div">
+            All fields follow the primary. Edit any field on this record to
+            diverge it.
+          </HintText>
+        ) : (
+          divergedFields.map((field) => (
+            <div key={field.name} style={RowDivider.base}>
+              <div style={layout.row}>
+                <MutedText>{field.name}</MutedText>
+                <SecondaryButton
+                  disabled={role.frozen || resyncingField === field.name}
+                  title={role.frozen ? 'Primary deleted' : undefined}
+                  onClick={() => handleResyncField(field)}
+                >
+                  {resyncingField === field.name ? 'Re-syncing…' : 'Re-sync'}
+                </SecondaryButton>
+              </div>
+              {rowErrors[field.name] ? (
+                <ErrText as="div" style={layout.error}>
+                  {rowErrors[field.name]}
+                </ErrText>
+              ) : null}
+            </div>
+          ))
+        )}
       </WidgetRoot>
     );
   }
@@ -295,6 +390,7 @@ const layout: Record<string, React.CSSProperties> = {
   diverged: { marginLeft: '10px', whiteSpace: 'nowrap' },
   createButton: { marginTop: '12px' },
   error: { marginTop: '8px' },
+  banner: { marginBottom: '10px' },
 };
 
 export { VARIATION_WIDGET_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
