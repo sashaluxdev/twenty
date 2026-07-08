@@ -324,6 +324,26 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 
 ## What is NOT done (next work)
 
+- **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
+  proper fix**: `convergeFormulaFieldLayout`'s forced `visible:true` for the
+  VALUE field (not the FX Status companion — that stays, it was never
+  broken) was removed from `lib/fx-status-field.ts` (bug found via user
+  report). It ran on every poll, unconditionally, against EVERY `FIELDS`
+  view on the object — with no concept of "the user deliberately hid this
+  specific instance, leave it alone." A field can legitimately appear in
+  several tabs/groups with independent per-view `viewField.isVisible`, so
+  this trampled intentional hides in any view/tab other than the one the
+  user was actively looking at. Consequence of the removal: restoring a
+  trashed formula definition (or reactivating a legacy-deactivated field) no
+  longer un-hides the value field ANYWHERE — it stays however
+  `convergeTrashedDefinitionLayout` last left it, so today a user must
+  manually re-add it to any view/tab after a restore. Correct fix needs to
+  distinguish "trash hid this specific instance, restore should undo just
+  that" from "the user separately, deliberately hid this instance" — e.g.
+  have `convergeTrashedDefinitionLayout` record which viewIds it actually
+  flipped to `isVisible:false`, and have the restore path replay
+  `visible:true` only against that recorded set, never touching other views.
+
 **Next-work candidates (2026-07-07, user exploring — NOT committed):**
 
 - **Excel logic pack** — AND / OR / NOT / IFS / SWITCH (compose in the IF
@@ -412,8 +432,17 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 
 Then:
 
-5. **Production deploy** is explicitly out of scope (local-only). Prod would need
-   `twenty remote:add --url <cloud> && twenty app deploy --private` — do NOT run.
+5. **Cloud deploy is now LIVE** (updated 2026-07-08 — supersedes the earlier
+   "local-only, do NOT run" note). A `cloud` remote is configured and set as
+   the DEFAULT in `~/.twenty/config.json`, pointing at the user's hosted
+   instance `https://luxurique.twenty.com` (oauth, valid). The local remote is
+   now named `dev` (`http://127.0.0.1:3000`), not `local`. Deploy flow, run
+   from the app dir: bump `version` in package.json, then
+   `... cli.cjs app:publish --private -r cloud` (server rejects a
+   non-incremented version) followed by `... cli.cjs app:install -r cloud`.
+   Currently deployed to cloud: **v0.1.2** (the fx-status value-field
+   auto-reshow removal). Only deploy to cloud when the user explicitly asks —
+   it targets their real production workspace.
 6. Possible polish: surface wizard-created VALUE fields in table (index) views
    automatically — new fields are hidden in views by default, and layout
    convergence currently only touches record-page Fields views;

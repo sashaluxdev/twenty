@@ -335,9 +335,9 @@ export const convergeFormulaFieldLayout = async ({
   const last = layoutConvergedAt.get(signature);
   if (last && Date.now() - last < LAYOUT_CONVERGE_TTL_MS) return;
   layoutConvergedAt.set(signature, Date.now());
-  // A live definition is being converged VISIBLE — drop any stale trashed-hide
-  // throttle for this field so a delete -> restore round trip within the TTL
-  // re-shows the field on the very next widget render.
+  // A live definition is being converged — drop any stale trashed-hide
+  // throttle key so a delete -> restore round trip within the TTL doesn't
+  // leave a stale ':trashed' entry blocking the next actual trash.
   layoutConvergedAt.delete(`${objectNameSingular}.${targetField}:trashed`);
 
   try {
@@ -347,13 +347,12 @@ export const convergeFormulaFieldLayout = async ({
     const valueField = objectIndex.fields.get(targetField);
     const companion = objectIndex.fields.get(companionFieldName(targetField));
 
-    if (valueField?.isActive) {
-      await ensureFieldLayoutVisibility({
-        objectMetadataId: objectIndex.objectMetadataId,
-        fieldMetadataId: valueField.id,
-        visible: true,
-      });
-    }
+    // Value-field auto-reshow REMOVED 2026-07-08: it forced visible:true in
+    // EVERY FIELDS view on the object on every poll, with no per-view
+    // exception, so it trampled instances a user had deliberately hidden in
+    // a different tab/field group. Restoring a trashed definition no longer
+    // un-hides the value field anywhere — see context.md "What is NOT done"
+    // for the per-instance-aware fix this needs.
     if (companion?.isActive) {
       await ensureFieldLayoutVisibility({
         objectMetadataId: objectIndex.objectMetadataId,
