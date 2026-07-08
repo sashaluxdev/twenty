@@ -275,6 +275,37 @@ const evaluateNode = (
       );
     }
 
+    // ADR 0016: evaluate ALL arguments (never lazy), summing the non-null ones.
+    // A null argument is SKIPPED (not treated as 0); if every argument is null
+    // the result is null (deliberate deviation from Excel's 0, so "no data"
+    // still renders blank). Errors in any argument (division by zero, etc.)
+    // propagate as usual because the argument is always evaluated.
+    case 'sum': {
+      let total = 0;
+      let anyNonNull = false;
+      for (const arg of node.args) {
+        const value = evaluateNode(arg, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+        if (value === null) {
+          continue;
+        }
+        anyNonNull = true;
+        total += value;
+      }
+
+      if (!anyNonNull) {
+        return null;
+      }
+
+      if (!Number.isFinite(total)) {
+        throw new FormulaError(
+          'NON_NUMERIC_VALUE',
+          `Expression produced a non-finite value (${total})`,
+        );
+      }
+
+      return total;
+    }
+
     case 'string':
       // Unreachable via parse(): the parser confines string literals to = / !=
       // comparison operands, handled in string mode by evaluateConditionTruth,

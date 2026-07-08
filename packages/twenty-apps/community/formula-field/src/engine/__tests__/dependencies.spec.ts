@@ -119,6 +119,20 @@ describe('dependency extraction', () => {
     expect(deps.sameRecordFields).toEqual(['startDate']);
     expect(deps.crossRecordRefs).toEqual([]);
   });
+
+  it('should eagerly union field dependencies across ALL SUM arguments (ADR 0016)', () => {
+    const deps = extractDependencies('SUM(a, b, c)');
+    expect(deps.sameRecordFields).toEqual(['a', 'b', 'c']);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
+
+  it('should collect dependencies from nested expressions inside SUM arguments', () => {
+    const deps = extractDependencies(`SUM(a + b, [company:${UUID}:revenue])`);
+    expect(deps.sameRecordFields).toEqual(['a', 'b']);
+    expect(deps.crossRecordRefs).toEqual([
+      { object: 'company', recordId: UUID, field: 'revenue', fieldPath: 'revenue' },
+    ]);
+  });
 });
 
 describe('usesToday', () => {
@@ -156,6 +170,14 @@ describe('usesToday', () => {
 
   it('detects TODAY() nested under unary negation', () => {
     expect(usesToday(parse('-(TODAY())'))).toBe(true);
+  });
+
+  it('detects TODAY() inside a SUM argument', () => {
+    expect(usesToday(parse('SUM(a, TODAY())'))).toBe(true);
+  });
+
+  it('returns false for a SUM with no TODAY()', () => {
+    expect(usesToday(parse('SUM(a, b, 3)'))).toBe(false);
   });
 });
 
@@ -245,5 +267,10 @@ describe('bareReferenceOf', () => {
 
   it('rejects a bare numeric literal', () => {
     expect(bareReferenceOf(parse('5'))).toBeNull();
+  });
+
+  it('rejects SUM(field) so it is never classified as a mirror (ADR 0016)', () => {
+    expect(bareReferenceOf(parse('SUM(status)'))).toBeNull();
+    expect(bareReferenceOf(parse(`SUM([company:${UUID}:status])`))).toBeNull();
   });
 });

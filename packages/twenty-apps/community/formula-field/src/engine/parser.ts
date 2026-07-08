@@ -11,9 +11,10 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 //   expression := term (('+' | '-') term)*
 //   term       := unary (('*' | '/' | '%') unary)*
 //   unary      := ('+' | '-') unary | primary
-//   primary    := NUMBER | FIELD | CROSSREF | if | today | '(' expression ')'
+//   primary    := NUMBER | FIELD | CROSSREF | if | today | sum | '(' expression ')'
 //   if         := IF '(' condition ',' expression ',' expression ')'
 //   today      := TODAY '(' ')'
+//   sum        := SUM '(' expression (',' expression)* ')'
 //   condition  := expression (compareOp expression)?
 //   compareOp  := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 //
@@ -26,11 +27,14 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 // (top level, arithmetic, then/else branches, or a comparison operand). That
 // keeps booleans out of the engine's public number|null value domain. Chained
 // comparisons (`a > b > c`) are rejected — comparison is not associative here.
-// `IF` and `TODAY` are reserved words (case-insensitive): a bare same-record
-// field named `if` or `today` is no longer expressible; dotted paths like
-// `if.x` / `today.x` still are. TODAY() resolves to the current epoch-day
-// (ADR 0012, Excel-style current-date value) via a caller-supplied
-// evaluator option, not an engine-internal clock read.
+// `IF`, `TODAY` and `SUM` are reserved words (case-insensitive): a bare
+// same-record field named `if`, `today` or `sum` is no longer expressible;
+// dotted paths like `if.x` / `today.x` / `sum.x` still are. TODAY() resolves to
+// the current epoch-day (ADR 0012, Excel-style current-date value) via a
+// caller-supplied evaluator option, not an engine-internal clock read. SUM(...)
+// (ADR 0016) totals its non-null arguments in value context (comparisons and
+// string literals stay illegal inside its args, as everywhere but an IF
+// condition's top level).
 
 // Guards against pathological input. The recursive-descent parser recurses once
 // per nesting level, so unbounded input could overflow the JS call stack before
@@ -203,6 +207,18 @@ class Parser {
             token.position,
           );
         }
+        // `sum` is likewise reserved (ADR 0016): followed by "(" it opens the
+        // variadic SUM function; bare, it is no longer a legal field reference.
+        if (token.fieldPath!.toLowerCase() === 'sum') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseSum();
+          }
+          throw new FormulaError(
+            'PARSE_ERROR',
+            '"SUM" is a reserved word — expected SUM(expr1, ..., exprN)',
+            token.position,
+          );
+        }
         this.advance();
         return { type: 'field', path: token.fieldPath! };
       }
@@ -326,6 +342,50 @@ class Parser {
     this.advance();
 
     return { type: 'today' };
+  }
+
+  // SUM(expr1, ..., exprN) — a reserved variadic function (ADR 0016). Requires
+  // at least one argument (zero args is a PARSE_ERROR). Each argument is a
+  // value-context expression parsed through parseExpression, so a comparison or
+  // string literal inside an argument routes to the same condition-only
+  // rejection it hits anywhere but an IF condition's top level. The SUM frame
+  // counts against MAX_PARSE_DEPTH like IF, so nested SUMs are bounded.
+  private parseSum(): AstNode {
+    this.enter();
+    this.advance(); // the SUM identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    if (this.peek().type === 'RPAREN') {
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'SUM requires at least one argument: SUM(expr1, ..., exprN)',
+        this.peek().position,
+      );
+    }
+
+    const args: AstNode[] = [this.parseExpression()];
+    while (this.peek().type === 'COMMA') {
+      this.advance();
+      args.push(this.parseExpression());
+    }
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      // A comparison stranded in an argument gets the condition-only message;
+      // anything else is a missing closing parenthesis.
+      if (isComparisonToken(closing)) {
+        throw this.comparisonOutsideConditionError(closing);
+      }
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'Missing closing parenthesis ")" after SUM arguments',
+        closing.position,
+      );
+    }
+    this.advance();
+
+    this.leave();
+    return { type: 'sum', args };
   }
 
   // A comparison operand at the top of an IF condition. This is the ONLY place a

@@ -28,9 +28,9 @@ export type FieldOption = {
   options?: Array<{ value: string; label: string }>;
 };
 
-// Static keyword suggestions alongside the metadata-driven field options. IF
-// and TODAY are engine grammar, not metadata fields, so they are offered here
-// (ADR 0010, ADR 0012).
+// Static keyword suggestions alongside the metadata-driven field options. IF,
+// TODAY and SUM are engine grammar, not metadata fields, so they are offered
+// here (ADR 0010, ADR 0012, ADR 0016).
 const FUNCTION_SUGGESTIONS: FieldOption[] = [
   {
     name: 'IF',
@@ -43,6 +43,12 @@ const FUNCTION_SUGGESTIONS: FieldOption[] = [
     label: 'TODAY() — current date',
     type: 'function',
     insertText: 'TODAY()',
+  },
+  {
+    name: 'SUM',
+    label: 'SUM(expr1, ..., exprN)',
+    type: 'function',
+    insertText: 'SUM(',
   },
 ];
 

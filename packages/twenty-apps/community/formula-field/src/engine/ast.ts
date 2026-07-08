@@ -75,6 +75,17 @@ export type TodayNode = {
   type: 'today';
 };
 
+// Variadic function: SUM(expr1, ..., exprN), N >= 1 (ADR 0016). Static dispatch
+// over a fixed argument list, like IF — still no general call node, so the
+// grammar cannot express code execution. Args are value-context expressions
+// (comparisons/strings stay illegal inside them). Evaluation sums the non-null
+// args, skipping nulls; all-null yields null (never 0) per the app's
+// null-propagation policy.
+export type SumNode = {
+  type: 'sum';
+  args: AstNode[];
+};
+
 export type AstNode =
   | NumberNode
   | StringNode
@@ -84,4 +95,5 @@ export type AstNode =
   | BinaryNode
   | ComparisonNode
   | IfNode
-  | TodayNode;
+  | TodayNode
+  | SumNode;

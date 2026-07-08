@@ -90,6 +90,14 @@ const walk = (
       walk(node.then, sameRecordFields, crossRecordRefs);
       walk(node.else, sameRecordFields, crossRecordRefs);
       return;
+
+    // Eager union over every argument (ADR 0016), mirroring IF: a change to any
+    // argument can change the sum, so a SUM formula depends on all of them.
+    case 'sum':
+      for (const arg of node.args) {
+        walk(arg, sameRecordFields, crossRecordRefs);
+      }
+      return;
   }
 };
 
@@ -130,6 +138,11 @@ export const usesToday = (node: AstNode): boolean => {
       return (
         usesToday(node.condition) || usesToday(node.then) || usesToday(node.else)
       );
+
+    // OR across every argument — a TODAY() buried in any SUM operand still makes
+    // the whole formula clock-dependent for staleness detection (ADR 0015).
+    case 'sum':
+      return node.args.some((arg) => usesToday(arg));
   }
 };
 
@@ -204,6 +217,15 @@ const walkStringComparisons = (
       walkStringComparisons(node.condition, sameRecordPaths, crossRefs);
       walkStringComparisons(node.then, sameRecordPaths, crossRefs);
       walkStringComparisons(node.else, sameRecordPaths, crossRefs);
+      return;
+
+    // Recurse into every argument so a string comparison nested inside a SUM
+    // operand's sub-IF is still reached (SUM args are value context, so a bare
+    // string comparison cannot appear directly, but a nested IF can carry one).
+    case 'sum':
+      for (const arg of node.args) {
+        walkStringComparisons(arg, sameRecordPaths, crossRefs);
+      }
       return;
   }
 };

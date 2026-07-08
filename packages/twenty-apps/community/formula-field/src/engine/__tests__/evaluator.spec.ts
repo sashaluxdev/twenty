@@ -189,6 +189,69 @@ describe('evaluator TODAY()', () => {
   });
 });
 
+describe('evaluator SUM()', () => {
+  it('sums numeric literal arguments', () => {
+    expect(run('SUM(1, 2, 3)')).toBe(6);
+  });
+
+  it('sums non-null field arguments', () => {
+    expect(run('SUM(a, b, c)', { a: 10, b: 20, c: 30 })).toBe(60);
+  });
+
+  it('skips null arguments instead of treating them as 0', () => {
+    // b is null -> skipped, so the total is a + c, not nulled and not a+0+c
+    // via a coerced 0 (same number here, but the null is genuinely skipped).
+    expect(run('SUM(a, b, c)', { a: 10, b: null, c: 5 })).toBe(15);
+  });
+
+  it('returns null when EVERY argument is null (ADR 0016, not 0)', () => {
+    expect(run('SUM(a, b)', { a: null, b: null })).toBeNull();
+  });
+
+  it('returns null for a single null argument', () => {
+    expect(run('SUM(a)', { a: null })).toBeNull();
+  });
+
+  it('handles a mix where a null and a real value coexist', () => {
+    expect(run('SUM(a, 5)', { a: null })).toBe(5);
+  });
+
+  it('evaluates ALL arguments so an error in any argument propagates', () => {
+    // Not lazy: even though the first argument alone would suffice, the
+    // divide-by-zero in the second argument still fires.
+    try {
+      run('SUM(1, 2 / 0)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
+  });
+
+  it('resolves TODAY() inside a SUM argument', () => {
+    expect(
+      evaluate(parse('SUM(a, TODAY())'), resolverFor({ a: 100 }), {
+        todayEpochDay: 20000,
+      }),
+    ).toBe(20100);
+  });
+
+  it('nulls only the null args when TODAY() is present and a field is null', () => {
+    expect(
+      evaluate(parse('SUM(a, TODAY())'), resolverFor({ a: null }), {
+        todayEpochDay: 20000,
+      }),
+    ).toBe(20000);
+  });
+
+  it('composes SUM with surrounding arithmetic under null propagation', () => {
+    // SUM(...) returns null when all-null, and that null propagates through the
+    // outer '+', consistent with the engine's null policy.
+    expect(run('SUM(a, b) + 1', { a: null, b: null })).toBeNull();
+    expect(run('SUM(a, b) + 1', { a: 4, b: null })).toBe(5);
+  });
+});
+
 describe('evaluator errors', () => {
   it('throws UNKNOWN_VARIABLE for a missing field', () => {
     try {

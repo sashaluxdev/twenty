@@ -222,6 +222,100 @@ describe('parser TODAY()', () => {
   });
 });
 
+describe('parser SUM()', () => {
+  it('should parse a single-argument SUM into a sum node (arity >= 1)', () => {
+    expect(parse('SUM(a)')).toEqual({
+      type: 'sum',
+      args: [{ type: 'field', path: 'a' }],
+    });
+  });
+
+  it('should parse a multi-argument SUM preserving argument order', () => {
+    expect(parse('SUM(a, b, 3)')).toEqual({
+      type: 'sum',
+      args: [
+        { type: 'field', path: 'a' },
+        { type: 'field', path: 'b' },
+        { type: 'number', value: 3 },
+      ],
+    });
+  });
+
+  it('should accept the keyword case-insensitively when written as sum or Sum', () => {
+    expect(parse('sum(1)')).toEqual({ type: 'sum', args: [{ type: 'number', value: 1 }] });
+    expect(parse('Sum(1)')).toEqual({ type: 'sum', args: [{ type: 'number', value: 1 }] });
+  });
+
+  it('should tolerate whitespace between SUM and its parentheses', () => {
+    expect(parse('SUM (1)')).toEqual({ type: 'sum', args: [{ type: 'number', value: 1 }] });
+  });
+
+  it('should allow value-context expressions as arguments', () => {
+    expect(parse('SUM(a + 1, b * 2)')).toEqual({
+      type: 'sum',
+      args: [
+        {
+          type: 'binary',
+          operator: '+',
+          left: { type: 'field', path: 'a' },
+          right: { type: 'number', value: 1 },
+        },
+        {
+          type: 'binary',
+          operator: '*',
+          left: { type: 'field', path: 'b' },
+          right: { type: 'number', value: 2 },
+        },
+      ],
+    });
+  });
+
+  it('should reject SUM with zero arguments', () => {
+    expect(() => parse('SUM()')).toThrowError(/at least one argument/);
+  });
+
+  it('should reject a bare "sum" when it is not followed by parentheses', () => {
+    expect(() => parse('sum + 1')).toThrowError(/reserved word/);
+    expect(() => parse('sum')).toThrowError(/reserved word/);
+  });
+
+  it('should still allow a dotted field path starting with "sum"', () => {
+    expect(parse('sum.value')).toEqual({ type: 'field', path: 'sum.value' });
+  });
+
+  it('should treat "sum" inside a cross-record reference as a plain field path', () => {
+    const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    expect(parse(`[company:${uuid}:sum]`)).toEqual({
+      type: 'crossref',
+      ref: { object: 'company', recordId: uuid, fieldPath: 'sum' },
+    });
+  });
+
+  it('should reject an unterminated SUM when the closing parenthesis is missing', () => {
+    expect(() => parse('SUM(1')).toThrowError(/closing parenthesis/);
+  });
+
+  it('should nest SUM inside and around IF', () => {
+    const outer = parse('SUM(IF(a > 1, b, c), d)');
+    expect(outer.type).toBe('sum');
+
+    const inner = parse('IF(a > 1, SUM(b, c), 0)');
+    expect(inner.type).toBe('if');
+    if (inner.type === 'if') {
+      expect(inner.then.type).toBe('sum');
+    }
+  });
+
+  it('should reject a comparison inside a SUM argument (value context, not a condition)', () => {
+    expect(() => parse('SUM(a > b)')).toThrowError(/only allowed in the condition/);
+    expect(() => parse('SUM(1, a = 2)')).toThrowError(/only allowed in the condition/);
+  });
+
+  it('should reject a bare string literal inside a SUM argument', () => {
+    expect(() => parse('SUM("x")')).toThrowError(/String literals are only allowed/);
+  });
+});
+
 describe('parser comparison confinement (transient comparisons)', () => {
   it('should reject a comparison at the top level when no IF wraps it', () => {
     expect(() => parse('a > b')).toThrowError(/only allowed in the condition/);

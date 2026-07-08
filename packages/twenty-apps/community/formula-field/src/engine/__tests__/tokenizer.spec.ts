@@ -41,6 +41,27 @@ describe('tokenizer', () => {
     });
   });
 
+  it('tokenizes the reserved word "sum" as a plain FIELD (reserved-word status is a parser concern)', () => {
+    // The tokenizer knows nothing of reserved words: `sum` is just an
+    // identifier here (ADR 0016). The parser decides SUM(...) vs. a field.
+    const tokens = tokenize('sum(a, b)');
+    expect(tokens[0]).toMatchObject({ type: 'FIELD', fieldPath: 'sum' });
+    expect(tokens.map((token) => token.type)).toEqual([
+      'FIELD',
+      'LPAREN',
+      'FIELD',
+      'COMMA',
+      'FIELD',
+      'RPAREN',
+      'EOF',
+    ]);
+  });
+
+  it('reads a dotted path starting with "sum" as a single FIELD token', () => {
+    const tokens = tokenize('sum.value');
+    expect(tokens[0]).toMatchObject({ type: 'FIELD', fieldPath: 'sum.value' });
+  });
+
   it('reads cross-record references', () => {
     const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     const tokens = tokenize(`[company:${uuid}:employees]`);
