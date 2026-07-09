@@ -1,6 +1,6 @@
 {
   "name": "formula-field",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "license": "MIT",
   "description": "Chimeric formula fields for Twenty: read a value, edit a formula.",
   "engines": {
@@ -29,7 +29,7 @@
     "oxlint": "^0.16.0",
     "react": "^18.2.0",
     "twenty-client-sdk": "2.18.0",
-    "twenty-sdk": "2.18.0",
+    "twenty-sdk": "2.19.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.0"
   }
