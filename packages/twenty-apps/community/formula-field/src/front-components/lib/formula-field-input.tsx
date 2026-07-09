@@ -29,8 +29,11 @@ export type FieldOption = {
 };
 
 // Static keyword suggestions alongside the metadata-driven field options. IF,
-// TODAY and SUM are engine grammar, not metadata fields, so they are offered
-// here (ADR 0010, ADR 0012, ADR 0016).
+// TODAY, SUM, IFBLANK and the AND/OR/NOT/ISBLANK condition combinators are
+// engine grammar, not metadata fields, so they are offered here (ADR 0010,
+// 0012, 0016, 0017). Each inserts `NAME(` and leaves the caret after the paren,
+// like SUM; the list is filtered by the typed identifier and capped at
+// SUGGESTION_LIMIT (50), so five more entries never crowd the dropdown.
 const FUNCTION_SUGGESTIONS: FieldOption[] = [
   {
     name: 'IF',
@@ -49,6 +52,36 @@ const FUNCTION_SUGGESTIONS: FieldOption[] = [
     label: 'SUM(expr1, ..., exprN)',
     type: 'function',
     insertText: 'SUM(',
+  },
+  {
+    name: 'IFBLANK',
+    label: 'IFBLANK(value, fallback)',
+    type: 'function',
+    insertText: 'IFBLANK(',
+  },
+  {
+    name: 'AND',
+    label: 'AND(cond1, ..., condN) — in an IF condition',
+    type: 'function',
+    insertText: 'AND(',
+  },
+  {
+    name: 'OR',
+    label: 'OR(cond1, ..., condN) — in an IF condition',
+    type: 'function',
+    insertText: 'OR(',
+  },
+  {
+    name: 'NOT',
+    label: 'NOT(cond) — in an IF condition',
+    type: 'function',
+    insertText: 'NOT(',
+  },
+  {
+    name: 'ISBLANK',
+    label: 'ISBLANK(value) — in an IF condition',
+    type: 'function',
+    insertText: 'ISBLANK(',
   },
 ];
 
