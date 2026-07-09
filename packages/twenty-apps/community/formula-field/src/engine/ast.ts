@@ -129,8 +129,21 @@ export type IfBlankNode = {
   fallback: AstNode;
 };
 
+// Parser-internal sentinel (ADR 0018): the else branch of a default-less
+// IFS/SWITCH desugar. NO source syntax produces it — only parseIfs/parseSwitch
+// synthesize one when the ladder has no trailing default, so an unmatched ladder
+// evaluates to null (blank) rather than erroring. evaluate() returns null for it;
+// dependency/usesToday/string-comparison walks are all no-ops. It is the single
+// AST addition ADR 0018 makes (IFS/SWITCH are otherwise pure desugaring into
+// IfNodes), and it adds no grammar surface because nothing in the source
+// tokenizes to it.
+export type NullNode = {
+  type: 'null';
+};
+
 export type AstNode =
   | NumberNode
+  | NullNode
   | StringNode
   | FieldNode
   | CrossRefNode

@@ -260,6 +260,11 @@ const evaluateNode = (
     case 'number':
       return node.value;
 
+    // ADR 0018: a default-less IFS/SWITCH ladder desugars to a NullNode else,
+    // so an unmatched ladder evaluates to null (blank). Trivial by construction.
+    case 'null':
+      return null;
+
     case 'field': {
       const value = resolve({ kind: 'same', path: node.path });
       if (value === undefined) {

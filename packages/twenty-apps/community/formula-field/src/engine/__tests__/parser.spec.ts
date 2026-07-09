@@ -597,6 +597,245 @@ describe('parser IFBLANK (ADR 0017)', () => {
   });
 });
 
+describe('parser IFS sugar (ADR 0018)', () => {
+  const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+
+  it('desugars a multi-rung IFS to the exact hand-built nested IFs (with default)', () => {
+    expect(parse('IFS(a > 1, 2, b > 3, 4, 0)')).toEqual(
+      parse('IF(a > 1, 2, IF(b > 3, 4, 0))'),
+    );
+  });
+
+  it('desugars a single-rung IFS with a default', () => {
+    expect(parse('IFS(a > 1, 2, 0)')).toEqual(parse('IF(a > 1, 2, 0)'));
+  });
+
+  it('uses a NullNode else when no default is given (even arg count)', () => {
+    expect(parse('IFS(a > 1, 2)')).toEqual({
+      type: 'if',
+      condition: {
+        type: 'comparison',
+        operator: '>',
+        left: { type: 'field', path: 'a' },
+        right: { type: 'number', value: 1 },
+      },
+      then: { type: 'number', value: 2 },
+      else: { type: 'null' },
+    });
+  });
+
+  it('puts a NullNode at the innermost else for a default-less multi-rung ladder', () => {
+    expect(parse('IFS(a > 1, 2, b > 3, 4)')).toEqual({
+      type: 'if',
+      condition: {
+        type: 'comparison',
+        operator: '>',
+        left: { type: 'field', path: 'a' },
+        right: { type: 'number', value: 1 },
+      },
+      then: { type: 'number', value: 2 },
+      else: {
+        type: 'if',
+        condition: {
+          type: 'comparison',
+          operator: '>',
+          left: { type: 'field', path: 'b' },
+          right: { type: 'number', value: 3 },
+        },
+        then: { type: 'number', value: 4 },
+        else: { type: 'null' },
+      },
+    });
+  });
+
+  it('detects odd arg count as "has default" and even as "no default"', () => {
+    // Odd (3) -> last arg is the default.
+    expect(parse('IFS(a > 1, 2, 9)').type).toBe('if');
+    expect((parse('IFS(a > 1, 2, 9)') as { else: AstNode }).else).toEqual({
+      type: 'number',
+      value: 9,
+    });
+    // Even (2) -> no default, NullNode else.
+    expect((parse('IFS(a > 1, 2)') as { else: AstNode }).else).toEqual({
+      type: 'null',
+    });
+  });
+
+  it('allows an ADR 0017 boolean combinator as a rung condition', () => {
+    const node = parse('IFS(AND(a > 1, ISBLANK(b)), 2, OR(c > 3, d < 4), 5, 0)');
+    if (node.type !== 'if' || node.condition.type !== 'and') {
+      throw new Error('expected first rung condition to be an AND node');
+    }
+    if (node.else.type !== 'if' || node.else.condition.type !== 'or') {
+      throw new Error('expected second rung condition to be an OR node');
+    }
+  });
+
+  it('accepts the keyword case-insensitively and tolerates whitespace', () => {
+    const expected = parse('IF(a > 1, 2, 0)');
+    expect(parse('ifs(a > 1, 2, 0)')).toEqual(expected);
+    expect(parse('Ifs(a > 1, 2, 0)')).toEqual(expected);
+    expect(parse('IFS (a > 1, 2, 0)')).toEqual(expected);
+  });
+
+  it('rejects IFS with zero or one argument (no complete pair)', () => {
+    expect(() => parse('IFS()')).toThrowError(
+      /IFS requires at least one condition\/value pair/,
+    );
+    expect(() => parse('IFS(a)')).toThrowError(
+      /IFS requires at least one condition\/value pair/,
+    );
+  });
+
+  it('rejects a bare "ifs" not followed by parentheses', () => {
+    expect(() => parse('ifs + 1')).toThrowError(/"IFS" is a reserved word/);
+    expect(() => parse('ifs')).toThrowError(/"IFS" is a reserved word/);
+  });
+
+  it('keeps a dotted path starting with "ifs" as a plain field', () => {
+    expect(parse('ifs.total')).toEqual({ type: 'field', path: 'ifs.total' });
+    expect(parse(`[company:${UUID}:ifs]`)).toEqual({
+      type: 'crossref',
+      ref: { object: 'company', recordId: UUID, fieldPath: 'ifs' },
+    });
+  });
+
+  it('rejects a string literal in a value slot (IFS values are value context)', () => {
+    expect(() => parse('IFS(a > 1, "x", 0)')).toThrowError(
+      /String literals are only allowed/,
+    );
+    expect(() => parse('IFS(a > 1, 2, "x")')).toThrowError(
+      /String literals are only allowed/,
+    );
+  });
+
+  it('rejects an unterminated IFS when the closing parenthesis is missing', () => {
+    expect(() => parse('IFS(a > 1, 2')).toThrowError(/closing parenthesis/);
+  });
+
+  it('bounds ladder length by the parse-depth guard (one IF frame per rung)', () => {
+    const rungs = 240;
+    // Numeric-truthiness rungs (`1, 1`) keep the source short enough to stay
+    // under MAX_EXPRESSION_LENGTH while still exceeding MAX_PARSE_DEPTH (200).
+    const source =
+      'IFS(' + Array.from({ length: rungs }, () => '1, 1').join(', ') + ', 0)';
+    expect(source.length).toBeLessThan(2000);
+    expect(() => parse(source)).toThrowError(/max depth/);
+  });
+});
+
+describe('parser SWITCH sugar (ADR 0018)', () => {
+  const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+
+  it('desugars a string-keyed SWITCH to nested "expr = key" IFs (with default)', () => {
+    expect(parse('SWITCH(stage, "lead", 1, "won", 2, 0)')).toEqual(
+      parse('IF(stage = "lead", 1, IF(stage = "won", 2, 0))'),
+    );
+  });
+
+  it('desugars a numeric-keyed SWITCH', () => {
+    expect(parse('SWITCH(tier, 1, 10, 2, 20, 0)')).toEqual(
+      parse('IF(tier = 1, 10, IF(tier = 2, 20, 0))'),
+    );
+  });
+
+  it('uses a NullNode else when no default is given (odd arg count)', () => {
+    expect(parse('SWITCH(stage, "lead", 1)')).toEqual({
+      type: 'if',
+      condition: {
+        type: 'comparison',
+        operator: '=',
+        left: { type: 'field', path: 'stage' },
+        right: { type: 'string', value: 'lead' },
+      },
+      then: { type: 'number', value: 1 },
+      else: { type: 'null' },
+    });
+  });
+
+  it('detects even arg count as "has default" and odd as "no default"', () => {
+    // Even (4) -> last arg is the default.
+    expect((parse('SWITCH(s, "a", 1, 9)') as { else: AstNode }).else).toEqual({
+      type: 'number',
+      value: 9,
+    });
+    // Odd (3) -> no default, NullNode else.
+    expect((parse('SWITCH(s, "a", 1)') as { else: AstNode }).else).toEqual({
+      type: 'null',
+    });
+  });
+
+  it('allows string keys and numeric keys to mix per rung', () => {
+    expect(parse('SWITCH(x, "a", 1, 2, 20, 0)')).toEqual(
+      parse('IF(x = "a", 1, IF(x = 2, 20, 0))'),
+    );
+  });
+
+  it('allows an expression as the switch subject', () => {
+    expect(parse('SWITCH(a + b, 1, 10, 0)')).toEqual(
+      parse('IF(a + b = 1, 10, 0)'),
+    );
+  });
+
+  it('accepts the keyword case-insensitively and tolerates whitespace', () => {
+    const expected = parse('IF(s = "a", 1, 0)');
+    expect(parse('switch(s, "a", 1, 0)')).toEqual(expected);
+    expect(parse('Switch(s, "a", 1, 0)')).toEqual(expected);
+    expect(parse('SWITCH (s, "a", 1, 0)')).toEqual(expected);
+  });
+
+  it('rejects SWITCH with fewer than three arguments (no complete key/value pair)', () => {
+    expect(() => parse('SWITCH()')).toThrowError(
+      /SWITCH requires an expression and at least one key\/value pair/,
+    );
+    expect(() => parse('SWITCH(a)')).toThrowError(
+      /SWITCH requires an expression and at least one key\/value pair/,
+    );
+    expect(() => parse('SWITCH(a, b)')).toThrowError(
+      /SWITCH requires an expression and at least one key\/value pair/,
+    );
+  });
+
+  it('rejects a bare "switch" not followed by parentheses', () => {
+    expect(() => parse('switch + 1')).toThrowError(/"SWITCH" is a reserved word/);
+    expect(() => parse('switch')).toThrowError(/"SWITCH" is a reserved word/);
+  });
+
+  it('keeps a dotted path starting with "switch" as a plain field', () => {
+    expect(parse('switch.total')).toEqual({
+      type: 'field',
+      path: 'switch.total',
+    });
+    expect(parse(`[company:${UUID}:switch]`)).toEqual({
+      type: 'crossref',
+      ref: { object: 'company', recordId: UUID, fieldPath: 'switch' },
+    });
+  });
+
+  it('rejects a string literal in a value slot (SWITCH values are value context)', () => {
+    expect(() => parse('SWITCH(s, "a", "x", 0)')).toThrowError(
+      /String literals are only allowed/,
+    );
+    expect(() => parse('SWITCH(s, "a", 1, "x")')).toThrowError(
+      /String literals are only allowed/,
+    );
+  });
+
+  it('rejects an unterminated SWITCH when the closing parenthesis is missing', () => {
+    expect(() => parse('SWITCH(s, "a", 1')).toThrowError(/closing parenthesis/);
+  });
+
+  it('bounds ladder length by the parse-depth guard (one IF frame per rung)', () => {
+    const rungs = 240;
+    const source =
+      'SWITCH(x, ' +
+      Array.from({ length: rungs }, () => '1, 1').join(', ') +
+      ', 0)';
+    expect(source.length).toBeLessThan(2000);
+    expect(() => parse(source)).toThrowError(/max depth/);
+  });
+});
+
 describe('parser comparison confinement (transient comparisons)', () => {
   it('should reject a comparison at the top level when no IF wraps it', () => {
     expect(() => parse('a > b')).toThrowError(/only allowed in the condition/);

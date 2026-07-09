@@ -161,6 +161,27 @@ describe('dependency extraction', () => {
       { object: 'company', recordId: UUID, field: 'name', fieldPath: 'name' },
     ]);
   });
+
+  // ADR 0018: IFS/SWITCH desugar to nested IfNodes, so dependency extraction
+  // reaches every rung's condition and value with NO production change — the
+  // existing 'if' walk case does all the work. These tests document that.
+  it('should collect every rung condition and value across a desugared IFS ladder', () => {
+    const deps = extractDependencies('IFS(a > 1, x, b > 2, y, z)');
+    expect(deps.sameRecordFields).toEqual(['a', 'b', 'x', 'y', 'z']);
+  });
+
+  it('should collect the subject and all rung values across a desugared SWITCH ladder', () => {
+    const deps = extractDependencies('SWITCH(stage, 1, x, 2, y, z)');
+    // `stage` is the shared subject of every rung comparison; x/y are rung
+    // values; z is the default. The subject dedupes despite N-fold duplication.
+    expect(deps.sameRecordFields).toEqual(['stage', 'x', 'y', 'z']);
+  });
+
+  it('should contribute no dependency for a default-less ladder NullNode else', () => {
+    const deps = extractDependencies('IFS(a > 1, x)');
+    expect(deps.sameRecordFields).toEqual(['a', 'x']);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
 });
 
 describe('usesToday', () => {
@@ -221,6 +242,18 @@ describe('usesToday', () => {
   it('returns false for combinators with no TODAY() (ADR 0017)', () => {
     expect(usesToday(parse('IF(AND(a > 1, b > 2), 1, 0)'))).toBe(false);
     expect(usesToday(parse('IFBLANK(a, 0)'))).toBe(false);
+  });
+
+  it('detects TODAY() inside a desugared IFS/SWITCH ladder (ADR 0018)', () => {
+    expect(usesToday(parse('IFS(a > TODAY(), 1, 0)'))).toBe(true);
+    expect(usesToday(parse('IFS(a > 1, TODAY(), 0)'))).toBe(true);
+    expect(usesToday(parse('SWITCH(TODAY(), 1, 2, 0)'))).toBe(true);
+    expect(usesToday(parse('SWITCH(x, 1, TODAY(), 0)'))).toBe(true);
+  });
+
+  it('returns false for a ladder with no TODAY() (ADR 0018)', () => {
+    expect(usesToday(parse('IFS(a > 1, 2, 0)'))).toBe(false);
+    expect(usesToday(parse('SWITCH(x, 1, 2, 3, 4, 0)'))).toBe(false);
   });
 });
 
@@ -285,6 +318,35 @@ describe('collectStringComparisonRefs', () => {
       parse('IF(tier = "gold", IF(stage = "NEW", 1, IF(tier = "gold", 2, 3)), 0)'),
     );
     expect(refs.sameRecordPaths).toEqual(['stage', 'tier']);
+  });
+
+  // ADR 0018: string SWITCH keys ride the existing string-comparison machinery
+  // because the parser desugars `SWITCH(stage, "lead", ...)` into a real
+  // `IF(stage = "lead", ...)` comparison node. Save-time field-kind validation
+  // (validate-expression.ts calls collectStringComparisonRefs on the parsed AST)
+  // therefore reaches the SWITCH subject with NO production change.
+  it('reaches the SWITCH subject compared against string keys (save-time kind check)', () => {
+    const refs = collectStringComparisonRefs(
+      parse('SWITCH(stage, "lead", 1, "won", 2, 0)'),
+    );
+    expect(refs.sameRecordPaths).toEqual(['stage']);
+    expect(refs.crossRefs).toEqual([]);
+  });
+
+  it('reaches a cross-record SWITCH subject compared against string keys', () => {
+    const refs = collectStringComparisonRefs(
+      parse(`SWITCH([company:${UUID}:name], "Acme", 1, 0)`),
+    );
+    expect(refs.sameRecordPaths).toEqual([]);
+    expect(refs.crossRefs).toEqual([
+      { object: 'company', recordId: UUID, fieldPath: 'name' },
+    ]);
+  });
+
+  it('carries no string-key constraint for a numeric-keyed SWITCH', () => {
+    const refs = collectStringComparisonRefs(parse('SWITCH(tier, 1, 10, 2, 20, 0)'));
+    expect(refs.sameRecordPaths).toEqual([]);
+    expect(refs.crossRefs).toEqual([]);
   });
 });
 

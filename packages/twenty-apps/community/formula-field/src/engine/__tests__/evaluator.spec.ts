@@ -505,6 +505,74 @@ describe('evaluator IFBLANK (ADR 0017)', () => {
   });
 });
 
+describe('evaluator IFS / SWITCH sugar (ADR 0018)', () => {
+  it('evaluates an IFS range ladder rung by rung', () => {
+    const ladder = 'IFS(score >= 90, 5, score >= 70, 4, score >= 50, 3, 0)';
+    expect(run(ladder, { score: 95 })).toBe(5);
+    expect(run(ladder, { score: 75 })).toBe(4);
+    expect(run(ladder, { score: 55 })).toBe(3);
+    expect(run(ladder, { score: 40 })).toBe(0);
+  });
+
+  it('returns null when no rung matches and there is no default (inherited from the NullNode else)', () => {
+    expect(run('IFS(a > 100, 1, b > 100, 2)', { a: 1, b: 1 })).toBeNull();
+  });
+
+  it('short-circuits down the ladder: a later rung condition is never evaluated once an earlier rung matches', () => {
+    // Rung 2's condition divides by zero. When rung 1 matches, that condition
+    // lives in an untaken else branch (inherited IF laziness), so it never fires.
+    expect(run('IFS(a > 0, 100, 1 / 0 > 5, 200, 300)', { a: 1 })).toBe(100);
+  });
+
+  it('DOES hit a later rung condition error when earlier rungs miss (proves the short-circuit is real)', () => {
+    try {
+      run('IFS(a > 0, 100, 1 / 0 > 5, 200, 300)', { a: -1 });
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
+  });
+
+  it('evaluates an ADR 0017 combinator used as a rung condition', () => {
+    const ladder = 'IFS(AND(a > 1, b > 1), 100, OR(a > 1, b > 1), 50, 0)';
+    expect(run(ladder, { a: 2, b: 2 })).toBe(100);
+    expect(run(ladder, { a: 2, b: 0 })).toBe(50);
+    expect(run(ladder, { a: 0, b: 0 })).toBe(0);
+  });
+
+  it('maps a string SELECT field with SWITCH via resolveRaw', () => {
+    const ladder = 'SWITCH(stage, "lead", 1, "qualified", 2, "won", 3, 0)';
+    expect(runStr(ladder, { stage: 'lead' })).toBe(1);
+    expect(runStr(ladder, { stage: 'qualified' })).toBe(2);
+    expect(runStr(ladder, { stage: 'won' })).toBe(3);
+    expect(runStr(ladder, { stage: 'lost' })).toBe(0);
+  });
+
+  it('nulls the whole SWITCH ladder when the subject field is blank (first-rung null propagation)', () => {
+    // A blank subject makes `stage = "lead"` null at the FIRST rung, so the
+    // whole ladder is null — even though a default 0 is present (ADR 0018).
+    expect(runStr('SWITCH(stage, "lead", 1, "won", 2, 0)', { stage: null })).toBeNull();
+  });
+
+  it('nulls a numeric SWITCH when the subject is null', () => {
+    expect(run('SWITCH(x, 1, 10, 2, 20, 0)', { x: null })).toBeNull();
+  });
+
+  it('recovers a blank numeric subject with an IFBLANK-wrapped SWITCH subject', () => {
+    // IFBLANK(x, 0) turns the blank into 0, so `0 = 0` matches the first rung.
+    expect(run('SWITCH(IFBLANK(x, 0), 0, 10, 1, 20, 99)', { x: null })).toBe(10);
+    expect(run('SWITCH(IFBLANK(x, 0), 0, 10, 1, 20, 99)', { x: 1 })).toBe(20);
+    expect(run('SWITCH(IFBLANK(x, 0), 0, 10, 1, 20, 99)', { x: 5 })).toBe(99);
+  });
+
+  it('maps a numeric SELECT-like field with SWITCH', () => {
+    const ladder = 'SWITCH(tier, 1, 10, 2, 20, 3, 30, 0)';
+    expect(run(ladder, { tier: 1 })).toBe(10);
+    expect(run(ladder, { tier: 2 })).toBe(20);
+    expect(run(ladder, { tier: 9 })).toBe(0);
+  });
+});
+
 describe('evaluator errors', () => {
   it('throws UNKNOWN_VARIABLE for a missing field', () => {
     try {

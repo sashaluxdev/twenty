@@ -12,11 +12,15 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 //   term         := unary (('*' | '/' | '%') unary)*
 //   unary        := ('+' | '-') unary | primary
 //   primary      := NUMBER | FIELD | CROSSREF | if | today | sum | ifblank
-//                 | '(' expression ')'
+//                 | ifs | switch | '(' expression ')'
 //   if           := IF '(' condition ',' expression ',' expression ')'
 //   today        := TODAY '(' ')'
 //   sum          := SUM '(' expression (',' expression)* ')'
 //   ifblank      := IFBLANK '(' expression ',' expression ')'
+//   ifs          := IFS '(' condition ',' expression
+//                       (',' condition ',' expression)* (',' expression)? ')'
+//   switch       := SWITCH '(' operand (',' operand ',' expression)+
+//                       (',' expression)? ')'
 //   condition    := boolFunction | operand (compareOp operand)?
 //   boolFunction := AND '(' condition (',' condition)+ ')'
 //                 | OR  '(' condition (',' condition)+ ')'
@@ -38,14 +42,19 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 // associative here. A STRING literal is legal ONLY as a direct =/!= operand at
 // the top of an IF condition (`operand := STRING | expression`); everywhere else
 // it is rejected.
-// `IF`, `TODAY`, `SUM`, `IFBLANK`, `AND`, `OR`, `NOT` and `ISBLANK` are reserved
-// words (case-insensitive): a bare same-record field with one of those names is
-// no longer expressible; dotted paths like `if.x` / `sum.x` / `and.x` still are.
+// `IF`, `TODAY`, `SUM`, `IFBLANK`, `AND`, `OR`, `NOT`, `ISBLANK`, `IFS` and
+// `SWITCH` are reserved words (case-insensitive): a bare same-record field with
+// one of those names is no longer expressible; dotted paths like `if.x` /
+// `sum.x` / `and.x` / `ifs.x` / `switch.x` still are.
 // TODAY() resolves to the current epoch-day (ADR 0012) via a caller-supplied
 // evaluator option, not an engine-internal clock read. SUM(...) (ADR 0016)
 // totals its non-null arguments. IFBLANK(value, fallback) (ADR 0017) substitutes
 // a fallback for a null value; AND/OR/NOT/ISBLANK (ADR 0017) are condition-only
-// combinators — used in a value context they raise a dedicated error.
+// combinators — used in a value context they raise a dedicated error. IFS and
+// SWITCH (ADR 0018) are pure value-context sugar: they desugar during parsing
+// into nested IfNodes (a NullNode else when no default is given), so the AST the
+// evaluator, dependency walker, and save-time validator see is just IFs — no
+// IFS/SWITCH node type exists at runtime.
 
 // Guards against pathological input. The recursive-descent parser recurses once
 // per nesting level, so unbounded input could overflow the JS call stack before
@@ -238,6 +247,30 @@ class Parser {
           throw new FormulaError(
             'PARSE_ERROR',
             '"SUM" is a reserved word — expected SUM(expr1, ..., exprN)',
+            token.position,
+          );
+        }
+        // `ifs` / `switch` (ADR 0018) are reserved value-context functions,
+        // dispatched from parsePrimary exactly like SUM/IFBLANK: a ladder
+        // produces a number. Bare, they are reserved; dotted paths (`ifs.x`)
+        // escape because the token's fieldPath is not the bare lexeme.
+        if (token.fieldPath!.toLowerCase() === 'ifs') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseIfs();
+          }
+          throw new FormulaError(
+            'PARSE_ERROR',
+            '"IFS" is a reserved word — expected IFS(cond1, value1, ..., [default])',
+            token.position,
+          );
+        }
+        if (token.fieldPath!.toLowerCase() === 'switch') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseSwitch();
+          }
+          throw new FormulaError(
+            'PARSE_ERROR',
+            '"SWITCH" is a reserved word — expected SWITCH(expr, key1, value1, ..., [default])',
             token.position,
           );
         }
@@ -479,6 +512,195 @@ class Parser {
 
     this.leave();
     return { type: 'ifblank', value, fallback };
+  }
+
+  // A condition-only node (comparison or an ADR 0017 combinator). Used to reject
+  // one in the trailing-default slot of an IFS ladder: the default is a VALUE,
+  // but it is collected via parseCondition (the loop cannot know in advance
+  // whether an arg is a rung condition or the default), so a comparison /
+  // AND/OR/NOT/ISBLANK landing there means the user wrote a condition where a
+  // value is required — the same illegality every other value context enforces.
+  private isConditionOnlyNode(node: AstNode): boolean {
+    return (
+      node.type === 'comparison' ||
+      node.type === 'and' ||
+      node.type === 'or' ||
+      node.type === 'not' ||
+      node.type === 'isblank'
+    );
+  }
+
+  // Right-folds collected (condition/key -> value) rungs into nested IfNodes,
+  // innermost else being the default (or a NullNode when none was given). This
+  // IS the whole of IFS/SWITCH semantics — every property (lazy short-circuit,
+  // null propagation, eager dependencies, save-time validation) is inherited
+  // from IfNode, so the engine needs no IFS/SWITCH-specific evaluation rule.
+  private foldLadder(
+    rungs: { condition: AstNode; value: AstNode }[],
+    defaultNode: AstNode | null,
+  ): AstNode {
+    let node: AstNode = defaultNode ?? { type: 'null' };
+    for (let i = rungs.length - 1; i >= 0; i -= 1) {
+      node = {
+        type: 'if',
+        condition: rungs[i].condition,
+        then: rungs[i].value,
+        else: node,
+      };
+    }
+    return node;
+  }
+
+  // IFS(cond1, value1, ..., [default]) — reserved value-context sugar (ADR 0018)
+  // desugared entirely here into nested IfNodes. Each rung's condition parses via
+  // parseCondition (so ADR 0017 AND/OR/NOT/ISBLANK work), each value via
+  // parseExpression. N even -> no default; N odd -> the last arg is the default.
+  // One enter() per rung mirrors the desugared nested-IF frames, so a long ladder
+  // trips MAX_PARSE_DEPTH exactly as the equivalent hand-written IF chain would.
+  private parseIfs(): AstNode {
+    this.advance(); // the IFS identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    const pairMessage = 'IFS requires at least one condition/value pair';
+
+    if (this.peek().type === 'RPAREN') {
+      throw new FormulaError('PARSE_ERROR', pairMessage, this.peek().position);
+    }
+
+    const rungs: { condition: AstNode; value: AstNode }[] = [];
+    let defaultNode: AstNode | null = null;
+    let frames = 0;
+
+    for (;;) {
+      const argToken = this.peek();
+      const condition = this.parseCondition();
+
+      if (this.peek().type === 'COMMA') {
+        this.advance();
+        const value = this.parseExpression();
+        this.enter();
+        frames += 1;
+        rungs.push({ condition, value });
+      } else {
+        // No comma after this arg: it is the trailing default (a value slot).
+        // A comparison/combinator here is a condition in a value slot — reject.
+        // A lone string default already threw inside parseCondition.
+        if (this.isConditionOnlyNode(condition)) {
+          throw this.comparisonOutsideConditionError(argToken);
+        }
+        defaultNode = condition;
+        break;
+      }
+
+      if (this.peek().type !== 'COMMA') {
+        break;
+      }
+      this.advance();
+    }
+
+    if (rungs.length === 0) {
+      throw new FormulaError('PARSE_ERROR', pairMessage, this.peek().position);
+    }
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      if (isComparisonToken(closing)) {
+        throw this.comparisonOutsideConditionError(closing);
+      }
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'Missing closing parenthesis ")" after IFS arguments',
+        closing.position,
+      );
+    }
+    this.advance();
+
+    for (let i = 0; i < frames; i += 1) {
+      this.leave();
+    }
+
+    return this.foldLadder(rungs, defaultNode);
+  }
+
+  // SWITCH(expr, key1, value1, ..., [default]) — reserved value-context sugar
+  // (ADR 0018) desugared into nested `IF(expr = key, value, ...)` IfNodes. `expr`
+  // and each `key` parse as comparison operands (parseConditionOperand: numeric
+  // expression or string literal), values/default via parseExpression. N even ->
+  // the last arg is the default; N odd -> no default. `expr` is shared by
+  // reference across every rung's comparison (pure, so re-evaluation is harmless;
+  // dependency extraction dedupes) — see ADR 0018 caveat 1.
+  private parseSwitch(): AstNode {
+    this.advance(); // the SWITCH identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    const pairMessage =
+      'SWITCH requires an expression and at least one key/value pair';
+
+    if (this.peek().type === 'RPAREN') {
+      throw new FormulaError('PARSE_ERROR', pairMessage, this.peek().position);
+    }
+
+    const subject = this.parseConditionOperand();
+
+    if (this.peek().type !== 'COMMA') {
+      throw new FormulaError('PARSE_ERROR', pairMessage, this.peek().position);
+    }
+
+    const rungs: { condition: AstNode; value: AstNode }[] = [];
+    let defaultNode: AstNode | null = null;
+    let frames = 0;
+
+    for (;;) {
+      this.advance(); // the comma before a key or the trailing default
+      const argToken = this.peek();
+      const key = this.parseConditionOperand();
+
+      if (this.peek().type === 'COMMA') {
+        this.advance();
+        const value = this.parseExpression();
+        this.enter();
+        frames += 1;
+        rungs.push({
+          condition: { type: 'comparison', operator: '=', left: subject, right: key },
+          value,
+        });
+      } else {
+        // No comma after this arg: it is the trailing default (a value slot).
+        // A bare string literal is illegal as a value, mirroring parsePrimary.
+        if (key.type === 'string') {
+          throw this.stringOutsideConditionError(argToken);
+        }
+        defaultNode = key;
+        break;
+      }
+
+      if (this.peek().type !== 'COMMA') {
+        break;
+      }
+    }
+
+    if (rungs.length === 0) {
+      throw new FormulaError('PARSE_ERROR', pairMessage, this.peek().position);
+    }
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      if (isComparisonToken(closing)) {
+        throw this.comparisonOutsideConditionError(closing);
+      }
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'Missing closing parenthesis ")" after SWITCH arguments',
+        closing.position,
+      );
+    }
+    this.advance();
+
+    for (let i = 0; i < frames; i += 1) {
+      this.leave();
+    }
+
+    return this.foldLadder(rungs, defaultNode);
   }
 
   // AND(cond1, ..., condN) / OR(cond1, ..., condN) — reserved condition-only

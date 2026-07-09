@@ -39,6 +39,11 @@ const walk = (
     case 'number':
       return;
 
+    // ADR 0018: the synthetic else of a default-less IFS/SWITCH desugar. Reads
+    // no field, so it contributes no dependency.
+    case 'null':
+      return;
+
     // A string literal is inert data (only ever an = / != operand); it reads no
     // field, so it contributes no dependency.
     case 'string':
@@ -133,6 +138,10 @@ export const usesToday = (node: AstNode): boolean => {
     case 'number':
       return false;
 
+    // ADR 0018: synthetic IFS/SWITCH else — no TODAY() inside it.
+    case 'null':
+      return false;
+
     case 'string':
       return false;
 
@@ -219,6 +228,7 @@ const walkStringComparisons = (
 ): void => {
   switch (node.type) {
     case 'number':
+    case 'null':
     case 'string':
     case 'today':
     case 'field':
