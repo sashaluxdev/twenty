@@ -497,7 +497,21 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 
 Then:
 
-5. **Cloud deploy is now LIVE** (updated 2026-07-08 — supersedes the earlier
+5. **Cloud deploy is now LIVE** (updated 2026-07-09: **v0.1.4 deployed** — the
+   full 2026-07-09 arc is live on cloud, verified: all 4 front-component
+   checksums fresh, config + formulas healthy. **PLATFORM GOTCHA learned during
+   this deploy**: the hosted instance auto-upgraded to the twenty-sdk **2.19**
+   platform line (~2026-07-08/09); apps built with SDK 2.18 now FAIL app:install
+   with dozens of `NOT_AVAILABLE` system-field name collisions — 2.19 changed the
+   deterministic derivation of system-field universalIdentifiers and the server
+   migrated existing fields to the new ids, so a 2.18-built manifest reads as
+   all-new fields. The repo's workspace twenty-sdk is still 2.18 (symlink in
+   node_modules), so cloud deploys must use a matching npm SDK: `npm install
+   twenty-sdk@<matching> --no-save` in a scratch dir and run THAT `dist/cli.cjs`
+   for dev:build / app:publish / app:install. A failed 2.18-style install is
+   NON-destructive but burns the version number (server stamps the version even
+   on failure → "already installed" on retry → bump again). The app's
+   package.json now declares twenty-sdk 2.19.0.) (updated 2026-07-08 — supersedes the earlier
    "local-only, do NOT run" note). A `cloud` remote is configured and set as
    the DEFAULT in `~/.twenty/config.json`, pointing at the user's hosted
    instance `https://luxurique.twenty.com` (oauth, valid). The local remote is
