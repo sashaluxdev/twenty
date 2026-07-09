@@ -324,6 +324,7 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 
 ## What is NOT done (next work)
 
+- Add description field for each formula that shows as a tooltip on the per-widget record view.
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
   proper fix**: `convergeFormulaFieldLayout`'s forced `visible:true` for the
   VALUE field (not the FX Status companion — that stays, it was never
