@@ -17,3 +17,10 @@ is maintainable without re-deriving the reasoning.
 | [0009](0009-definition-lifecycle-and-operational-status.md) | Definition lifecycle: field deactivation on delete/restore, OFFLINE/UPSTREAM status, FX Status companions | Accepted |
 | [0010](0010-if-conditionals.md) | IF conditionals with condition-confined transient comparisons | Accepted |
 | [0011](0011-excel-serial-dates.md) | Dates as Excel serial numbers (epoch-days), UTC-only, engine untouched | Accepted |
+| [0012](0012-today-function.md) | TODAY() as an injected, caller-supplied value | Accepted |
+| [0013](0013-drag-to-reorder.md) | Drag-to-reorder formula fields via pointer events, not native DnD | Accepted |
+| [0014](0014-pointer-gesture-midpoint-positions.md) | Pointer-event gesture + fractional midpoint positions (amends ADR 0013) | Accepted |
+| [0015](0015-today-staleness-self-heal.md) | TODAY() staleness: self-healing widget + truthful heartbeat | Accepted |
+| [0016](0016-sum-function.md) | SUM() variadic function with all-null → null | Accepted |
+| [0017](0017-boolean-condition-functions.md) | Boolean condition functions — AND, OR, NOT, ISBLANK, IFBLANK | Accepted (design; not yet implemented) |
+| [0018](0018-ifs-switch-sugar.md) | IFS and SWITCH as parser-level sugar | Accepted (design; not yet implemented) |
