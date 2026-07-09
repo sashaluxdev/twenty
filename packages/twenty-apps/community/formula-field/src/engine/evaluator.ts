@@ -422,9 +422,12 @@ const evaluateNode = (
     case 'or':
     case 'not':
     case 'isblank':
+      // Wording matches the parser-reachable
+      // conditionFunctionOutsideConditionError verbatim, so the guard and the
+      // real user-facing error read identically.
       throw new FormulaError(
         'PARSE_ERROR',
-        `${node.type.toUpperCase()} is only allowed inside the condition of IF(condition, then, else)`,
+        `${node.type.toUpperCase()}(...) is only allowed inside an IF condition`,
       );
 
     case 'string':

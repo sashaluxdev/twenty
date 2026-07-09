@@ -430,6 +430,17 @@ describe('parser boolean condition functions (ADR 0017)', () => {
     );
   });
 
+  it('should reject AND/OR with ZERO arguments with the same friendly arity message', () => {
+    // The empty-argument case must report the arity requirement, not a generic
+    // "Unexpected token )" from trying to parse a condition off the RPAREN.
+    expect(() => parse('IF(AND(), 1, 0)')).toThrowError(
+      /AND requires at least 2 arguments/,
+    );
+    expect(() => parse('IF(OR(), 1, 0)')).toThrowError(
+      /OR requires at least 2 arguments/,
+    );
+  });
+
   it('should reject NOT with zero or more than one argument', () => {
     expect(() => parse('IF(NOT(), 1, 0)')).toThrowError(/PARSE_ERROR|Unexpected/);
     expect(() => parse('IF(NOT(a > 1, b > 2), 1, 0)')).toThrowError(

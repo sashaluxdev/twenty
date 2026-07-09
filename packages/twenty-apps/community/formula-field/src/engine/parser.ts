@@ -491,6 +491,17 @@ class Parser {
     this.advance(); // the AND/OR identifier
     this.advance(); // the '(' (presence checked by the caller)
 
+    // Zero arguments: report the arity requirement directly instead of letting
+    // parseCondition trip over the RPAREN with a generic "Unexpected token )".
+    // Mirrors the friendly message the 1-argument case gets below.
+    if (this.peek().type === 'RPAREN') {
+      throw new FormulaError(
+        'PARSE_ERROR',
+        `${name} requires at least 2 arguments: ${name}(cond1, ..., condN)`,
+        this.peek().position,
+      );
+    }
+
     const args: AstNode[] = [this.parseCondition()];
     while (this.peek().type === 'COMMA') {
       this.advance();

@@ -443,6 +443,25 @@ describe('evaluator ISBLANK (ADR 0017)', () => {
     ).toBe(1);
   });
 
+  it('does NOT consult resolveRaw for a COMPOUND operand even when one is present', () => {
+    // Belt-and-suspenders: the raw-first gate is limited to bare field/crossref
+    // operands. For a compound operand (a + b) the evaluator stays in the
+    // numeric domain, so resolveRaw must never be called; a numeric null still
+    // counts as blank.
+    let rawCalls = 0;
+    const spyingRaw = (reference: VariableReference): unknown => {
+      rawCalls += 1;
+      return reference.kind === 'same' ? 'not-blank' : undefined;
+    };
+    const result = evaluate(
+      parse('IF(ISBLANK(a + b), 1, 0)'),
+      resolverFor({ a: null, b: 3 }),
+      { resolveRaw: spyingRaw },
+    );
+    expect(result).toBe(1);
+    expect(rawCalls).toBe(0);
+  });
+
   it('raw-first: a missing cross record reads as blank (numeric fallback null)', () => {
     const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     expect(
@@ -648,6 +667,10 @@ describe('evaluator exhaustiveness guard (hand-built ASTs)', () => {
       } catch (error) {
         expect(error).toBeInstanceOf(FormulaError);
         expect((error as FormulaError).code).toBe('PARSE_ERROR');
+        // The guard message matches the parser-reachable wording verbatim.
+        expect((error as FormulaError).message).toMatch(
+          /\(\.\.\.\) is only allowed inside an IF condition/,
+        );
       }
     }
   });
