@@ -225,9 +225,10 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   `nextCaretFromSelection`) because the sandbox never mirrors
   `selectionStart` — autocomplete works mid-string.
 - **STRING LITERALS (2026-07-06, spec
-  `docs/superpowers/specs/2026-07-06-string-literals-design.md`)**: `'...'`
-  / `"..."` literals are legal ONLY as comparison operands at an IF
-  condition's top level — the engine value domain stays `number | null`.
+  `docs/superpowers/specs/2026-07-06-string-literals-design.md`)**:
+  double-quoted `"..."` literals are legal ONLY as comparison operands at an
+  IF condition's top level — the engine value domain stays `number | null`.
+  Single quotes remain an illegal character (spec: double-quoted only).
   Case-sensitive equality. Save-time AND inline (front) kind validation:
   comparing a NUMBER-kind field to a string is rejected with a kind
   message. Editor autocompletes SELECT option values after `field = `
