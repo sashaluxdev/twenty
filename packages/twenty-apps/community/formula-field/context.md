@@ -350,14 +350,18 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 
 - **Excel logic pack** — AND / OR / NOT **LANDED 2026-07-09 (ADR 0017)**, together
   with ISBLANK (condition-context) and IFBLANK(value, fallback) (value-context).
-  Strict null propagation, no short-circuit (any null arg nulls the combinator —
-  deliberately NOT Kleene). CAVEAT flagged during impl: ADR 0017's prose lists
-  `OR(ISBLANK(x), x>10)` / `AND(NOT(ISBLANK(x)), x>10)` as null-tolerance idioms,
-  but those only work under Kleene, which the binding decision rejects — under
-  strict they null out, so `IFBLANK` is the real escape hatch; the ADR idiom
-  prose should be corrected or the decision revisited. Still pending for the
-  pack: **IFS / SWITCH** (ADR 0018, parser sugar, lands next) + numeric ROUND /
-  ABS / MIN / MAX / INT + named date helpers.
+  **Full-evaluation Kleene** three-valued null logic, no short-circuit: every
+  argument is always evaluated (errors always fire), then AND is false if any arg
+  is false else null if any is null else true, and OR is true if any is true else
+  null if any is null else false (a determined truth dominates a null). This makes
+  the null-tolerance idioms work as advertised — `OR(ISBLANK(x), x>10)`
+  skip-when-blank, `AND(NOT(ISBLANK(x)), x>10)` fail-when-blank — with `IFBLANK`
+  as the value-substitution escape hatch. (AND/OR shipped strict earlier the same
+  day; superseded same day by the maintainer's Kleene decision — see ADR 0017's
+  decision-history note. The earlier strict rule conflated Kleene with
+  short-circuit; evaluate-everything is untouched.) Still pending for the pack:
+  **IFS / SWITCH** (ADR 0018, parser sugar, lands next) + numeric ROUND / ABS /
+  MIN / MAX / INT + named date helpers.
 - **LET** — moderate: needs a binding environment in the (currently
   stateless) evaluator + bound-name rules for dependency extraction and
   autocomplete; own small ADR.

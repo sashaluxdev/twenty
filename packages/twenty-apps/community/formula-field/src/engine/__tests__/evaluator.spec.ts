@@ -269,17 +269,53 @@ describe('evaluator boolean condition functions (ADR 0017)', () => {
     expect(run('IF(NOT(a > 1), 100, 200)', { a: 2 })).toBe(200);
   });
 
-  it('propagates null strictly through AND when any argument truth is null', () => {
-    // a is null -> a > 1 is null -> AND is null -> IF result null. No short-circuit
-    // to false even though b > 1 is false.
-    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: null, b: 0 })).toBeNull();
-    // Even AND(false, null) is null (strict, not Kleene).
-    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: 0, b: null })).toBeNull();
+  it('combines AND with a null argument by Kleene rule (a false argument wins over null)', () => {
+    // a is null -> a > 1 is null; b > 1 is false. Kleene AND: any false wins, so
+    // AND is false -> IF else branch. NO short-circuit (b is still evaluated).
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: null, b: 0 })).toBe(200);
+    // AND(false, null) is false (false dominates), regardless of argument order.
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: 0, b: null })).toBe(200);
+    // AND(true, null) is null (no false to dominate; a null remains) -> IF null.
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: 2, b: null })).toBeNull();
   });
 
-  it('propagates null strictly through OR when any argument truth is null', () => {
-    // OR(true, null) is null under strict propagation (not Kleene true).
-    expect(run('IF(OR(a > 1, b > 1), 100, 200)', { a: 2, b: null })).toBeNull();
+  it('combines OR with a null argument by Kleene rule (a true argument wins over null)', () => {
+    // OR(true, null) is true (a true dominates) -> IF then branch.
+    expect(run('IF(OR(a > 1, b > 1), 100, 200)', { a: 2, b: null })).toBe(100);
+    // OR(false, null) is null (no true to dominate; a null remains) -> IF null.
+    expect(run('IF(OR(a > 1, b > 1), 100, 200)', { a: 0, b: null })).toBeNull();
+  });
+
+  it('covers the full Kleene truth table for AND (false>null>true dominance)', () => {
+    // Encode T with a>0 where the field is 1, F with the field 0, N with null.
+    const and = (a: number | null, b: number | null) =>
+      run('IF(AND(a > 0, b > 0), 1, 0)', { a, b });
+    expect(and(1, 1)).toBe(1); // T,T -> T
+    expect(and(1, 0)).toBe(0); // T,F -> F
+    expect(and(0, 0)).toBe(0); // F,F -> F
+    expect(and(1, null)).toBeNull(); // T,N -> N
+    expect(and(0, null)).toBe(0); // F,N -> F
+    expect(and(null, null)).toBeNull(); // N,N -> N
+  });
+
+  it('covers the full Kleene truth table for OR (true>null>false dominance)', () => {
+    const or = (a: number | null, b: number | null) =>
+      run('IF(OR(a > 0, b > 0), 1, 0)', { a, b });
+    expect(or(1, 1)).toBe(1); // T,T -> T
+    expect(or(1, 0)).toBe(1); // T,F -> T
+    expect(or(0, 0)).toBe(0); // F,F -> F
+    expect(or(1, null)).toBe(1); // T,N -> T
+    expect(or(0, null)).toBeNull(); // F,N -> N
+    expect(or(null, null)).toBeNull(); // N,N -> N
+  });
+
+  it('applies Kleene through nesting like OR(AND(a, b), c) with mixed nulls', () => {
+    // AND(true, null) = null; OR(null, true) = true -> then branch.
+    expect(run('IF(OR(AND(a > 0, b > 0), c > 0), 100, 200)', { a: 1, b: null, c: 1 })).toBe(100);
+    // AND(false, null) = false; OR(false, false) = false -> else branch.
+    expect(run('IF(OR(AND(a > 0, b > 0), c > 0), 100, 200)', { a: 0, b: null, c: 0 })).toBe(200);
+    // AND(true, null) = null; OR(null, false) = null -> IF null.
+    expect(run('IF(OR(AND(a > 0, b > 0), c > 0), 100, 200)', { a: 1, b: null, c: 0 })).toBeNull();
   });
 
   it('propagates null through NOT of a null argument', () => {
@@ -304,25 +340,52 @@ describe('evaluator boolean condition functions (ADR 0017)', () => {
     }
   });
 
-  it('applies STRICT null propagation to combinators mixing ISBLANK with a null-poisoned comparison', () => {
-    // NOTE (ADR 0017 contradiction, flagged in the phase-1 report): the ADR
-    // prose lists OR(ISBLANK(x), x > 10) / AND(NOT(ISBLANK(x)), x > 10) as
-    // null-tolerance idioms, but those only work under Kleene logic, which the
-    // ADR's binding decision explicitly REJECTS in favour of strict propagation.
-    // Under the binding strict rule, any null argument nulls the combinator:
-    // x > 10 with x=null is null, so the whole OR/AND is null regardless of
-    // ISBLANK's true/false. These assertions pin the strict behaviour that the
-    // engine actually implements.
-    expect(run('IF(OR(ISBLANK(x), x > 10), 1, 0)', { x: null })).toBeNull();
+  it('makes the ADR 0017 null-tolerance idioms work under Kleene', () => {
+    // OR(ISBLANK(x), x > 10) = "blank OR big": under Kleene the true ISBLANK
+    // dominates the null from x > 10, so a blank x takes the then branch.
+    expect(run('IF(OR(ISBLANK(x), x > 10), 1, 0)', { x: null })).toBe(1);
     expect(run('IF(OR(ISBLANK(x), x > 10), 1, 0)', { x: 20 })).toBe(1);
     expect(run('IF(OR(ISBLANK(x), x > 10), 1, 0)', { x: 5 })).toBe(0);
-    expect(run('IF(AND(NOT(ISBLANK(x)), x > 10), 1, 0)', { x: null })).toBeNull();
+    // AND(NOT(ISBLANK(x)), x > 10) = "present AND big": a blank x makes
+    // NOT(ISBLANK(x)) false, which dominates the null from x > 10, so AND is
+    // false (fail-when-blank), not null.
+    expect(run('IF(AND(NOT(ISBLANK(x)), x > 10), 1, 0)', { x: null })).toBe(0);
     expect(run('IF(AND(NOT(ISBLANK(x)), x > 10), 1, 0)', { x: 20 })).toBe(1);
+    expect(run('IF(AND(NOT(ISBLANK(x)), x > 10), 1, 0)', { x: 5 })).toBe(0);
 
-    // The idiom that DOES tolerate null under strict semantics is IFBLANK
-    // (substitute a value), the sanctioned escape hatch.
+    // The IFBLANK escape hatch (substitute a value) still works too.
     expect(run('IF(IFBLANK(x, 0) > 10, 1, 0)', { x: null })).toBe(0);
     expect(run('IF(IFBLANK(x, 99) > 10, 1, 0)', { x: null })).toBe(1);
+  });
+
+  it('makes the ADR 0017 idioms work through the raw-first ISBLANK path (empty string)', () => {
+    // End-to-end via resolveRaw: an empty-string field is blank, so
+    // OR(ISBLANK(email), ...) skips-when-blank and AND(NOT(ISBLANK(email)), ...)
+    // fails-when-blank exactly as advertised — no null leaks out.
+    expect(runStr('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: '' })).toBe(1);
+    expect(runStr('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: 'vip@x.com' })).toBe(1);
+    expect(runStr('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: 'other@x.com' })).toBe(0);
+    expect(runStr('IF(AND(NOT(ISBLANK(email)), email = "vip@x.com"), 1, 0)', { email: '' })).toBe(0);
+    expect(runStr('IF(AND(NOT(ISBLANK(email)), email = "vip@x.com"), 1, 0)', { email: 'vip@x.com' })).toBe(1);
+  });
+
+  it('still fires errors in EVERY argument even when the result is already determined (no short-circuit)', () => {
+    // OR is already true from the first argument, but the divide-by-zero in the
+    // second still fires — evaluate-everything is untouched by Kleene.
+    try {
+      run('IF(OR(1 > 0, 1 / 0 > 2), 1, 0)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
+    // AND is already false from the first argument, but the divide-by-zero in
+    // the second still fires (it is NOT collapsed to false without evaluating).
+    try {
+      run('IF(AND(1 > 2, 1 / 0 > 2), 1, 0)');
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
   });
 
   it('keeps IF branches lazy even when combinators wrap the condition', () => {

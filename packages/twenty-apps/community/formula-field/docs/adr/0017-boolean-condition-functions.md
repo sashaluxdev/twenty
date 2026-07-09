@@ -5,17 +5,20 @@ All open questions from the 2026-07-08 draft are resolved and recorded below.
 Companion: ADR 0018 (IFS/SWITCH parser sugar) is scoped to land immediately
 after this one — see "Relationship to ADR 0018" at the end.
 
-**Implementation note (2026-07-09):** the "null-tolerance idioms" list under
-"Null handling" (`OR(ISBLANK(x), x > 10)` skip-when-blank; `AND(NOT(ISBLANK(x)),
-x > 10)` fail-when-blank) is INCONSISTENT with the binding strict-propagation
-decision it sits under: under strict semantics a null comparison operand nulls
-the whole combinator regardless of the ISBLANK result, so those two idioms
-produce null, not the described true/false. Only the third idiom — substitute a
-value with `IFBLANK(x, 0) > 10` — actually tolerates blanks. The engine
-implements the binding strict rule; the two combinator idioms above should be
-treated as erroneous prose pending an ADR correction (or a deliberate switch to
-full-evaluation Kleene, which would surface errors order-independently and make
-the idioms work — a design decision for the maintainer, not made here).
+**Decision-history note — AND/OR null handling (2026-07-09):** AND/OR shipped
+first with STRICT null propagation (any null argument nulls the combinator). That
+choice was superseded the SAME DAY by a maintainer decision to adopt
+**full-evaluation Kleene** three-valued logic (implemented in the commit that
+carries this note). The strict rule contradicted this ADR's own advertised
+null-tolerance idioms (`OR(ISBLANK(x), x > 10)` skip-when-blank;
+`AND(NOT(ISBLANK(x)), x > 10)` fail-when-blank): under strict semantics the null
+from `x > 10` nulled the whole combinator regardless of the ISBLANK result, so
+those idioms produced null, not the described true/false. The root confusion was
+conflating Kleene (a truth-combination rule) with short-circuit (an
+evaluation-order optimisation): Kleene combines truths while STILL evaluating
+every argument, so errors surface order-independently exactly as under the strict
+rule. The "Null handling" decision block below now records the Kleene rule and
+the idioms are correct as written.
 
 ## Context
 
@@ -104,7 +107,8 @@ first argument, and recursively inside each other's condition arguments):
 - `IFBLANK(value, fallback)` — exactly 2 arguments. Returns `value` unless it
   evaluates to null, else returns `fallback` (which may itself be null). Both
   arguments are always evaluated (SUM precedent — errors always fire). This is
-  the sanctioned escape hatch that makes strict null propagation liveable:
+  the sanctioned escape hatch for substituting a value for a blank (it works
+  under any null regime, and predates the Kleene decision):
   `AND(stage = "won", IFBLANK(amount, 0) > 1000)` reads as "treat blank amount
   as 0", and `revenue + IFBLANK(upsell, 0)` fixes the most common
   null-propagation complaint in plain arithmetic.
@@ -162,18 +166,31 @@ SumNode) — legal anywhere, including inside ISBLANK's operand
 
 ### Semantics (resolved decisions)
 
-**Null handling — RESOLVED: strict null propagation, no short-circuit.**
-- AND/OR/NOT: evaluate ALL arguments via `evaluateConditionTruth`. If any
-  argument's truth is `null`, the combinator's truth is `null` (which nulls
-  the enclosing IF, per existing policy). Otherwise standard boolean logic.
-- Rationale: consistent with ADR 0003 ("null in a comparison operand nulls
-  the IF") and with SUM's evaluate-all-args error semantics. Kleene/SQL
-  three-valued logic was considered and rejected: it creates a second,
-  subtler null regime and makes error surfacing dependent on operand order.
+**Null handling — RESOLVED: full-evaluation Kleene, no short-circuit.**
+(Supersedes the strict-propagation rule AND/OR shipped with earlier the same
+day — see the decision-history note at the top of this ADR.)
+- AND/OR/NOT: evaluate ALL arguments via `evaluateConditionTruth`, ALWAYS.
+  Then combine truths by the Kleene three-valued rule:
+  - AND is `false` if any argument is false, else `null` if any is null, else
+    `true`.
+  - OR is `true` if any argument is true, else `null` if any is null, else
+    `false`.
+  - NOT of `null` is `null`, else it negates.
+  A `null` combinator result nulls the enclosing IF, per existing policy.
+- Rationale: evaluate-everything (every argument is evaluated, so errors always
+  fire) is preserved and is DECOUPLED from truth combination — Kleene is only a
+  rule for combining truths, not an evaluation-order optimisation, so error
+  surfacing stays order-independent, exactly as under the earlier strict rule.
+  A determined truth dominating a null (`AND(false, null) = false`,
+  `OR(true, null) = true`) is what makes the null-tolerance idioms below behave
+  as advertised. The earlier strict choice conflated Kleene with short-circuit
+  and, as a result, contradicted those same idioms.
 - Null tolerance is always explicit and always expressible:
-  - skip a condition when blank: `OR(ISBLANK(x), x > 10)`
-  - fail a condition when blank: `AND(NOT(ISBLANK(x)), x > 10)`
-  - substitute a value when blank: `IFBLANK(x, 0) > 10`
+  - skip a condition when blank: `OR(ISBLANK(x), x > 10)` — a blank `x` makes
+    `ISBLANK(x)` true, which dominates the null from `x > 10`, so the OR is true.
+  - fail a condition when blank: `AND(NOT(ISBLANK(x)), x > 10)` — a blank `x`
+    makes `NOT(ISBLANK(x))` false, which dominates the null, so the AND is false.
+  - substitute a value when blank: `IFBLANK(x, 0) > 10`.
 - No short-circuit: errors (division by zero, unknown field) in ANY argument
   always fire, matching SUM and matching "IF's condition is always evaluated".
 
@@ -264,8 +281,8 @@ file set a function addition touches.
      bad closings (copy `parseSum`'s shape);
    - grammar comment block update.
 3. `src/engine/evaluator.ts` —
-   - extend `evaluateConditionTruth` with and/or/not/isblank cases (strict
-     null propagation; evaluate ALL args);
+   - extend `evaluateConditionTruth` with and/or/not/isblank cases (Kleene
+     null combination; evaluate ALL args);
    - ISBLANK raw-first logic for bare field/crossref operands (see semantics;
      needs access to `resolveRaw` from EvaluateOptions — already threaded for
      string comparisons);
@@ -279,8 +296,8 @@ file set a function addition touches.
      1 arg, IFBLANK with 1 or 3 args), reserved-word errors in value +
      condition contexts, dotted-path escape (`and.x`, `ifblank.y`),
      case-insensitivity, chained/malformed forms, depth bound.
-   - `evaluator.spec.ts`: truth tables incl. null operands (strict
-     propagation), ISBLANK on null/number/compound-null args, ISBLANK
+   - `evaluator.spec.ts`: truth tables incl. null operands (Kleene
+     combination), ISBLANK on null/number/compound-null args, ISBLANK
      raw-first (empty string → blank, whitespace-only → blank, non-empty
      string → not blank, non-string raw → numeric fallback, no resolveRaw →
      numeric-only), IFBLANK (non-null passthrough, null → fallback, null

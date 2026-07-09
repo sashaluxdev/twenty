@@ -173,14 +173,19 @@ Four condition-context combinators compose comparisons inside an IF condition
   other); using one where a value is expected — `AND(a>1, b>2)` at the top
   level, or `IF(a>1, NOT(b), 0)` — is a parse error.
 
-- **Strict null propagation, NO short-circuit.** Every argument is always
+- **Kleene three-valued null logic, NO short-circuit.** Every argument is always
   evaluated (so an error — division by zero, unknown field — in any argument
-  always fires, like SUM). If **any** argument's truth is null, the whole
-  combinator is null, which nulls the enclosing IF. This is deliberately **not**
-  Kleene/SQL three-valued logic: `AND(false, null)` and `OR(true, null)` are
-  both null, not false/true. Consequence: mixing a blank-poisoned comparison
-  into an AND/OR still nulls the result — to tolerate a blank input, substitute a
-  value with `IFBLANK` (below) rather than relying on `OR(ISBLANK(x), x > 10)`.
+  always fires, like SUM). Truths then combine by the Kleene rule: `AND` is false
+  if **any** argument is false, else null if any is null, else true; `OR` is true
+  if **any** argument is true, else null if any is null, else false. So a
+  determined truth dominates a null — `AND(false, null)` is **false** and
+  `OR(true, null)` is **true**, not null. This is what makes the blank-tolerance
+  idioms work: `OR(ISBLANK(x), x > 10)` skips a blank `x` (the true `ISBLANK`
+  dominates the null from `x > 10`), and `AND(NOT(ISBLANK(x)), x > 10)` fails a
+  blank `x` (the false `NOT(ISBLANK)` dominates). Only when NO argument is
+  determined does the combinator stay null (e.g. `AND(true, null)` /
+  `OR(false, null)`); `IFBLANK` (below) substitutes a value for a blank input in
+  that case.
 
 ### Blank handling: ISBLANK and IFBLANK (ADR 0017)
 

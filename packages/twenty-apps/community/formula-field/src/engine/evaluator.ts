@@ -25,11 +25,14 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 //     operand — makes the whole IF result null, consistent with the app's
 //     null-propagation policy (a deliberate deviation from Excel's blank=0).
 //   - AND/OR/NOT/ISBLANK (ADR 0017) are condition-only combinators handled in
-//     evaluateConditionTruth. AND/OR/NOT use STRICT null propagation with NO
-//     short-circuit: every argument is evaluated (errors always fire) and any
-//     null argument nulls the combinator. ISBLANK is the one exception — it
-//     OBSERVES blankness (raw-first for a bare field/crossref) and returns a
-//     boolean, never null, for a successfully evaluated argument.
+//     evaluateConditionTruth. AND/OR use full-evaluation Kleene three-valued
+//     logic with NO short-circuit: every argument is always evaluated (errors
+//     always fire), then AND is false if any argument is false else null if any
+//     is null else true, and OR is true if any is true else null if any is null
+//     else false (a determined truth dominates a null). NOT negates its
+//     argument (null stays null). ISBLANK is the one exception to null handling
+//     — it OBSERVES blankness (raw-first for a bare field/crossref) and returns
+//     a boolean, never null, for a successfully evaluated argument.
 //   - IFBLANK(value, fallback) (ADR 0017) is a value node: returns value unless
 //     null, else fallback; both are always evaluated (SUM precedent).
 
@@ -140,15 +143,19 @@ const evaluateConditionTruth = (
     }
   }
 
-  // ADR 0017 combinators: strict null propagation, NO short-circuit. Every
-  // argument is evaluated (so an error in any of them always fires, matching
-  // SUM); if ANY argument's truth is null the combinator is null (which nulls
-  // the enclosing IF). Otherwise standard boolean logic. Deliberately not
-  // Kleene: AND(false, null) and OR(true, null) both yield null.
+  // ADR 0017 combinators: full-evaluation Kleene three-valued logic, NO
+  // short-circuit. EVERY argument is still evaluated (so an error in any of them
+  // always fires, matching SUM) — evaluate-everything is the invariant, and it
+  // is deliberately decoupled from the truth combination below. Kleene rule:
+  // AND is false if any argument is false, else null if any is null, else true;
+  // OR is true if any argument is true, else null if any is null, else false.
+  // So AND(false, null) = false and OR(true, null) = true — a determined truth
+  // dominates a null, which is what makes OR(ISBLANK(x), x > 10) and
+  // AND(NOT(ISBLANK(x)), x > 10) behave as the null-tolerance idioms advertise.
   if (node.type === 'and' || node.type === 'or') {
     let anyNull = false;
-    let allTrue = true;
     let anyTrue = false;
+    let anyFalse = false;
     for (const arg of node.args) {
       const truth = evaluateConditionTruth(
         arg,
@@ -163,13 +170,19 @@ const evaluateConditionTruth = (
       } else if (truth) {
         anyTrue = true;
       } else {
-        allTrue = false;
+        anyFalse = true;
       }
     }
-    if (anyNull) {
-      return null;
+    if (node.type === 'and') {
+      if (anyFalse) {
+        return false;
+      }
+      return anyNull ? null : true;
     }
-    return node.type === 'and' ? allTrue : anyTrue;
+    if (anyTrue) {
+      return true;
+    }
+    return anyNull ? null : false;
   }
 
   if (node.type === 'not') {
