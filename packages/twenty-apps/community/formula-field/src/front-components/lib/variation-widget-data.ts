@@ -455,6 +455,9 @@ export const resyncDivergedField = async (
   // Deactivate FIRST: syncOneVariation skips actively-overridden fields, so the
   // override must be off before the copy. If the sync then errors, the override
   // stays deactivated and the hourly sweep converges the field — acceptable.
+  // reconcileOverrides: false — the user explicitly asked for the primary's
+  // value; the rename-reconcile guard must not re-pin this field off a
+  // coincidental orphaned-override value match.
   await deactivateOverride(client, targetObject, field.name, variationRecordId);
   return syncOneVariation(
     client,
@@ -463,5 +466,6 @@ export const resyncDivergedField = async (
     variationRecordId,
     [field],
     relationFieldName,
+    { reconcileOverrides: false },
   );
 };

@@ -79,17 +79,16 @@ export const loadOverriddenRecordIds = async (
   return ids;
 };
 
-// The set of field names with an ACTIVE override on this ONE record — the
-// inverse shape of loadOverriddenRecordIds (one field, many records). Variation
-// sync needs this to skip only the pinned fields on a specific variation while
-// still syncing everything else on it.
-export const loadActiveOverrideFieldsForRecord = async (
+// Every ACTIVE override row on this ONE record, as full rows — variation sync
+// needs the pinned VALUES too, to reconcile rows orphaned by a field rename
+// (R2), not just the names to skip.
+export const loadActiveOverridesForRecord = async (
   client: FormulaClient,
   targetObject: string,
   recordId: string,
   pageSize = 500,
-): Promise<Set<string>> => {
-  const fields = new Set<string>();
+): Promise<OverrideRecord[]> => {
+  const rows: OverrideRecord[] = [];
   let after: string | undefined;
 
   for (;;) {
@@ -105,20 +104,38 @@ export const loadActiveOverrideFieldsForRecord = async (
             },
             ...(after ? { after } : {}),
           },
-          edges: { node: { targetField: true } },
+          edges: { node: OVERRIDE_FIELDS },
           pageInfo: { hasNextPage: true, endCursor: true },
         },
       }),
     );
     const connection = response?.formulaOverrides;
     for (const edge of connection?.edges ?? []) {
-      if (edge?.node?.targetField) fields.add(edge.node.targetField);
+      if (edge?.node?.targetField) rows.push(edge.node as OverrideRecord);
     }
     if (!connection?.pageInfo?.hasNextPage) break;
     after = connection.pageInfo.endCursor ?? undefined;
   }
 
-  return fields;
+  return rows;
+};
+
+// The set of field names with an ACTIVE override on this ONE record — the
+// inverse shape of loadOverriddenRecordIds (one field, many records). The
+// widget uses this to intersect with the syncable set.
+export const loadActiveOverrideFieldsForRecord = async (
+  client: FormulaClient,
+  targetObject: string,
+  recordId: string,
+  pageSize = 500,
+): Promise<Set<string>> => {
+  const rows = await loadActiveOverridesForRecord(
+    client,
+    targetObject,
+    recordId,
+    pageSize,
+  );
+  return new Set(rows.map((row) => row.targetField));
 };
 
 // Returns the override row for a record (active or not), or null.

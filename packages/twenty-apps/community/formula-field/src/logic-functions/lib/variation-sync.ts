@@ -1,10 +1,15 @@
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
-import { invalidateMetadataCache } from 'src/logic-functions/lib/metadata-objects';
+import {
+  invalidateMetadataCache,
+  loadAllObjectsWithFields,
+} from 'src/logic-functions/lib/metadata-objects';
 import { selectionEntryForMirrorKind } from 'src/logic-functions/lib/mirror-kinds';
 import { navigatePath } from 'src/logic-functions/lib/coercion';
 import {
-  loadActiveOverrideFieldsForRecord,
+  decodeMirrorOverrideValue,
+  loadActiveOverridesForRecord,
+  type OverrideRecord,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
 import { pluralize } from 'src/logic-functions/lib/recompute';
@@ -149,6 +154,104 @@ const refreshFieldsAfterSyncFailure = async (
   }
 };
 
+// The FormulaOverride value slot for a raw variation value: overrideValue (a
+// NUMBER column) can only literally hold a plain JS number. Since variation
+// sync never evaluates anything, only a bare NUMBER field's raw value already
+// IS a number — every other kind (including CURRENCY's {amountMicros,
+// currencyCode} object and DATE/DATE_TIME's string scalars) goes to
+// overrideValueText as JSON. This deliberately differs from the formula
+// engine's "ENGINE_FAMILY_KINDS -> numeric slot" convention, which only holds
+// because a formula EVALUATES to a float; variation sync just copies bytes.
+const overrideSlotFor = (
+  kind: string,
+  rawValue: unknown,
+): { numeric?: number; text?: string } => {
+  if (kind === 'NUMBER' && typeof rawValue === 'number') {
+    return { numeric: rawValue };
+  }
+  return { text: JSON.stringify(rawValue ?? null) };
+};
+
+// Does this orphaned override pin exactly `currentValue`? Slot-aware: a text
+// slot decodes its JSON (an undecodable slot never matches — the caller must
+// not infer a rename off corrupted data); a numeric slot compares the number.
+const orphanPinsValue = (
+  orphan: OverrideRecord,
+  currentValue: unknown,
+): boolean => {
+  if (orphan.overrideValueText !== null && orphan.overrideValueText !== undefined) {
+    const decoded = decodeMirrorOverrideValue(orphan.overrideValueText);
+    return decoded.restorable && deepJsonEqual(decoded.value, currentValue);
+  }
+  if (orphan.overrideValue !== null && orphan.overrideValue !== undefined) {
+    return deepJsonEqual(orphan.overrideValue, currentValue);
+  }
+  return false;
+};
+
+// R2 rename reconcile. Overrides are keyed by field-NAME string (a key space
+// shared with the formula feature — never migrated, rows never deleted), so a
+// field rename (same id, same column data, new API name) orphans the row: the
+// syncable set carries the new name, the skip set the old one, and without
+// this guard sync would overwrite the user's intentionally-diverged value and
+// the pin would silently vanish from the widget. Exact rename detection is
+// impossible without field-id tracking on the row, but the pinned VALUE is a
+// reliable witness: a would-be-overwritten field whose CURRENT stored value
+// equals an orphan's pinned value is that orphan's renamed continuation.
+// Policy: never overwrite a matching field; on an UNAMBIGUOUS match transfer
+// the pin to the new name (upsert under the new key, deactivate — not delete —
+// the orphan) so the widget's diverged list keeps showing it; on an ambiguous
+// match (two fields carry the same value — a coincidence a wrong guess could
+// destroy data over) hold every matching field unwritten and leave the orphan
+// active for a human to resolve. Returns the field names to drop from the
+// write set. Mutates `orphans` (consumed on transfer) so the R1 retry ladder
+// and per-field degrade stay idempotent within one syncOneVariation call.
+const reconcileOrphanedOverrides = async (
+  client: FormulaClient,
+  targetObject: string,
+  variationId: string,
+  variationRecord: Record<string, unknown>,
+  changedFields: SyncableFieldInfo[],
+  orphans: OverrideRecord[],
+): Promise<Set<string>> => {
+  const fieldsToHold = new Set<string>();
+  for (const orphan of [...orphans]) {
+    const matches = changedFields.filter(
+      (field) =>
+        !fieldsToHold.has(field.name) &&
+        orphanPinsValue(orphan, navigatePath(variationRecord, field.name) ?? null),
+    );
+    if (matches.length === 0) {
+      continue;
+    }
+    for (const field of matches) {
+      fieldsToHold.add(field.name);
+    }
+    if (matches.length > 1) {
+      continue;
+    }
+    const field = matches[0];
+    const currentValue = navigatePath(variationRecord, field.name) ?? null;
+    await upsertOverride(
+      client,
+      targetObject,
+      field.name,
+      variationId,
+      overrideSlotFor(field.kind, currentValue),
+    );
+    await withRetry(() =>
+      client.mutation({
+        updateFormulaOverride: {
+          __args: { id: orphan.id, data: { active: false } },
+          id: true,
+        },
+      }),
+    );
+    orphans.splice(orphans.indexOf(orphan), 1);
+  }
+  return fieldsToHold;
+};
+
 // The read -> diff -> write core of one sync attempt for one variation.
 // Throws on a read/write failure so syncOneVariation can drive the
 // poison-window retry/degrade ladder around it.
@@ -158,6 +261,7 @@ const syncVariationFieldsBatch = async (
   primaryRecord: Record<string, unknown>,
   variationId: string,
   fieldsToSync: SyncableFieldInfo[],
+  orphanedOverrides: OverrideRecord[],
 ): Promise<{ found: boolean; changedFields: string[] }> => {
   const variationRecord = await fetchRecordById(
     client,
@@ -171,17 +275,32 @@ const syncVariationFieldsBatch = async (
   }
 
   const data: Record<string, unknown> = {};
-  const changedFieldNames: string[] = [];
+  let changedFields: SyncableFieldInfo[] = [];
   for (const field of fieldsToSync) {
     const primaryValue = navigatePath(primaryRecord, field.name) ?? null;
     const variationValue = navigatePath(variationRecord, field.name) ?? null;
     if (!deepJsonEqual(primaryValue, variationValue)) {
       data[field.name] = primaryValue;
-      changedFieldNames.push(field.name);
+      changedFields.push(field);
     }
   }
 
-  if (changedFieldNames.length === 0) {
+  if (orphanedOverrides.length > 0 && changedFields.length > 0) {
+    const fieldsToHold = await reconcileOrphanedOverrides(
+      client,
+      targetObject,
+      variationId,
+      variationRecord,
+      changedFields,
+      orphanedOverrides,
+    );
+    for (const name of fieldsToHold) {
+      delete data[name];
+    }
+    changedFields = changedFields.filter((field) => !fieldsToHold.has(field.name));
+  }
+
+  if (changedFields.length === 0) {
     return { found: true, changedFields: [] };
   }
 
@@ -192,7 +311,7 @@ const syncVariationFieldsBatch = async (
     }),
   );
 
-  return { found: true, changedFields: changedFieldNames };
+  return { found: true, changedFields: changedFields.map((field) => field.name) };
 };
 
 const NOT_FOUND_ERROR = 'Variation record not found';
@@ -207,13 +326,22 @@ const outcomeFromBatch = (
   error: batch.found ? null : NOT_FOUND_ERROR,
 });
 
+export type SyncOneVariationOptions = {
+  // Default true. The widget's explicit "re-sync this field" passes false:
+  // the user just asked for the primary's value, so the rename-reconcile
+  // guard must not re-pin the field off a coincidental orphan value match.
+  reconcileOverrides?: boolean;
+};
+
 // Copies `fieldsToConsider` from `primaryRecord` onto one variation: skips
 // fields with an active override, compares the rest with deepJsonEqual against
 // the variation's CURRENT stored value, and writes only the ones that actually
 // differ, batched into ONE update mutation (sync owns many columns at once,
 // unlike per-formula recompute's single-field write). On a batch failure the
 // R1 ladder applies: refresh metadata + one batch retry, then per-field
-// degrade so a permanently-bad field can never block the other fields.
+// degrade so a permanently-bad field can never block the other fields. Before
+// writing, the R2 reconcile protects values pinned under a since-renamed
+// field name (see reconcileOrphanedOverrides).
 export const syncOneVariation = async (
   client: FormulaClient,
   targetObject: string,
@@ -221,17 +349,39 @@ export const syncOneVariation = async (
   variationId: string,
   fieldsToConsider: SyncableFieldInfo[],
   relationFieldName: string,
+  options: SyncOneVariationOptions = {},
 ): Promise<SyncOutcome> => {
   let fieldsToSync: SyncableFieldInfo[];
+  // Rows orphaned by a rename/delete: active overrides whose targetField no
+  // longer exists on the object AT ALL (a merely-deactivated field still
+  // exists — its pin is inert, not endangered). Shared by every batch attempt
+  // in the R1 ladder below; transfers consume from it.
+  const orphanedOverrides: OverrideRecord[] = [];
   try {
-    const overriddenFields = await loadActiveOverrideFieldsForRecord(
+    const overrideRows = await loadActiveOverridesForRecord(
       client,
       targetObject,
       variationId,
     );
+    const overriddenFields = new Set(overrideRows.map((row) => row.targetField));
     fieldsToSync = fieldsToConsider.filter(
       (field) => !overriddenFields.has(field.name),
     );
+    if (options.reconcileOverrides !== false && overrideRows.length > 0) {
+      const objects = await loadAllObjectsWithFields();
+      const objectFieldNames = new Set(
+        objects
+          .find((candidate) => candidate.nameSingular === targetObject)
+          ?.fields.map((field) => field.name) ?? [],
+      );
+      // An unresolvable object (deleted mid-flight) yields no orphan
+      // inference at all rather than treating EVERY row as orphaned.
+      if (objectFieldNames.size > 0) {
+        orphanedOverrides.push(
+          ...overrideRows.filter((row) => !objectFieldNames.has(row.targetField)),
+        );
+      }
+    }
   } catch (error) {
     // The overrides read never selects a syncable field, so a failure here is
     // not a poison-window suspect — report it, do not retry.
@@ -253,6 +403,7 @@ export const syncOneVariation = async (
       primaryRecord,
       variationId,
       fieldsToSync,
+      orphanedOverrides,
     );
     return outcomeFromBatch(variationId, batch);
   } catch {
@@ -274,6 +425,7 @@ export const syncOneVariation = async (
         primaryRecord,
         variationId,
         refreshedFields,
+        orphanedOverrides,
       );
       return outcomeFromBatch(variationId, batch);
     } catch {
@@ -291,6 +443,7 @@ export const syncOneVariation = async (
             primaryRecord,
             variationId,
             [field],
+            orphanedOverrides,
           );
           if (!single.found) {
             return {
@@ -610,24 +763,6 @@ export const syncNewVariationRecord = async ({
     relationFieldName,
   );
   return outcome;
-};
-
-// The FormulaOverride value slot for a raw variation value: overrideValue (a
-// NUMBER column) can only literally hold a plain JS number. Since variation
-// sync never evaluates anything, only a bare NUMBER field's raw value already
-// IS a number — every other kind (including CURRENCY's {amountMicros,
-// currencyCode} object and DATE/DATE_TIME's string scalars) goes to
-// overrideValueText as JSON. This deliberately differs from the formula
-// engine's "ENGINE_FAMILY_KINDS -> numeric slot" convention, which only holds
-// because a formula EVALUATES to a float; variation sync just copies bytes.
-const overrideSlotFor = (
-  kind: string,
-  rawValue: unknown,
-): { numeric?: number; text?: string } => {
-  if (kind === 'NUMBER' && typeof rawValue === 'number') {
-    return { numeric: rawValue };
-  }
-  return { text: JSON.stringify(rawValue ?? null) };
 };
 
 export type DetectDivergenceArgs = {
