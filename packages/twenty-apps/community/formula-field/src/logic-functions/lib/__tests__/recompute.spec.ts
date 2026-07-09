@@ -442,3 +442,60 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     });
   });
 });
+
+// Guards recompute.ts's dependencySelectionOverrides (the CURRENCY-activation
+// fix): a composite dependency MUST be fetched with a sub-selection, never as a
+// scalar `true`. The hardened FakeClient returns null for a scalar selection of
+// a CURRENCY field (mirroring the server's silent null), so reverting the
+// override would make Test A compute null -> red.
+describe('recomputeForRecord composite dependency selection', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+    client.setFieldKinds('opportunity', { amount: 'CURRENCY' });
+  });
+
+  it('fetches a CURRENCY dependency via sub-selection and computes the value', async () => {
+    client.seed('opportunity', [
+      {
+        id: 'o1',
+        amount: { amountMicros: 5_000_000, currencyCode: 'JPY' },
+        formulaScore: null,
+      },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'amount.amountMicros * 2' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toBe(10_000_000);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(10_000_000);
+  });
+
+  it('selects the CURRENCY dependency as a composite sub-selection, not a scalar', async () => {
+    client.seed('opportunity', [
+      {
+        id: 'o1',
+        amount: { amountMicros: 5_000_000, currencyCode: 'JPY' },
+        formulaScore: null,
+      },
+    ]);
+
+    await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'amount.amountMicros * 2' }),
+      targetRecordId: 'o1',
+    });
+
+    const recordQuery = client.querySelections.find(
+      (selection) => selection.opportunity,
+    );
+    expect(recordQuery.opportunity.amount).toEqual({
+      amountMicros: true,
+      currencyCode: true,
+    });
+  });
+});

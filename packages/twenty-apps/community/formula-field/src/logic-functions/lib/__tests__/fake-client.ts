@@ -15,6 +15,21 @@ import {
 
 type Rec = Record<string, unknown> & { id: string };
 
+// Field kinds the real record API stores as COMPOSITE types: selecting one of
+// these as a scalar (`field: true`) silently returns null (no error) instead of
+// the value, because the server needs an explicit sub-selection. Mirrors
+// value-io's CURRENCY entry + mirror-kinds' composite sub-selection shapes.
+// JSON/array scalar kinds (RAW_JSON, ARRAY, MULTI_SELECT) are NOT here — their
+// object/array values are returned verbatim on a scalar selection.
+const COMPOSITE_FIELD_KINDS: ReadonlySet<string> = new Set([
+  'CURRENCY',
+  'LINKS',
+  'FULL_NAME',
+  'ADDRESS',
+  'EMAILS',
+  'PHONES',
+]);
+
 const IRREGULAR: Record<string, string> = { person: 'people' };
 const pluralize = (s: string): string => {
   if (IRREGULAR[s]) return IRREGULAR[s];
@@ -88,7 +103,7 @@ export class FakeClient implements FormulaClient {
     const record = filterId
       ? this.store.get(key)?.get(filterId) ?? null
       : null;
-    return { [key]: record ? this.project(record, node) : null };
+    return { [key]: record ? this.project(record, node, key) : null };
   }
 
   private matchesCondition(value: unknown, cond: any): boolean {
@@ -156,19 +171,64 @@ export class FakeClient implements FormulaClient {
     const nodeSelection = node?.edges?.node ?? { id: true };
     return {
       edges: records.map((record) => ({
-        node: this.project(record, nodeSelection),
+        node: this.project(record, nodeSelection, object),
       })),
       pageInfo: { hasNextPage: false, endCursor: null },
     };
   }
 
-  private project(record: Rec, node: any): Rec {
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  // Projects the requested selection off a stored record, honouring the SHAPE of
+  // each selection node so the mock reproduces the real record API's
+  // composite-vs-scalar behaviour (the 2026-07 CURRENCY-activation bug):
+  //   - `field: true` selects a SCALAR. When `field`'s registered kind is a
+  //     COMPOSITE type (CURRENCY/LINKS/…), the server silently returns null (no
+  //     error) because it needs a sub-selection, so we return null too. JSON/
+  //     array scalar kinds (RAW_JSON, ARRAY, …) return their value verbatim.
+  //   - `field: { ...subKeys }` selects a composite sub-selection: only the
+  //     requested sub-keys are copied (null when the record value is absent).
+  // Field-kind detection (not value shape) is what distinguishes a CURRENCY
+  // composite from a RAW_JSON scalar whose value is an object.
+  private project(record: Rec, node: any, object?: string): Rec {
+    const fieldKinds = object
+      ? this.fieldKindsByObject.get(object)
+      : undefined;
     const result: Rec = { id: record.id };
     for (const field of Object.keys(node)) {
       if (field === '__args' || field === 'edges' || field === 'pageInfo') {
         continue;
       }
-      result[field] = record[field] ?? null;
+      const selectionNode = node[field];
+      const value = record[field] ?? null;
+
+      if (selectionNode === true) {
+        const kind = fieldKinds?.get(field);
+        result[field] =
+          kind !== undefined && COMPOSITE_FIELD_KINDS.has(kind) ? null : value;
+        continue;
+      }
+
+      if (selectionNode !== null && typeof selectionNode === 'object') {
+        // Composite sub-selection: copy only the requested sub-keys.
+        if (!this.isPlainObject(value)) {
+          result[field] = null;
+          continue;
+        }
+        const sub: Record<string, unknown> = {};
+        for (const subKey of Object.keys(selectionNode)) {
+          if (subKey === '__args' || subKey === 'edges' || subKey === 'pageInfo') {
+            continue;
+          }
+          sub[subKey] = value[subKey] ?? null;
+        }
+        result[field] = sub;
+        continue;
+      }
+
+      result[field] = value;
     }
     return result;
   }
