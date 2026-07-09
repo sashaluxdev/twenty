@@ -12,7 +12,7 @@ export const VARIATION_CONFIG_VIEW_UNIVERSAL_IDENTIFIER =
 
 export default defineView({
   universalIdentifier: VARIATION_CONFIG_VIEW_UNIVERSAL_IDENTIFIER,
-  name: 'All variation configs',
+  name: 'Variations',
   objectUniversalIdentifier: VARIATION_CONFIG_OBJECT_UNIVERSAL_IDENTIFIER,
   icon: 'IconGitFork',
   key: ViewKey.INDEX,

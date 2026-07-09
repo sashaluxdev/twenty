@@ -13,7 +13,7 @@ export const FORMULA_DEFINITION_VIEW_UNIVERSAL_IDENTIFIER =
 
 export default defineView({
   universalIdentifier: FORMULA_DEFINITION_VIEW_UNIVERSAL_IDENTIFIER,
-  name: 'All formula definitions',
+  name: 'Formulas',
   objectUniversalIdentifier: FORMULA_DEFINITION_OBJECT_UNIVERSAL_IDENTIFIER,
   icon: 'IconMathFunction',
   key: ViewKey.INDEX,
