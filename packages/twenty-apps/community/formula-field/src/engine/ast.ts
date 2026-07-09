@@ -92,8 +92,9 @@ export type SumNode = {
 // where a numeric value is expected, so booleans can never leak into the public
 // number|null value domain. The evaluator's value switch carries unreachable
 // guards for them so a hand-built AST that misplaces one fails loud.
-//   - AND/OR args are condition nodes; evaluation is strict (evaluate ALL args,
-//     any-null -> null, no short-circuit).
+//   - AND/OR args are condition nodes; evaluation is full-evaluation Kleene
+//     (evaluate ALL args — errors always fire, no short-circuit; OR any-true ->
+//     true, AND any-false -> false, else any-null -> null).
 //   - NOT's operand is a condition node.
 //   - ISBLANK's operand is a VALUE node (an expression). ISBLANK observes
 //     blankness (raw-first for a bare field/crossref) rather than propagating.

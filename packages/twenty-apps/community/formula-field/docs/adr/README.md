@@ -22,5 +22,5 @@ is maintainable without re-deriving the reasoning.
 | [0014](0014-pointer-gesture-midpoint-positions.md) | Pointer-event gesture + fractional midpoint positions (amends ADR 0013) | Accepted |
 | [0015](0015-today-staleness-self-heal.md) | TODAY() staleness: self-healing widget + truthful heartbeat | Accepted |
 | [0016](0016-sum-function.md) | SUM() variadic function with all-null → null | Accepted |
-| [0017](0017-boolean-condition-functions.md) | Boolean condition functions — AND, OR, NOT, ISBLANK, IFBLANK | Accepted (design; not yet implemented) |
-| [0018](0018-ifs-switch-sugar.md) | IFS and SWITCH as parser-level sugar | Accepted (design; not yet implemented) |
+| [0017](0017-boolean-condition-functions.md) | Boolean condition functions — AND, OR, NOT, ISBLANK, IFBLANK | Implemented |
+| [0018](0018-ifs-switch-sugar.md) | IFS and SWITCH as parser-level sugar | Implemented |
