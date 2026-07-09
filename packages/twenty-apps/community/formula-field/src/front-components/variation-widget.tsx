@@ -20,10 +20,12 @@ import {
   buildVariationLabelData,
   loadDivergedFields,
   loadVariationList,
+  resolveHiddenReason,
   resolveLabelField,
   resolveWidgetRole,
   resyncDivergedField,
   type DivergedField,
+  type HiddenReason,
   type LabelFieldInfo,
   type VariationListEntry,
   type WidgetRole,
@@ -82,6 +84,7 @@ const fetchPrimaryLabelFields = async (
 const VariationWidget = () => {
   const recordId = useRecordId();
   const [role, setRole] = useState<WidgetRole | null>(null);
+  const [hiddenReason, setHiddenReason] = useState<HiddenReason>('no-config');
   const [variations, setVariations] = useState<VariationListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -122,7 +125,10 @@ const VariationWidget = () => {
 
     if (!host || !recordId) {
       // No enabled config claims this object (or the app's own objects, which
-      // never appear in the candidate list above) — degrade to invisible.
+      // never appear in the candidate list above). Tell "unconfigured" (stay
+      // invisible) apart from "config exists but disabled" (show a hint) so a
+      // disabled config no longer leaves a permanently blank pane.
+      setHiddenReason(recordId ? await resolveHiddenReason(client, recordId) : 'no-config');
       setRole({ kind: 'hidden' });
       setVariations([]);
       setLoading(false);
@@ -269,6 +275,16 @@ const VariationWidget = () => {
   }
 
   if (!role || role.kind === 'hidden') {
+    if (hiddenReason === 'disabled-config') {
+      return (
+        <WidgetRoot style={layout.container}>
+          <HintText as="div">
+            Variations are disabled for this object — enable them on its
+            Variation config.
+          </HintText>
+        </WidgetRoot>
+      );
+    }
     return null;
   }
 

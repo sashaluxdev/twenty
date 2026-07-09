@@ -7,7 +7,10 @@ import {
 } from 'src/logic-functions/lib/override-repository';
 import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
-import { findVariationConfigByTargetObject } from 'src/logic-functions/lib/variation-config-repository';
+import {
+  findVariationConfigByTargetObject,
+  loadAllVariationConfigs,
+} from 'src/logic-functions/lib/variation-config-repository';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import {
   fetchPrimaryRecordInclTrashed,
@@ -150,6 +153,44 @@ export const resolveWidgetRole = async (
     frozen,
     primaryLabel,
   };
+};
+
+export type HiddenReason = 'no-config' | 'disabled-config';
+
+// Called ONLY on the widget's hidden branch (no ENABLED config claims this
+// record's object). Distinguishes a genuinely unconfigured object ('no-config'
+// → the widget renders null, byte-identical to before) from an object whose
+// Variation config exists but is DISABLED ('disabled-config' → a one-line hint,
+// so a disabled config no longer leaves a permanently blank pane under the
+// still-present "Variations" tab). Scoped to the hidden branch: one all-configs
+// read plus a probe per DISABLED targetObject, so the happy path pays nothing.
+export const resolveHiddenReason = async (
+  client: FormulaClient,
+  recordId: string,
+): Promise<HiddenReason> => {
+  const configs = await loadAllVariationConfigs(client);
+  const disabledTargets = Array.from(
+    new Set(
+      configs
+        .filter((config) => config.enabled !== true)
+        .map((config) => config.targetObject)
+        .filter(Boolean),
+    ),
+  ) as string[];
+
+  for (const targetObject of disabledTargets) {
+    const response = await client.query({
+      [targetObject]: {
+        __args: { filter: { id: { eq: recordId } } },
+        id: true,
+      },
+    });
+    if (response?.[targetObject]) {
+      return 'disabled-config';
+    }
+  }
+
+  return 'no-config';
 };
 
 // Active override field names grouped by variation record id, loaded in ONE

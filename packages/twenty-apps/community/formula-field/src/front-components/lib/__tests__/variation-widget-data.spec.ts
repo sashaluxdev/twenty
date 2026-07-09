@@ -8,6 +8,7 @@ import {
   loadDivergedFields,
   loadVariationList,
   nextVariationLabel,
+  resolveHiddenReason,
   resolveWidgetRole,
   resyncDivergedField,
 } from 'src/front-components/lib/variation-widget-data';
@@ -128,6 +129,42 @@ describe('variation-widget-data', () => {
         frozen: true,
         primaryLabel: null,
       });
+    });
+  });
+
+  describe('resolveHiddenReason', () => {
+    it("is 'disabled-config' when a disabled config claims the record's object", async () => {
+      seedConfig(client, { enabled: false });
+      client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
+
+      const reason = await resolveHiddenReason(client, 'p1');
+
+      expect(reason).toBe('disabled-config');
+    });
+
+    it("is 'no-config' when no variation config exists at all", async () => {
+      client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
+
+      const reason = await resolveHiddenReason(client, 'p1');
+
+      expect(reason).toBe('no-config');
+    });
+
+    it("is 'no-config' when the only config is enabled (not disabled)", async () => {
+      seedConfig(client);
+      client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
+
+      const reason = await resolveHiddenReason(client, 'p1');
+
+      expect(reason).toBe('no-config');
+    });
+
+    it("is 'no-config' when a disabled config exists but does not claim this record", async () => {
+      seedConfig(client, { enabled: false });
+
+      const reason = await resolveHiddenReason(client, 'not-a-company-record');
+
+      expect(reason).toBe('no-config');
     });
   });
 

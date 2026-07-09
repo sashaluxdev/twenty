@@ -47,6 +47,41 @@ export const loadAllEnabledVariationConfigs = async (
   return results;
 };
 
+// Every config regardless of `enabled`. The enabled-only loader above drives
+// role resolution (an unclaimed object stays invisible); this all-configs read
+// is used ONLY on the widget's hidden branch to tell a genuinely unconfigured
+// object apart from one whose config exists but is DISABLED.
+export const loadAllVariationConfigs = async (
+  client: FormulaClient,
+  pageSize = 200,
+): Promise<VariationConfigRecord[]> => {
+  const results: VariationConfigRecord[] = [];
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        variationConfigs: {
+          __args: {
+            first: pageSize,
+            ...(after ? { after } : {}),
+          },
+          edges: { node: VARIATION_CONFIG_FIELDS_SELECTION },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+    const connection = response?.variationConfigs;
+    for (const edge of connection?.edges ?? []) {
+      if (edge?.node) results.push(edge.node as VariationConfigRecord);
+    }
+    if (!connection?.pageInfo?.hasNextPage) break;
+    after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  return results;
+};
+
 export const findVariationConfigByTargetObject = async (
   client: FormulaClient,
   targetObject: string,
