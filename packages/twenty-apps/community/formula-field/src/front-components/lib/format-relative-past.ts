@@ -1,5 +1,3 @@
-import { parse, usesToday } from 'src/engine';
-
 // TODAY()-dependent values only refresh on record events or the hourly sweep
 // (ADR 0012). If the worker/sweep dies, `lastEvaluatedAt` stops advancing —
 // this is the widget-side threshold past which that silence is treated as
@@ -44,12 +42,6 @@ export const formatRelativePast = (
   return `about ${pluralize(Math.round(elapsedMs / MONTH_MS), 'month')} ago`;
 };
 
-export type StalenessCheckDefinition = {
-  enabled: boolean;
-  expression: string;
-  lastEvaluatedAt: string | null;
-};
-
 // Pure timestamp-age half of the staleness rule, split out so callers that
 // have already resolved the TODAY() dependency (e.g. the widget memoizes a
 // usesTodayFlag per definition to avoid re-parsing on every poll/render) can
@@ -63,27 +55,4 @@ export const isStaleTimestamp = (
   const lastEvaluatedAtMs = Date.parse(lastEvaluatedAt);
   if (!Number.isFinite(lastEvaluatedAtMs)) return false;
   return nowMs - lastEvaluatedAtMs > STALE_AFTER_MS;
-};
-
-// Staleness is scoped to TODAY-using formulas only (ADR 0015): lastEvaluatedAt
-// is written only when a value CHANGES (M3 write-avoidance), so on its own it
-// means "last change", not "last evaluation" — a healthy formula whose value
-// legitimately never changes would false-positive. Parse failures and
-// disabled/timestamp-less definitions are never "stale" — there is nothing to
-// self-heal from the widget in either case.
-export const isStaleTodayFormula = (
-  definition: StalenessCheckDefinition,
-  nowMs: number,
-): boolean => {
-  if (!definition.enabled) return false;
-
-  let expressionUsesToday: boolean;
-  try {
-    expressionUsesToday = usesToday(parse(definition.expression));
-  } catch {
-    return false;
-  }
-  if (!expressionUsesToday) return false;
-
-  return isStaleTimestamp(definition.lastEvaluatedAt, nowMs);
 };

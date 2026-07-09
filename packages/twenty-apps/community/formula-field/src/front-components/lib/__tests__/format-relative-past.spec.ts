@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   formatRelativePast,
   isStaleTimestamp,
-  isStaleTodayFormula,
   STALE_AFTER_MS,
 } from 'src/front-components/lib/format-relative-past';
 
@@ -87,76 +86,7 @@ describe('isStaleTimestamp', () => {
   });
 });
 
-describe('isStaleTodayFormula', () => {
-  const baseDefinition = {
-    enabled: true,
-    expression: 'TODAY()',
-    lastEvaluatedAt: null as string | null,
-  };
-
-  it('returns true for a TODAY() formula last evaluated 3 hours ago', () => {
-    expect(
-      isStaleTodayFormula(
-        { ...baseDefinition, lastEvaluatedAt: isoMsAgo(3 * HOUR) },
-        NOW_MS,
-      ),
-    ).toBe(true);
-  });
-
-  it('returns false for a TODAY() formula last evaluated 1 hour ago', () => {
-    expect(
-      isStaleTodayFormula(
-        { ...baseDefinition, lastEvaluatedAt: isoMsAgo(1 * HOUR) },
-        NOW_MS,
-      ),
-    ).toBe(false);
-  });
-
-  it('returns false for a non-TODAY() formula even 3 hours old', () => {
-    expect(
-      isStaleTodayFormula(
-        {
-          ...baseDefinition,
-          expression: 'amount + 1',
-          lastEvaluatedAt: isoMsAgo(3 * HOUR),
-        },
-        NOW_MS,
-      ),
-    ).toBe(false);
-  });
-
-  it('returns false when the formula is disabled', () => {
-    expect(
-      isStaleTodayFormula(
-        {
-          ...baseDefinition,
-          enabled: false,
-          lastEvaluatedAt: isoMsAgo(3 * HOUR),
-        },
-        NOW_MS,
-      ),
-    ).toBe(false);
-  });
-
-  it('returns false when lastEvaluatedAt is null', () => {
-    expect(
-      isStaleTodayFormula({ ...baseDefinition, lastEvaluatedAt: null }, NOW_MS),
-    ).toBe(false);
-  });
-
-  it('returns false when the expression fails to parse', () => {
-    expect(
-      isStaleTodayFormula(
-        {
-          ...baseDefinition,
-          expression: 'amount +',
-          lastEvaluatedAt: isoMsAgo(3 * HOUR),
-        },
-        NOW_MS,
-      ),
-    ).toBe(false);
-  });
-
+describe('STALE_AFTER_MS', () => {
   it('exports the 2.5h threshold constant', () => {
     expect(STALE_AFTER_MS).toBe(2.5 * 60 * 60 * 1000);
   });

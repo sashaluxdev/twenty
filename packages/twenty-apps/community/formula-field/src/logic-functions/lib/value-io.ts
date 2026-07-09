@@ -1,4 +1,4 @@
-import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
+import { coerceToNumber } from 'src/logic-functions/lib/coercion';
 import {
   epochDaysToDateString,
   epochDaysToIsoDateTime,
@@ -60,12 +60,6 @@ export const normalizeStoredValue = (raw: unknown): number | null => {
     return null;
   }
 };
-
-// Reads the current numeric value of the value field from a record.
-export const readTargetValue = (
-  record: Record<string, unknown> | null | undefined,
-  targetField: string,
-): number | null => normalizeStoredValue(navigatePath(record, targetField));
 
 // True when the target is an integer-backed NUMBER field. The wizard's "integer"
 // format creates a NUMBER field with settings.dataType 'int', whose GraphQL
