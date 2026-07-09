@@ -359,9 +359,14 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   as the value-substitution escape hatch. (AND/OR shipped strict earlier the same
   day; superseded same day by the maintainer's Kleene decision — see ADR 0017's
   decision-history note. The earlier strict rule conflated Kleene with
-  short-circuit; evaluate-everything is untouched.) Still pending for the pack:
-  **IFS / SWITCH** (ADR 0018, parser sugar, lands next) + numeric ROUND / ABS /
-  MIN / MAX / INT + named date helpers.
+  short-circuit; evaluate-everything is untouched.) **IFS / SWITCH LANDED
+  2026-07-09 (ADR 0018)** — pure parser sugar desugaring into nested IfNodes (a
+  parser-internal NullNode is the else when no default is given), so semantics
+  come free from IF: lazy short-circuit down the ladder, first-rung null
+  propagation (a blank SWITCH subject nulls the whole ladder even with a default),
+  eager dependency extraction, and save-time string-key kind validation all work
+  with zero engine/dependency changes beyond the trivial NullNode case. Still
+  pending for the pack: numeric ROUND / ABS / MIN / MAX / INT + named date helpers.
 - **LET** — moderate: needs a binding environment in the (currently
   stateless) evaluator + bound-name rules for dependency extraction and
   autocomplete; own small ADR.

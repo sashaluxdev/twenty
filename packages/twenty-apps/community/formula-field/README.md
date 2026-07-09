@@ -71,11 +71,15 @@ expression   := term (('+' | '-') term)*
 term         := unary (('*' | '/' | '%') unary)*
 unary        := ('+' | '-') unary | primary
 primary      := NUMBER | FIELD | CROSSREF | IF | TODAY | SUM | IFBLANK
-              | '(' expression ')'
+              | IFS | SWITCH | '(' expression ')'
 IF           := 'IF' '(' condition ',' expression ',' expression ')'
 TODAY        := 'TODAY' '(' ')'
 SUM          := 'SUM' '(' expression (',' expression)* ')'
 IFBLANK      := 'IFBLANK' '(' expression ',' expression ')'
+IFS          := 'IFS' '(' condition ',' expression
+                    (',' condition ',' expression)* (',' expression)? ')'
+SWITCH       := 'SWITCH' '(' operand (',' operand ',' expression)+
+                    (',' expression)? ')'
 condition    := boolFunction | operand (compareOp operand)?
 boolFunction := 'AND' '(' condition (',' condition)+ ')'
               | 'OR'  '(' condition (',' condition)+ ')'
@@ -93,8 +97,10 @@ ident    := (letter | '_') (letter | digit | '_')*
 
 `TODAY()` resolves to the current epoch-day (ADR 0012), `SUM(...)` totals its
 non-null arguments (ADR 0016), `IFBLANK(value, fallback)` substitutes a fallback
-for a null value (ADR 0017), and `AND`/`OR`/`NOT`/`ISBLANK` are condition-only
-combinators (ADR 0017). All are reserved words (see below).
+for a null value (ADR 0017), `AND`/`OR`/`NOT`/`ISBLANK` are condition-only
+combinators (ADR 0017), and `IFS`/`SWITCH` (ADR 0018) are readable multi-rung
+ladders that desugar into nested IFs at parse time. All are reserved words (see
+below).
 
 Binary operators are left-associative; `*` `/` `%` bind tighter than `+` `-`;
 unary `+`/`-` bind tighter than binary but looser than parentheses. Arithmetic
@@ -118,6 +124,8 @@ SUM(amount.amountMicros, tax, shipping)      variadic total, ignores null args
 IF(AND(stage = "won", amount > 1000), 1, 0)  compound condition (AND/OR/NOT)
 IF(ISBLANK(email), 0, 1)                      test whether a field is blank
 revenue + IFBLANK(upsell, 0)                  treat a blank input as 0
+IFS(score >= 90, 5, score >= 70, 4, 0)        readable range ladder (nested IF)
+SWITCH(stage, "lead", 1, "won", 3, 0)        map a SELECT field to a number
 ```
 
 A same-record path like `amount.amountMicros` reaches into a composite field;
@@ -155,10 +163,11 @@ case-insensitive (`IF` / `if` / `If`). Rules:
   condition AND both branches (the untaken branch's inputs can flip the
   condition's outcome next time), so recompute triggers and cycle detection see
   the whole conditional.
-- **`if`, `today`, `sum`, `ifblank`, `and`, `or`, `not` and `isblank` are
-  reserved words** (case-insensitive). A bare same-record field with one of
-  those names is no longer expressible (dotted paths like `if.x` / `and.x` /
-  `ifblank.y` still are, and cross-refs `[obj:id:and]` are unaffected).
+- **`if`, `today`, `sum`, `ifblank`, `and`, `or`, `not`, `isblank`, `ifs` and
+  `switch` are reserved words** (case-insensitive). A bare same-record field with
+  one of those names is no longer expressible (dotted paths like `if.x` / `and.x`
+  / `ifblank.y` / `ifs.x` / `switch.x` still are, and cross-refs `[obj:id:and]`
+  are unaffected).
 
 ### Boolean condition functions (ADR 0017)
 
@@ -209,6 +218,39 @@ null-propagation complaint, and `IF(IFBLANK(amount, 0) > 1000, …)` reads as
 precedent), so an error in the fallback fires even when the value is non-null.
 IFBLANK stays purely numeric — a text field inside it goes through the numeric
 resolver, a deliberate asymmetry with ISBLANK (only ISBLANK observes raw values).
+
+### Multi-rung ladders: IFS and SWITCH (ADR 0018)
+
+Nested-IF ladders are the most common real CRM formulas but become unreadable
+past two rungs. `IFS` and `SWITCH` are **pure parser sugar** — they desugar into
+nested IFs during parsing, so every property (lazy short-circuit, null
+propagation, dependency tracking, save-time validation) is inherited from IF with
+no new runtime behavior. There is no IFS/SWITCH node at runtime; the stored AST is
+just IFs.
+
+- `IFS(cond1, value1, cond2, value2, ..., [default])` — takes the value of the
+  first true condition. Each condition uses the full condition grammar (including
+  `AND`/`OR`/`NOT`/`ISBLANK`); each value is an expression.
+  `IFS(a > 1, 2, b > 3, 4, 0)` desugars to `IF(a > 1, 2, IF(b > 3, 4, 0))`.
+- `SWITCH(expr, key1, value1, key2, value2, ..., [default])` — compares `expr`
+  against each key by `=`. `expr` and the keys are comparison operands (numbers or
+  string literals), so `SWITCH(stage, "lead", 1, "won", 3, 0)` maps a SELECT field
+  with zero string-rule relaxation. It desugars to
+  `IF(stage = "lead", 1, IF(stage = "won", 3, 0))`.
+
+- **No default, no match → null (blank)**, not an error — a deliberate divergence
+  from Excel's `#N/A`, consistent with the engine's null philosophy. The desugar
+  uses a null-producing else for the innermost IF when no default is given.
+- **Null propagation composes.** A `SWITCH` on a **blank** field is null at the
+  first rung (`expr = key1` has a null operand), so the whole ladder is null even
+  with a default present. Guard a blank text field with
+  `IF(ISBLANK(stage), fallback, SWITCH(stage, ...))`, or a blank numeric subject
+  with `SWITCH(IFBLANK(x, 0), ...)`.
+- **Trade-offs (accepted).** `SWITCH` duplicates `expr` per rung (pure, so
+  harmless; dependency extraction dedupes). Each rung adds one IF frame, so the
+  parse-depth guard bounds ladders to roughly ~60 rungs — far past any hand-written
+  formula. Runtime error messages speak in IF terms (the real AST); parse-time
+  errors (arity, malformed args) do say IFS/SWITCH.
 
 ### Dates (Excel serial model, ADR 0011)
 

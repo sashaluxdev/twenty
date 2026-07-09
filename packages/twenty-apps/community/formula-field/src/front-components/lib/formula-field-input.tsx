@@ -60,6 +60,18 @@ const FUNCTION_SUGGESTIONS: FieldOption[] = [
     insertText: 'IFBLANK(',
   },
   {
+    name: 'IFS',
+    label: 'IFS(cond1, value1, ..., [default])',
+    type: 'function',
+    insertText: 'IFS(',
+  },
+  {
+    name: 'SWITCH',
+    label: 'SWITCH(expr, key1, value1, ..., [default])',
+    type: 'function',
+    insertText: 'SWITCH(',
+  },
+  {
     name: 'AND',
     label: 'AND(cond1, ..., condN) — in an IF condition',
     type: 'function',

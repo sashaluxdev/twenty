@@ -1,9 +1,12 @@
 # ADR 0018: IFS and SWITCH as parser-level sugar
 
-**Status: ACCEPTED (design approved 2026-07-09) — implementation not started.**
+**Status: IMPLEMENTED (design approved 2026-07-09).**
 Depends on ADR 0017 (boolean condition functions) landing first — not for any
-technical coupling, but so each PR has a clean test story. Implement
-immediately after 0017.
+technical coupling, but so each PR has a clean test story. Implemented
+immediately after 0017: IFS/SWITCH are pure parser sugar desugaring into nested
+IfNodes, with a single parser-internal NullNode as the only AST addition; the
+evaluator, dependency walker, `usesToday`, `walkStringComparisons`, and save-time
+validation needed no IFS/SWITCH-specific logic beyond the trivial NullNode case.
 
 ## Context
 
