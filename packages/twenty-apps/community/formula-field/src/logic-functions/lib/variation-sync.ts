@@ -203,9 +203,18 @@ const orphanPinsValue = (
 // the orphan) so the widget's diverged list keeps showing it; on an ambiguous
 // match (two fields carry the same value — a coincidence a wrong guess could
 // destroy data over) hold every matching field unwritten and leave the orphan
-// active for a human to resolve. Returns the field names to drop from the
-// write set. Mutates `orphans` (consumed on transfer) so the R1 retry ladder
-// and per-field degrade stay idempotent within one syncOneVariation call.
+// active for a human to resolve. Accepted "value is the witness" limitation
+// (review L3): a DELETED-field orphan whose pinned value coincidentally equals
+// a diverged field's current value causes a spurious transfer — conservative
+// (a skipped write plus a visible, human-fixable pin) and recoverable (the
+// orphan row is deactivated, never deleted).
+//
+// Held field names go into the SHARED `heldFields` set, and `orphans` is
+// mutated (consumed on transfer): a transfer COMMITS before the record write,
+// so if that write throws into the R1 ladder, the retry/per-field attempts
+// must keep holding the transferred field (M1) — the held set carries that
+// across attempts within one syncOneVariation call, and the consumed orphan
+// list keeps the transfer itself idempotent.
 const reconcileOrphanedOverrides = async (
   client: FormulaClient,
   targetObject: string,
@@ -213,19 +222,19 @@ const reconcileOrphanedOverrides = async (
   variationRecord: Record<string, unknown>,
   changedFields: SyncableFieldInfo[],
   orphans: OverrideRecord[],
-): Promise<Set<string>> => {
-  const fieldsToHold = new Set<string>();
+  heldFields: Set<string>,
+): Promise<void> => {
   for (const orphan of [...orphans]) {
     const matches = changedFields.filter(
       (field) =>
-        !fieldsToHold.has(field.name) &&
+        !heldFields.has(field.name) &&
         orphanPinsValue(orphan, navigatePath(variationRecord, field.name) ?? null),
     );
     if (matches.length === 0) {
       continue;
     }
     for (const field of matches) {
-      fieldsToHold.add(field.name);
+      heldFields.add(field.name);
     }
     if (matches.length > 1) {
       continue;
@@ -249,7 +258,6 @@ const reconcileOrphanedOverrides = async (
     );
     orphans.splice(orphans.indexOf(orphan), 1);
   }
-  return fieldsToHold;
 };
 
 // The read -> diff -> write core of one sync attempt for one variation.
@@ -262,13 +270,25 @@ const syncVariationFieldsBatch = async (
   variationId: string,
   fieldsToSync: SyncableFieldInfo[],
   orphanedOverrides: OverrideRecord[],
+  heldFields: Set<string>,
 ): Promise<{ found: boolean; changedFields: string[] }> => {
+  // Fields held by an earlier attempt's reconcile (transferred pins and
+  // ambiguous matches) stay held on EVERY subsequent attempt — a retry after
+  // a committed transfer must not re-diff the protected field and write the
+  // primary value over it (M1).
+  const effectiveFields = fieldsToSync.filter(
+    (field) => !heldFields.has(field.name),
+  );
+  if (effectiveFields.length === 0) {
+    return { found: true, changedFields: [] };
+  }
+
   const variationRecord = await fetchRecordById(
     client,
     targetObject,
     variationId,
-    fieldsToSync.map((field) => field.name),
-    selectionOverridesFor(fieldsToSync),
+    effectiveFields.map((field) => field.name),
+    selectionOverridesFor(effectiveFields),
   );
   if (!variationRecord) {
     return { found: false, changedFields: [] };
@@ -276,7 +296,7 @@ const syncVariationFieldsBatch = async (
 
   const data: Record<string, unknown> = {};
   let changedFields: SyncableFieldInfo[] = [];
-  for (const field of fieldsToSync) {
+  for (const field of effectiveFields) {
     const primaryValue = navigatePath(primaryRecord, field.name) ?? null;
     const variationValue = navigatePath(variationRecord, field.name) ?? null;
     if (!deepJsonEqual(primaryValue, variationValue)) {
@@ -286,18 +306,21 @@ const syncVariationFieldsBatch = async (
   }
 
   if (orphanedOverrides.length > 0 && changedFields.length > 0) {
-    const fieldsToHold = await reconcileOrphanedOverrides(
+    await reconcileOrphanedOverrides(
       client,
       targetObject,
       variationId,
       variationRecord,
       changedFields,
       orphanedOverrides,
+      heldFields,
     );
-    for (const name of fieldsToHold) {
-      delete data[name];
+    for (const field of changedFields) {
+      if (heldFields.has(field.name)) {
+        delete data[field.name];
+      }
     }
-    changedFields = changedFields.filter((field) => !fieldsToHold.has(field.name));
+    changedFields = changedFields.filter((field) => !heldFields.has(field.name));
   }
 
   if (changedFields.length === 0) {
@@ -355,8 +378,11 @@ export const syncOneVariation = async (
   // Rows orphaned by a rename/delete: active overrides whose targetField no
   // longer exists on the object AT ALL (a merely-deactivated field still
   // exists — its pin is inert, not endangered). Shared by every batch attempt
-  // in the R1 ladder below; transfers consume from it.
+  // in the R1 ladder below; transfers consume from it, and the fields they
+  // protected go into heldFields so every later attempt keeps holding them
+  // even though the consumed orphan can no longer re-match (M1).
   const orphanedOverrides: OverrideRecord[] = [];
+  const heldFields = new Set<string>();
   try {
     const overrideRows = await loadActiveOverridesForRecord(
       client,
@@ -404,6 +430,7 @@ export const syncOneVariation = async (
       variationId,
       fieldsToSync,
       orphanedOverrides,
+      heldFields,
     );
     return outcomeFromBatch(variationId, batch);
   } catch {
@@ -426,6 +453,7 @@ export const syncOneVariation = async (
         variationId,
         refreshedFields,
         orphanedOverrides,
+        heldFields,
       );
       return outcomeFromBatch(variationId, batch);
     } catch {
@@ -444,6 +472,7 @@ export const syncOneVariation = async (
             variationId,
             [field],
             orphanedOverrides,
+            heldFields,
           );
           if (!single.found) {
             return {
@@ -1024,7 +1053,11 @@ export type VariationRecordUpdatedArgs = {
 // failing live edit silent for up to an hour). Write-avoidant: no write when
 // lastError already says exactly this, so a repeating failure cannot storm
 // the config with writes (each write re-fires the config trigger, even though
-// the bookkeeping guard swallows it there).
+// the bookkeeping guard swallows it there). Accepted (review L2): the dedupe
+// reads the config snapshot loaded at invocation entry, so two STRICTLY
+// concurrent identical failures can each write once — still bounded (one
+// write per invocation, same value) and each re-trigger is swallowed by the
+// bookkeeping recursion guard.
 const recordEventPathError = async (
   client: FormulaClient,
   config: VariationConfigRecord,

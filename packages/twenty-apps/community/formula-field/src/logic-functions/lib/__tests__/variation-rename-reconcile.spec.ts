@@ -287,6 +287,51 @@ describe('rename-proof divergence pins (R2)', () => {
     expect(client.get('formulaOverride', 'formulaOverride-1')).toBeUndefined();
   });
 
+  // M1 regression (R2/R1 interaction): the pin transfer COMMITS before the
+  // record write; if that write then throws into the R1 retry ladder, the
+  // orphan list is already consumed — the retry must still hold the
+  // transferred field, or it would re-diff it and write the primary value
+  // over the value the reconcile just protected.
+  it('holds a transferred pin across an R1 retry after the batch write fails once', async () => {
+    client.seed('formulaOverride', [orphanedSloganOverride()]);
+
+    const realMutation = client.mutation.bind(client);
+    let failedOnce = false;
+    client.mutation = (async (selection: Record<string, unknown>) => {
+      const key = Object.keys(selection)[0];
+      // Fail the RECORD update exactly once (a non-retryable error, so it
+      // throws straight past withRetry into the ladder); override mutations
+      // pass through untouched.
+      if (key === 'updateCompany' && !failedOnce) {
+        failedOnce = true;
+        throw new Error('transient write failure');
+      }
+      return realMutation(selection);
+    }) as typeof client.mutation;
+
+    const outcome = await syncOneVariation(
+      client,
+      'company',
+      { id: 'p1', tagline: 'New corporate tagline', employees: 99 },
+      'v1',
+      SYNC_FIELDS,
+      'primaryRecord',
+    );
+
+    // The protected value survives the retry; the other field still syncs.
+    expect(client.get('company', 'v1')!.tagline).toBe(PINNED_TAGLINE);
+    expect(client.get('company', 'v1')!.employees).toBe(99);
+    expect(outcome.changedFields).toEqual(['employees']);
+    expect(outcome.error).toBeNull();
+    // The transferred pin stays consistent with the stored value.
+    expect(client.get('formulaOverride', 'formulaOverride-1')).toMatchObject({
+      name: 'company.tagline#v1',
+      overrideValueText: JSON.stringify(PINNED_TAGLINE),
+      active: true,
+    });
+    expect(client.get('formulaOverride', 'ov-slogan')!.active).toBe(false);
+  });
+
   it('an explicit user re-sync beats the reconcile guard (no false transfer onto a resynced field)', async () => {
     // tagline has its OWN active pin (it shows in the diverged list) AND an
     // unrelated orphan happens to carry the identical value. The user's
