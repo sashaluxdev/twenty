@@ -86,6 +86,49 @@ export type SumNode = {
   args: AstNode[];
 };
 
+// Boolean combinators (ADR 0017). AndNode/OrNode/NotNode/IsBlankNode are
+// TRANSIENT condition nodes, like ComparisonNode: the parser only ever produces
+// them in condition context (inside an IF's first argument, recursively), never
+// where a numeric value is expected, so booleans can never leak into the public
+// number|null value domain. The evaluator's value switch carries unreachable
+// guards for them so a hand-built AST that misplaces one fails loud.
+//   - AND/OR args are condition nodes; evaluation is strict (evaluate ALL args,
+//     any-null -> null, no short-circuit).
+//   - NOT's operand is a condition node.
+//   - ISBLANK's operand is a VALUE node (an expression). ISBLANK observes
+//     blankness (raw-first for a bare field/crossref) rather than propagating.
+export type AndNode = {
+  type: 'and';
+  args: AstNode[];
+};
+
+export type OrNode = {
+  type: 'or';
+  args: AstNode[];
+};
+
+export type NotNode = {
+  type: 'not';
+  operand: AstNode;
+};
+
+export type IsBlankNode = {
+  type: 'isblank';
+  operand: AstNode;
+};
+
+// IFBLANK(value, fallback) (ADR 0017). Unlike the four combinators above this is
+// an ordinary VALUE node (like SumNode) — legal anywhere a number is, including
+// inside an ISBLANK operand. Returns `value` unless it evaluates to null, else
+// `fallback` (which may itself be null); BOTH are always evaluated (SUM
+// precedent — errors always fire). Stays purely numeric: a text field inside it
+// goes through the numeric resolver, deliberately asymmetric with ISBLANK.
+export type IfBlankNode = {
+  type: 'ifblank';
+  value: AstNode;
+  fallback: AstNode;
+};
+
 export type AstNode =
   | NumberNode
   | StringNode
@@ -96,4 +139,9 @@ export type AstNode =
   | ComparisonNode
   | IfNode
   | TodayNode
-  | SumNode;
+  | SumNode
+  | AndNode
+  | OrNode
+  | NotNode
+  | IsBlankNode
+  | IfBlankNode;

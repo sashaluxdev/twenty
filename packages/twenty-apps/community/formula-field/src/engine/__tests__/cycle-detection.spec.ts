@@ -72,6 +72,16 @@ describe('cycle detection', () => {
     expect(result.hasCycle).toBe(false);
   });
 
+  it('rejects a cycle that runs through an ISBLANK edge (ADR 0017)', () => {
+    // a = IF(ISBLANK(b), 1, 2) reads b; b = a + 1 reads a -> cycle through the
+    // ISBLANK operand dependency.
+    const result = detectCycle([
+      formula('opportunity', 'a', 'IF(ISBLANK(b), 1, 2)'),
+      formula('opportunity', 'b', 'a + 1'),
+    ]);
+    expect(result.hasCycle).toBe(true);
+  });
+
   it('ignores dependencies on non-formula fields', () => {
     // "inputA" is a plain field, not a formula target -> no edge, no cycle.
     const result = detectCycle([

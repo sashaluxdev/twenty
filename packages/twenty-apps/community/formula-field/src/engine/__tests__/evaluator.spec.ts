@@ -252,6 +252,177 @@ describe('evaluator SUM()', () => {
   });
 });
 
+describe('evaluator boolean condition functions (ADR 0017)', () => {
+  it('evaluates AND truth table (all true -> then, any false -> else)', () => {
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: 2, b: 2 })).toBe(100);
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: 2, b: 0 })).toBe(200);
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: 0, b: 0 })).toBe(200);
+  });
+
+  it('evaluates OR truth table (any true -> then, all false -> else)', () => {
+    expect(run('IF(OR(a > 1, b > 1), 100, 200)', { a: 2, b: 0 })).toBe(100);
+    expect(run('IF(OR(a > 1, b > 1), 100, 200)', { a: 0, b: 0 })).toBe(200);
+  });
+
+  it('evaluates NOT (inverts the truth of its argument)', () => {
+    expect(run('IF(NOT(a > 1), 100, 200)', { a: 0 })).toBe(100);
+    expect(run('IF(NOT(a > 1), 100, 200)', { a: 2 })).toBe(200);
+  });
+
+  it('propagates null strictly through AND when any argument truth is null', () => {
+    // a is null -> a > 1 is null -> AND is null -> IF result null. No short-circuit
+    // to false even though b > 1 is false.
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: null, b: 0 })).toBeNull();
+    // Even AND(false, null) is null (strict, not Kleene).
+    expect(run('IF(AND(a > 1, b > 1), 100, 200)', { a: 0, b: null })).toBeNull();
+  });
+
+  it('propagates null strictly through OR when any argument truth is null', () => {
+    // OR(true, null) is null under strict propagation (not Kleene true).
+    expect(run('IF(OR(a > 1, b > 1), 100, 200)', { a: 2, b: null })).toBeNull();
+  });
+
+  it('propagates null through NOT of a null argument', () => {
+    expect(run('IF(NOT(a > 1), 100, 200)', { a: null })).toBeNull();
+  });
+
+  it('does NOT short-circuit — an error in any argument always fires', () => {
+    // AND: the divide-by-zero in the second argument fires even though the first
+    // is already false.
+    try {
+      run('IF(AND(a > 1, 1 / 0 > 0), 1, 0)', { a: 0 });
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
+    // OR: error fires even though the first argument is already true.
+    try {
+      run('IF(OR(a > 1, 1 / 0 > 0), 1, 0)', { a: 2 });
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
+  });
+
+  it('applies STRICT null propagation to combinators mixing ISBLANK with a null-poisoned comparison', () => {
+    // NOTE (ADR 0017 contradiction, flagged in the phase-1 report): the ADR
+    // prose lists OR(ISBLANK(x), x > 10) / AND(NOT(ISBLANK(x)), x > 10) as
+    // null-tolerance idioms, but those only work under Kleene logic, which the
+    // ADR's binding decision explicitly REJECTS in favour of strict propagation.
+    // Under the binding strict rule, any null argument nulls the combinator:
+    // x > 10 with x=null is null, so the whole OR/AND is null regardless of
+    // ISBLANK's true/false. These assertions pin the strict behaviour that the
+    // engine actually implements.
+    expect(run('IF(OR(ISBLANK(x), x > 10), 1, 0)', { x: null })).toBeNull();
+    expect(run('IF(OR(ISBLANK(x), x > 10), 1, 0)', { x: 20 })).toBe(1);
+    expect(run('IF(OR(ISBLANK(x), x > 10), 1, 0)', { x: 5 })).toBe(0);
+    expect(run('IF(AND(NOT(ISBLANK(x)), x > 10), 1, 0)', { x: null })).toBeNull();
+    expect(run('IF(AND(NOT(ISBLANK(x)), x > 10), 1, 0)', { x: 20 })).toBe(1);
+
+    // The idiom that DOES tolerate null under strict semantics is IFBLANK
+    // (substitute a value), the sanctioned escape hatch.
+    expect(run('IF(IFBLANK(x, 0) > 10, 1, 0)', { x: null })).toBe(0);
+    expect(run('IF(IFBLANK(x, 99) > 10, 1, 0)', { x: null })).toBe(1);
+  });
+
+  it('keeps IF branches lazy even when combinators wrap the condition', () => {
+    // The condition is true, so the else branch (division by zero) never runs.
+    expect(run('IF(AND(a > 1, b > 1), 10, 1 / 0)', { a: 2, b: 2 })).toBe(10);
+  });
+});
+
+describe('evaluator ISBLANK (ADR 0017)', () => {
+  it('numeric semantics without resolveRaw: null is blank, a number is not', () => {
+    expect(run('IF(ISBLANK(a), 1, 0)', { a: null })).toBe(1);
+    expect(run('IF(ISBLANK(a), 1, 0)', { a: 42 })).toBe(0);
+    expect(run('IF(ISBLANK(a), 1, 0)', { a: 0 })).toBe(0);
+  });
+
+  it('treats a compound (arithmetic) operand as blank iff it evaluates to null', () => {
+    expect(run('IF(ISBLANK(a + b), 1, 0)', { a: null, b: 3 })).toBe(1);
+    expect(run('IF(ISBLANK(a + b), 1, 0)', { a: 1, b: 3 })).toBe(0);
+  });
+
+  it('never returns null itself — it observes blankness rather than propagating', () => {
+    // ISBLANK(a) with a=null is TRUE (blank), so the IF is NOT nulled.
+    expect(run('IF(ISBLANK(a), 100, 200)', { a: null })).toBe(100);
+  });
+
+  it('still throws UNKNOWN_VARIABLE for a typo field inside ISBLANK', () => {
+    try {
+      run('IF(ISBLANK(doesNotExist), 1, 0)', {});
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('UNKNOWN_VARIABLE');
+    }
+  });
+
+  it('raw-first: an empty string is blank, whitespace-only is blank, non-empty is not', () => {
+    expect(runStr('IF(ISBLANK(email), 1, 0)', { email: '' })).toBe(1);
+    expect(runStr('IF(ISBLANK(email), 1, 0)', { email: '   ' })).toBe(1);
+    expect(runStr('IF(ISBLANK(email), 1, 0)', { email: 'a@b.com' })).toBe(0);
+  });
+
+  it('raw-first falls back to numeric when the raw value is not a string', () => {
+    // A number raw -> resolveRaw returns non-string -> numeric fallback. But the
+    // numeric resolver here is empty, so the field is truly unknown -> throws.
+    // Use a resolver that has the numeric value to exercise the fallback cleanly.
+    const raw = rawResolverFor({ a: 42 });
+    expect(
+      evaluate(parse('IF(ISBLANK(a), 1, 0)'), resolverFor({ a: 42 }), {
+        resolveRaw: raw,
+      }),
+    ).toBe(0);
+    expect(
+      evaluate(parse('IF(ISBLANK(a), 1, 0)'), resolverFor({ a: null }), {
+        resolveRaw: rawResolverFor({ a: 42 }),
+      }),
+    ).toBe(1);
+  });
+
+  it('raw-first: a missing cross record reads as blank (numeric fallback null)', () => {
+    const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    expect(
+      evaluate(
+        parse(`IF(ISBLANK([company:${uuid}:name]), 1, 0)`),
+        resolverFor({ [`[company:${uuid}:name]`]: null }),
+        { resolveRaw: rawResolverFor({}) },
+      ),
+    ).toBe(1);
+  });
+});
+
+describe('evaluator IFBLANK (ADR 0017)', () => {
+  it('returns the value when it is non-null', () => {
+    expect(run('IFBLANK(a, 0)', { a: 42 })).toBe(42);
+    expect(run('IFBLANK(a, 99)', { a: 0 })).toBe(0);
+  });
+
+  it('returns the fallback when the value is null', () => {
+    expect(run('IFBLANK(a, 0)', { a: null })).toBe(0);
+    expect(run('IFBLANK(a, b)', { a: null, b: 7 })).toBe(7);
+  });
+
+  it('returns a null fallback (blank stays blank)', () => {
+    expect(run('IFBLANK(a, b)', { a: null, b: null })).toBeNull();
+  });
+
+  it('evaluates BOTH arguments so an error in the fallback fires even when unused', () => {
+    try {
+      run('IFBLANK(a, 1 / 0)', { a: 42 });
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('DIVISION_BY_ZERO');
+    }
+  });
+
+  it('composes as the documented null-propagation escape hatch', () => {
+    expect(run('revenue + IFBLANK(upsell, 0)', { revenue: 100, upsell: null })).toBe(100);
+    expect(run('IF(AND(stage > 0, IFBLANK(amount, 0) > 1000), 1, 0)', { stage: 1, amount: null })).toBe(0);
+    expect(run('IF(AND(stage > 0, IFBLANK(amount, 0) > 1000), 1, 0)', { stage: 1, amount: 2000 })).toBe(1);
+  });
+});
+
 describe('evaluator errors', () => {
   it('throws UNKNOWN_VARIABLE for a missing field', () => {
     try {
@@ -395,6 +566,26 @@ describe('evaluator exhaustiveness guard (hand-built ASTs)', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(FormulaError);
       expect((error as FormulaError).code).toBe('NON_NUMERIC_VALUE');
+    }
+  });
+
+  it('fails loud when a condition node reaches a value slot (ADR 0017)', () => {
+    // The parser can never produce these in a value slot — they are transient
+    // condition nodes like ComparisonNode. Guard for hand-built ASTs.
+    const nodes: AstNode[] = [
+      { type: 'and', args: [{ type: 'number', value: 1 }, { type: 'number', value: 1 }] },
+      { type: 'or', args: [{ type: 'number', value: 1 }, { type: 'number', value: 1 }] },
+      { type: 'not', operand: { type: 'number', value: 1 } },
+      { type: 'isblank', operand: { type: 'number', value: 1 } },
+    ];
+    for (const node of nodes) {
+      try {
+        evaluate(node, resolverFor({}));
+        throw new Error('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(FormulaError);
+        expect((error as FormulaError).code).toBe('PARSE_ERROR');
+      }
     }
   });
 });

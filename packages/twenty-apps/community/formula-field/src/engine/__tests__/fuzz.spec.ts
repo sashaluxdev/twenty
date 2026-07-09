@@ -105,6 +105,22 @@ describe('tokenizer fuzzing', () => {
       return `"${content}"`;
     };
     const genCondition = (depth: number): string => {
+      // Boolean combinators (ADR 0017) — legal only in condition context, so
+      // produced here. Each argument recurses into genCondition (AND/OR/NOT) or
+      // genExpr (ISBLANK), matching the grammar the parser accepts.
+      if (depth > 0 && rng() < 0.18) {
+        const pick = rng();
+        if (pick < 0.35) {
+          return `AND(${genCondition(depth - 1)}, ${genCondition(depth - 1)})`;
+        }
+        if (pick < 0.7) {
+          return `OR(${genCondition(depth - 1)}, ${genCondition(depth - 1)})`;
+        }
+        if (pick < 0.85) {
+          return `NOT(${genCondition(depth - 1)})`;
+        }
+        return `ISBLANK(${genExpr(depth - 1)})`;
+      }
       // Numeric condition or a single (never chained) comparison.
       if (rng() < 0.3) {
         return genExpr(depth - 1);
@@ -125,6 +141,11 @@ describe('tokenizer fuzzing', () => {
       }
       if (rng() < 0.2) {
         return `IF(${genCondition(depth)}, ${genExpr(depth - 1)}, ${genExpr(depth - 1)})`;
+      }
+      // IFBLANK(value, fallback) (ADR 0017) — a value-context function, so it is
+      // produced in genExpr like a nested IF.
+      if (rng() < 0.15) {
+        return `IFBLANK(${genExpr(depth - 1)}, ${genExpr(depth - 1)})`;
       }
       const op = ['+', '-', '*'][Math.floor(rng() * 3)];
       const left = genExpr(depth - 1);

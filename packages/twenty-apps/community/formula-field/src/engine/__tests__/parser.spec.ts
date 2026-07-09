@@ -316,6 +316,276 @@ describe('parser SUM()', () => {
   });
 });
 
+describe('parser boolean condition functions (ADR 0017)', () => {
+  const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+
+  it('should parse AND with two comparison arguments into an and node', () => {
+    expect(parse('IF(AND(a > 1, b < 2), 1, 0)')).toEqual({
+      type: 'if',
+      condition: {
+        type: 'and',
+        args: [
+          {
+            type: 'comparison',
+            operator: '>',
+            left: { type: 'field', path: 'a' },
+            right: { type: 'number', value: 1 },
+          },
+          {
+            type: 'comparison',
+            operator: '<',
+            left: { type: 'field', path: 'b' },
+            right: { type: 'number', value: 2 },
+          },
+        ],
+      },
+      then: { type: 'number', value: 1 },
+      else: { type: 'number', value: 0 },
+    });
+  });
+
+  it('should parse variadic AND/OR with three or more arguments', () => {
+    const and = parse('IF(AND(a > 1, b > 1, c > 1), 1, 0)');
+    if (and.type === 'if' && and.condition.type === 'and') {
+      expect(and.condition.args).toHaveLength(3);
+    } else {
+      throw new Error('expected AND node with 3 args');
+    }
+    const or = parse('IF(OR(a > 1, b > 1, c > 1), 1, 0)');
+    if (or.type === 'if' && or.condition.type === 'or') {
+      expect(or.condition.args).toHaveLength(3);
+    } else {
+      throw new Error('expected OR node with 3 args');
+    }
+  });
+
+  it('should parse NOT with exactly one condition argument', () => {
+    expect(parse('IF(NOT(a > 1), 1, 0)')).toEqual({
+      type: 'if',
+      condition: {
+        type: 'not',
+        operand: {
+          type: 'comparison',
+          operator: '>',
+          left: { type: 'field', path: 'a' },
+          right: { type: 'number', value: 1 },
+        },
+      },
+      then: { type: 'number', value: 1 },
+      else: { type: 'number', value: 0 },
+    });
+  });
+
+  it('should parse ISBLANK with a value-context field argument', () => {
+    expect(parse('IF(ISBLANK(email), 1, 0)')).toEqual({
+      type: 'if',
+      condition: {
+        type: 'isblank',
+        operand: { type: 'field', path: 'email' },
+      },
+      then: { type: 'number', value: 1 },
+      else: { type: 'number', value: 0 },
+    });
+  });
+
+  it('should allow an arithmetic expression as the ISBLANK argument', () => {
+    const node = parse('IF(ISBLANK(a + b), 1, 0)');
+    if (node.type === 'if' && node.condition.type === 'isblank') {
+      expect(node.condition.operand.type).toBe('binary');
+    } else {
+      throw new Error('expected ISBLANK over a binary node');
+    }
+  });
+
+  it('should nest combinators arbitrarily (AND(OR(...), NOT(...)))', () => {
+    const node = parse('IF(AND(OR(a > 1, b > 2), NOT(c = 0)), 1, 0)');
+    expect(node.type).toBe('if');
+    if (node.type === 'if') {
+      expect(node.condition.type).toBe('and');
+      if (node.condition.type === 'and') {
+        expect(node.condition.args[0].type).toBe('or');
+        expect(node.condition.args[1].type).toBe('not');
+      }
+    }
+  });
+
+  it('should accept the keywords case-insensitively', () => {
+    expect(() => parse('IF(and(a > 1, b > 2), 1, 0)')).not.toThrow();
+    expect(() => parse('IF(Or(a > 1, b > 2), 1, 0)')).not.toThrow();
+    expect(() => parse('IF(Not(a > 1), 1, 0)')).not.toThrow();
+    expect(() => parse('IF(isblank(a), 1, 0)')).not.toThrow();
+  });
+
+  it('should tolerate whitespace between the keyword and its parentheses', () => {
+    expect(() => parse('IF(AND (a > 1, b > 2), 1, 0)')).not.toThrow();
+    expect(() => parse('IF(NOT (a > 1), 1, 0)')).not.toThrow();
+  });
+
+  it('should reject AND/OR with fewer than 2 arguments', () => {
+    expect(() => parse('IF(AND(a > 1), 1, 0)')).toThrowError(
+      /AND requires at least 2 arguments/,
+    );
+    expect(() => parse('IF(OR(a > 1), 1, 0)')).toThrowError(
+      /OR requires at least 2 arguments/,
+    );
+  });
+
+  it('should reject NOT with zero or more than one argument', () => {
+    expect(() => parse('IF(NOT(), 1, 0)')).toThrowError(/PARSE_ERROR|Unexpected/);
+    expect(() => parse('IF(NOT(a > 1, b > 2), 1, 0)')).toThrowError(
+      /NOT requires exactly 1 argument/,
+    );
+  });
+
+  it('should reject ISBLANK with zero or more than one argument', () => {
+    expect(() => parse('IF(ISBLANK(), 1, 0)')).toThrowError(/PARSE_ERROR|Unexpected/);
+    expect(() => parse('IF(ISBLANK(a, b), 1, 0)')).toThrowError(
+      /ISBLANK requires exactly 1 argument/,
+    );
+  });
+
+  it('should reject the condition functions in a value context (not inside an IF condition)', () => {
+    expect(() => parse('AND(a > 1, b > 2)')).toThrowError(
+      /AND\(\.\.\.\) is only allowed inside an IF condition/,
+    );
+    expect(() => parse('OR(a > 1, b > 2)')).toThrowError(
+      /OR\(\.\.\.\) is only allowed inside an IF condition/,
+    );
+    expect(() => parse('NOT(a > 1)')).toThrowError(
+      /NOT\(\.\.\.\) is only allowed inside an IF condition/,
+    );
+    expect(() => parse('ISBLANK(a)')).toThrowError(
+      /ISBLANK\(\.\.\.\) is only allowed inside an IF condition/,
+    );
+    // Also inside an IF branch (a value context), not just at top level.
+    expect(() => parse('IF(a > 1, NOT(b > 1), 0)')).toThrowError(
+      /NOT\(\.\.\.\) is only allowed inside an IF condition/,
+    );
+    // And nested inside SUM (value context).
+    expect(() => parse('SUM(AND(a > 1, b > 2))')).toThrowError(
+      /AND\(\.\.\.\) is only allowed inside an IF condition/,
+    );
+  });
+
+  it('should reject a bare condition keyword used as a value with the value-context message', () => {
+    expect(() => parse('and + 1')).toThrowError(
+      /AND\(\.\.\.\) is only allowed inside an IF condition/,
+    );
+  });
+
+  it('should reject a bare condition keyword inside an IF condition with the reserved-word message', () => {
+    expect(() => parse('IF(and, 1, 0)')).toThrowError(
+      /"AND" is a reserved word/,
+    );
+    expect(() => parse('IF(isblank, 1, 0)')).toThrowError(
+      /"ISBLANK" is a reserved word/,
+    );
+  });
+
+  it('should keep dotted paths starting with a reserved keyword as plain field references', () => {
+    expect(parse('and.total')).toEqual({ type: 'field', path: 'and.total' });
+    expect(parse('not.x + 1')).toEqual({
+      type: 'binary',
+      operator: '+',
+      left: { type: 'field', path: 'not.x' },
+      right: { type: 'number', value: 1 },
+    });
+    expect(parse(`[company:${UUID}:and]`)).toEqual({
+      type: 'crossref',
+      ref: { object: 'company', recordId: UUID, fieldPath: 'and' },
+    });
+  });
+
+  it('should reject an unterminated combinator (missing closing parenthesis)', () => {
+    expect(() => parse('IF(AND(a > 1, b > 2, 1, 0')).toThrowError(
+      /closing parenthesis/,
+    );
+  });
+
+  it('should bound deeply nested combinators with the parse-depth guard', () => {
+    const deep =
+      'IF(' + 'NOT('.repeat(300) + 'a > 1' + ')'.repeat(300) + ', 1, 0)';
+    expect(() => parse(deep)).toThrowError(/max depth/);
+  });
+});
+
+describe('parser IFBLANK (ADR 0017)', () => {
+  const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+
+  it('should parse IFBLANK into an ifblank value node', () => {
+    expect(parse('IFBLANK(amount, 0)')).toEqual({
+      type: 'ifblank',
+      value: { type: 'field', path: 'amount' },
+      fallback: { type: 'number', value: 0 },
+    });
+  });
+
+  it('should allow IFBLANK anywhere a value is legal (inside arithmetic)', () => {
+    expect(parse('revenue + IFBLANK(upsell, 0)')).toEqual({
+      type: 'binary',
+      operator: '+',
+      left: { type: 'field', path: 'revenue' },
+      right: {
+        type: 'ifblank',
+        value: { type: 'field', path: 'upsell' },
+        fallback: { type: 'number', value: 0 },
+      },
+    });
+  });
+
+  it('should allow IFBLANK inside an ISBLANK operand', () => {
+    const node = parse('IF(ISBLANK(IFBLANK(x, 0)), 1, 0)');
+    if (node.type === 'if' && node.condition.type === 'isblank') {
+      expect(node.condition.operand.type).toBe('ifblank');
+    } else {
+      throw new Error('expected ISBLANK over an IFBLANK node');
+    }
+  });
+
+  it('should accept the keyword case-insensitively and tolerate whitespace', () => {
+    expect(parse('ifblank(a, 0)')).toEqual({
+      type: 'ifblank',
+      value: { type: 'field', path: 'a' },
+      fallback: { type: 'number', value: 0 },
+    });
+    expect(parse('IFBLANK (a, 0)')).toEqual({
+      type: 'ifblank',
+      value: { type: 'field', path: 'a' },
+      fallback: { type: 'number', value: 0 },
+    });
+  });
+
+  it('should reject IFBLANK with one or three arguments', () => {
+    expect(() => parse('IFBLANK(a)')).toThrowError(
+      /IFBLANK requires exactly 2 arguments/,
+    );
+    expect(() => parse('IFBLANK(a, b, c)')).toThrowError(
+      /IFBLANK requires exactly 2 arguments/,
+    );
+  });
+
+  it('should reject a bare "ifblank" not followed by parentheses', () => {
+    expect(() => parse('ifblank + 1')).toThrowError(/"IFBLANK" is a reserved word/);
+  });
+
+  it('should keep a dotted path starting with "ifblank" as a plain field', () => {
+    expect(parse('ifblank.y')).toEqual({ type: 'field', path: 'ifblank.y' });
+    expect(parse(`[company:${UUID}:ifblank]`)).toEqual({
+      type: 'crossref',
+      ref: { object: 'company', recordId: UUID, fieldPath: 'ifblank' },
+    });
+  });
+
+  it('should reject a comparison or string literal inside an IFBLANK argument (value context)', () => {
+    expect(() => parse('IFBLANK(a > b, 0)')).toThrowError(
+      /only allowed in the condition/,
+    );
+    expect(() => parse('IFBLANK("x", 0)')).toThrowError(
+      /String literals are only allowed/,
+    );
+  });
+});
+
 describe('parser comparison confinement (transient comparisons)', () => {
   it('should reject a comparison at the top level when no IF wraps it', () => {
     expect(() => parse('a > b')).toThrowError(/only allowed in the condition/);

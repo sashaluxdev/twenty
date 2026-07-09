@@ -133,6 +133,34 @@ describe('dependency extraction', () => {
       { object: 'company', recordId: UUID, field: 'revenue', fieldPath: 'revenue' },
     ]);
   });
+
+  it('should collect dependencies through AND/OR/NOT combinators (ADR 0017)', () => {
+    const deps = extractDependencies(
+      'IF(AND(OR(a > 1, b > 2), NOT(c = 0)), 1, 0)',
+    );
+    expect(deps.sameRecordFields).toEqual(['a', 'b', 'c']);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
+
+  it('should collect the ISBLANK operand as a real dependency (ADR 0017)', () => {
+    const deps = extractDependencies('IF(ISBLANK(email), 1, other)');
+    expect(deps.sameRecordFields).toEqual(['email', 'other']);
+  });
+
+  it('should collect both IFBLANK arguments as dependencies (ADR 0017)', () => {
+    const deps = extractDependencies('IFBLANK(a, b)');
+    expect(deps.sameRecordFields).toEqual(['a', 'b']);
+  });
+
+  it('should collect cross-record refs nested inside combinators (ADR 0017)', () => {
+    const deps = extractDependencies(
+      `IF(AND(ISBLANK([company:${UUID}:name]), a > 1), 1, 0)`,
+    );
+    expect(deps.sameRecordFields).toEqual(['a']);
+    expect(deps.crossRecordRefs).toEqual([
+      { object: 'company', recordId: UUID, field: 'name', fieldPath: 'name' },
+    ]);
+  });
 });
 
 describe('usesToday', () => {
@@ -179,6 +207,21 @@ describe('usesToday', () => {
   it('returns false for a SUM with no TODAY()', () => {
     expect(usesToday(parse('SUM(a, b, 3)'))).toBe(false);
   });
+
+  it('detects TODAY() inside a combinator argument (ADR 0017)', () => {
+    expect(usesToday(parse('IF(AND(a > 1, b > TODAY()), 1, 0)'))).toBe(true);
+    expect(usesToday(parse('IF(NOT(a > TODAY()), 1, 0)'))).toBe(true);
+    expect(usesToday(parse('IF(ISBLANK(a - TODAY()), 1, 0)'))).toBe(true);
+  });
+
+  it('detects TODAY() inside an IFBLANK argument (ADR 0017)', () => {
+    expect(usesToday(parse('IFBLANK(a, TODAY())'))).toBe(true);
+  });
+
+  it('returns false for combinators with no TODAY() (ADR 0017)', () => {
+    expect(usesToday(parse('IF(AND(a > 1, b > 2), 1, 0)'))).toBe(false);
+    expect(usesToday(parse('IFBLANK(a, 0)'))).toBe(false);
+  });
 });
 
 describe('collectStringComparisonRefs', () => {
@@ -215,6 +258,19 @@ describe('collectStringComparisonRefs', () => {
       parse('IF(stage = "QUALIFIED", branchA, branchB)'),
     );
     expect(refs.sameRecordPaths).toEqual(['stage']);
+  });
+
+  it('reaches a string comparison nested inside an AND/OR/NOT combinator (ADR 0017)', () => {
+    // Save-time field-kind validation must see the string operand even when the
+    // comparison is nested inside a boolean combinator.
+    const refs = collectStringComparisonRefs(
+      parse('IF(AND(stage = "won", amount > 1000), 1, 0)'),
+    );
+    expect(refs.sameRecordPaths).toEqual(['stage']);
+    const orRefs = collectStringComparisonRefs(
+      parse('IF(OR(NOT(stage = "lost"), region = "EU"), 1, 0)'),
+    );
+    expect(orRefs.sameRecordPaths).toEqual(['region', 'stage']);
   });
 
   it('finds a string comparison nested inside an operand sub-IF', () => {

@@ -98,6 +98,28 @@ const walk = (
         walk(arg, sameRecordFields, crossRecordRefs);
       }
       return;
+
+    // ADR 0017 combinators: union every argument. AND/OR over all args; NOT and
+    // ISBLANK over their single operand. ISBLANK's operand IS a real dependency
+    // — recompute must fire when the observed field flips between blank and set.
+    case 'and':
+    case 'or':
+      for (const arg of node.args) {
+        walk(arg, sameRecordFields, crossRecordRefs);
+      }
+      return;
+
+    case 'not':
+    case 'isblank':
+      walk(node.operand, sameRecordFields, crossRecordRefs);
+      return;
+
+    // IFBLANK depends on both the value and its fallback (either can determine
+    // the result), mirroring IF's eager extraction across branches.
+    case 'ifblank':
+      walk(node.value, sameRecordFields, crossRecordRefs);
+      walk(node.fallback, sameRecordFields, crossRecordRefs);
+      return;
   }
 };
 
@@ -143,6 +165,18 @@ export const usesToday = (node: AstNode): boolean => {
     // the whole formula clock-dependent for staleness detection (ADR 0015).
     case 'sum':
       return node.args.some((arg) => usesToday(arg));
+
+    // ADR 0017: OR across every argument, same eager bias as SUM/IF.
+    case 'and':
+    case 'or':
+      return node.args.some((arg) => usesToday(arg));
+
+    case 'not':
+    case 'isblank':
+      return usesToday(node.operand);
+
+    case 'ifblank':
+      return usesToday(node.value) || usesToday(node.fallback);
   }
 };
 
@@ -226,6 +260,27 @@ const walkStringComparisons = (
       for (const arg of node.args) {
         walkStringComparisons(arg, sameRecordPaths, crossRefs);
       }
+      return;
+
+    // ADR 0017: AND/OR/NOT arguments ARE conditions and can directly be string
+    // comparisons (`AND(stage = "won", ...)`), so recursing here is what lets
+    // save-time field-kind validation reach them. ISBLANK/IFBLANK operands are
+    // value context (a nested IF could still carry a string comparison).
+    case 'and':
+    case 'or':
+      for (const arg of node.args) {
+        walkStringComparisons(arg, sameRecordPaths, crossRefs);
+      }
+      return;
+
+    case 'not':
+    case 'isblank':
+      walkStringComparisons(node.operand, sameRecordPaths, crossRefs);
+      return;
+
+    case 'ifblank':
+      walkStringComparisons(node.value, sameRecordPaths, crossRefs);
+      walkStringComparisons(node.fallback, sameRecordPaths, crossRefs);
       return;
   }
 };

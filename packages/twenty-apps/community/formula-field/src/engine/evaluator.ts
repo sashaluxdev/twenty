@@ -24,6 +24,14 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 //     nonzero = true). A null condition — including null in either comparison
 //     operand — makes the whole IF result null, consistent with the app's
 //     null-propagation policy (a deliberate deviation from Excel's blank=0).
+//   - AND/OR/NOT/ISBLANK (ADR 0017) are condition-only combinators handled in
+//     evaluateConditionTruth. AND/OR/NOT use STRICT null propagation with NO
+//     short-circuit: every argument is evaluated (errors always fire) and any
+//     null argument nulls the combinator. ISBLANK is the one exception — it
+//     OBSERVES blankness (raw-first for a bare field/crossref) and returns a
+//     boolean, never null, for a successfully evaluated argument.
+//   - IFBLANK(value, fallback) (ADR 0017) is a value node: returns value unless
+//     null, else fallback; both are always evaluated (SUM precedent).
 
 export type VariableReference =
   | { kind: 'same'; path: string }
@@ -130,6 +138,84 @@ const evaluateConditionTruth = (
       case '!=':
         return left !== right;
     }
+  }
+
+  // ADR 0017 combinators: strict null propagation, NO short-circuit. Every
+  // argument is evaluated (so an error in any of them always fires, matching
+  // SUM); if ANY argument's truth is null the combinator is null (which nulls
+  // the enclosing IF). Otherwise standard boolean logic. Deliberately not
+  // Kleene: AND(false, null) and OR(true, null) both yield null.
+  if (node.type === 'and' || node.type === 'or') {
+    let anyNull = false;
+    let allTrue = true;
+    let anyTrue = false;
+    for (const arg of node.args) {
+      const truth = evaluateConditionTruth(
+        arg,
+        resolve,
+        depth + 1,
+        maxDepth,
+        todayEpochDay,
+        resolveRaw,
+      );
+      if (truth === null) {
+        anyNull = true;
+      } else if (truth) {
+        anyTrue = true;
+      } else {
+        allTrue = false;
+      }
+    }
+    if (anyNull) {
+      return null;
+    }
+    return node.type === 'and' ? allTrue : anyTrue;
+  }
+
+  if (node.type === 'not') {
+    const truth = evaluateConditionTruth(
+      node.operand,
+      resolve,
+      depth + 1,
+      maxDepth,
+      todayEpochDay,
+      resolveRaw,
+    );
+    return truth === null ? null : !truth;
+  }
+
+  // ISBLANK observes blankness instead of propagating null: it never RETURNS
+  // null for a successfully evaluated argument (a typo'd field still throws
+  // UNKNOWN_VARIABLE). Raw-first for a bare field/crossref operand — consult
+  // resolveRaw (a string means blank iff trim() === '', so ISBLANK(email) works
+  // on TEXT/SELECT day one); a non-string raw (incl. a missing cross record)
+  // falls back to the numeric resolver, where null is blank and a number is not.
+  // A compound operand is evaluated in the numeric domain; a null there (from
+  // internal null propagation) counts as blank.
+  if (node.type === 'isblank') {
+    const operand = node.operand;
+    if (
+      resolveRaw !== undefined &&
+      (operand.type === 'field' || operand.type === 'crossref')
+    ) {
+      const reference: VariableReference =
+        operand.type === 'field'
+          ? { kind: 'same', path: operand.path }
+          : { kind: 'cross', ref: operand.ref };
+      const raw = resolveRaw(reference);
+      if (typeof raw === 'string') {
+        return raw.trim() === '';
+      }
+    }
+    const value = evaluateNode(
+      operand,
+      resolve,
+      depth + 1,
+      maxDepth,
+      todayEpochDay,
+      resolveRaw,
+    );
+    return value === null;
   }
 
   const value = evaluateNode(node, resolve, depth, maxDepth, todayEpochDay, resolveRaw);
@@ -305,6 +391,28 @@ const evaluateNode = (
 
       return total;
     }
+
+    // ADR 0017: return `value` unless it is null, else `fallback`. BOTH are
+    // always evaluated (SUM precedent — an error in the fallback fires even when
+    // the value is non-null). Purely numeric: a text operand goes through the
+    // numeric resolver like any other value reference.
+    case 'ifblank': {
+      const value = evaluateNode(node.value, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+      const fallback = evaluateNode(node.fallback, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+      return value !== null ? value : fallback;
+    }
+
+    // ADR 0017: AND/OR/NOT/ISBLANK are transient condition nodes handled inside
+    // evaluateConditionTruth (IF's condition slot). Reaching a value slot is
+    // impossible via parse() — guard for hand-built ASTs, mirroring 'comparison'.
+    case 'and':
+    case 'or':
+    case 'not':
+    case 'isblank':
+      throw new FormulaError(
+        'PARSE_ERROR',
+        `${node.type.toUpperCase()} is only allowed inside the condition of IF(condition, then, else)`,
+      );
 
     case 'string':
       // Unreachable via parse(): the parser confines string literals to = / !=
