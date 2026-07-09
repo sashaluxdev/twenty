@@ -17,6 +17,7 @@ import {
   findVariationConfigByTargetObject,
   updateVariationConfigBookkeeping,
 } from 'src/logic-functions/lib/variation-config-repository';
+import { checkRelationFieldHealth } from 'src/logic-functions/lib/variation-config-validation';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import { withRetry } from 'src/logic-functions/lib/with-retry';
 
@@ -744,6 +745,35 @@ export const sweepVariationConfig = async (
   const relationFieldName = config.relationFieldName ?? 'primaryRecord';
   const pluralName = pluralize(targetObject);
   const pointerField = `${relationFieldName}Id`;
+
+  // R3 honest health signal: a relation field deactivated/deleted OUTSIDE the
+  // app (Settings) makes every sync path throw raw GraphQL while the config
+  // still read as healthy. Check it up front (fresh-metadata re-check inside,
+  // so a stale cache cannot false-alarm): dead -> status OFFLINE with a
+  // human-readable reason, skip the paging entirely. The config deliberately
+  // STAYS enabled so the next sweep self-heals the moment the field is back —
+  // save-time validation is where a human-present hard disable happens.
+  const relationFieldHealth = await checkRelationFieldHealth(
+    targetObject,
+    relationFieldName,
+  );
+  if (!relationFieldHealth.ok) {
+    await updateVariationConfigBookkeeping(client, config.id, {
+      lastSyncedAt: new Date().toISOString(),
+      lastError: relationFieldHealth.error,
+      status: 'OFFLINE',
+      statusReason: relationFieldHealth.error,
+    });
+    return {
+      configId: config.id,
+      evaluated: 0,
+      written: 0,
+      errored: 1,
+      frozen: 0,
+      skippedNestedPrimary: 0,
+    };
+  }
+
   let syncable = await computeSyncableFields(client, targetObject, relationFieldName);
 
   let evaluated = 0;
@@ -836,6 +866,9 @@ export const sweepVariationConfig = async (
   await updateVariationConfigBookkeeping(client, config.id, {
     lastSyncedAt: new Date().toISOString(),
     lastError: firstError,
+    // A completed sweep proves the config is operational: clear an OFFLINE
+    // status a previous unhealthy sweep may have set (recovery convention).
+    status: '',
     statusReason,
   });
 
@@ -849,6 +882,28 @@ export type VariationRecordUpdatedArgs = {
   after: Record<string, unknown> | null | undefined;
   updatedFields: string[] | undefined;
   actorWorkspaceMemberId?: string | null;
+};
+
+// R3: one BOUNDED bookkeeping attempt persisting an event-path failure to
+// config.lastError (the sweep used to be the only path doing this, leaving a
+// failing live edit silent for up to an hour). Write-avoidant: no write when
+// lastError already says exactly this, so a repeating failure cannot storm
+// the config with writes (each write re-fires the config trigger, even though
+// the bookkeeping guard swallows it there).
+const recordEventPathError = async (
+  client: FormulaClient,
+  config: VariationConfigRecord,
+  error: string,
+): Promise<void> => {
+  if ((config.lastError ?? '') === error) {
+    return;
+  }
+  try {
+    await updateVariationConfigBookkeeping(client, config.id, { lastError: error });
+  } catch {
+    // Swallowed: surfacing is best-effort — a failing bookkeeping write must
+    // neither mask the original sync failure nor add a retry loop of its own.
+  }
 };
 
 // Entry point for the *.updated wildcard trigger. Decides whether the changed
@@ -867,7 +922,10 @@ export const handleVariationRecordUpdated = async ({
 }: VariationRecordUpdatedArgs): Promise<{
   role: 'none' | 'primary' | 'variation';
   outcomes: SyncOutcome[];
+  error?: string;
 }> => {
+  // Outside the guarded region below: with no config there is nowhere to
+  // record a failure anyway — a config-lookup throw propagates as before.
   const config = await findVariationConfigByTargetObject(client, objectName);
   if (!config || !config.enabled) {
     return { role: 'none', outcomes: [] };
@@ -876,33 +934,49 @@ export const handleVariationRecordUpdated = async ({
   const relationFieldName = config.relationFieldName ?? 'primaryRecord';
   const pointerField = `${relationFieldName}Id`;
 
-  const current = await fetchRecordById(client, objectName, recordId, [pointerField], {});
-  const primaryRecordId = current
-    ? ((navigatePath(current, pointerField) as string | null | undefined) ?? null)
-    : null;
+  try {
+    const current = await fetchRecordById(client, objectName, recordId, [pointerField], {});
+    const primaryRecordId = current
+      ? ((navigatePath(current, pointerField) as string | null | undefined) ?? null)
+      : null;
 
-  if (!primaryRecordId) {
-    const outcomes = await syncPrimaryUpdateToVariations({
+    if (!primaryRecordId) {
+      const outcomes = await syncPrimaryUpdateToVariations({
+        client,
+        targetObject: objectName,
+        primaryRecordId: recordId,
+        updatedFields,
+        relationFieldName,
+      });
+      // Per-variation failures are caught inside syncOneVariation and come
+      // back as outcome errors, not throws — persist the first one (same
+      // first-error convention as the sweep).
+      const firstOutcomeError = outcomes.find((outcome) => outcome.error)?.error;
+      if (firstOutcomeError) {
+        await recordEventPathError(client, config, firstOutcomeError);
+      }
+      return { role: 'primary', outcomes };
+    }
+
+    await detectVariationDivergence({
       client,
       targetObject: objectName,
-      primaryRecordId: recordId,
+      variationRecordId: recordId,
+      primaryRecordId,
+      after,
       updatedFields,
+      actorWorkspaceMemberId,
       relationFieldName,
     });
-    return { role: 'primary', outcomes };
+    return { role: 'variation', outcomes: [] };
+  } catch (error) {
+    // A thrown failure (e.g. the pointer read against a deleted relation
+    // field) used to hard-error the whole logic-function invocation — visible
+    // only in server logs, invisible on the config. Record it and return
+    // gracefully instead.
+    await recordEventPathError(client, config, String(error));
+    return { role: 'none', outcomes: [], error: String(error) };
   }
-
-  await detectVariationDivergence({
-    client,
-    targetObject: objectName,
-    variationRecordId: recordId,
-    primaryRecordId,
-    after,
-    updatedFields,
-    actorWorkspaceMemberId,
-    relationFieldName,
-  });
-  return { role: 'variation', outcomes: [] };
 };
 
 export type VariationRecordCreatedArgs = {

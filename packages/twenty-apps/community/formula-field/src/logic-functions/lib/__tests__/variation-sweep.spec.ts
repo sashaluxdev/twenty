@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { __setMetadataCacheInvalidationListenerForTests } from 'src/logic-functions/lib/metadata-objects';
 import { sweepVariationConfig } from 'src/logic-functions/lib/variation-sync';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
@@ -146,5 +147,102 @@ describe('sweepVariationConfig', () => {
     expect(outcome.skippedNestedPrimary).toBe(1);
     expect(client.get('company', 'v1')!.employees).toBe(10);
     expect(client.get('variationConfig', 'vc1')!.statusReason).toContain('1');
+  });
+
+  // R3: a dead/missing relation field must give the config an HONEST health
+  // signal (status/statusReason) instead of an enabled config whose every
+  // sync path throws raw GraphQL.
+  describe('relation-field health signal (R3)', () => {
+    afterEach(() => {
+      __setMetadataCacheInvalidationListenerForTests(null);
+    });
+
+    const objectsWithRelationField = (isActive: boolean) => [
+      {
+        id: 'obj-company',
+        nameSingular: 'company',
+        labelIdentifierFieldMetadataId: 'field-name',
+        fields: [
+          { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
+          { id: 'field-employees', name: 'employees', type: 'NUMBER', isActive: true, isSystem: false },
+          { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive, isSystem: false },
+        ],
+      },
+    ];
+
+    it('marks the config OFFLINE with a reason when the relation field is dead, without paging records', async () => {
+      const client = new FakeClient();
+      client.setObjectsWithFields(objectsWithRelationField(false));
+      client.seed('company', [
+        { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },
+        { id: 'v1', name: 'Acme (variation)', employees: 10, primaryRecordId: 'p1' },
+      ]);
+      client.seed('variationConfig', [config()]);
+
+      const outcome = await sweepVariationConfig(client, config());
+
+      expect(outcome.evaluated).toBe(0);
+      expect(outcome.errored).toBe(1);
+      const stored = client.get('variationConfig', 'vc1')!;
+      expect(stored.status).toBe('OFFLINE');
+      expect(String(stored.statusReason)).toContain('primaryRecord');
+      expect(String(stored.lastError)).toContain('primaryRecord');
+      // Honest, not destructive: the config stays enabled so it self-heals
+      // the moment the field comes back.
+      expect(stored.enabled).toBe(true);
+      expect(stored.lastSyncedAt).toBeDefined();
+      // No record writes happened.
+      expect(client.writes.filter((write) => write.startsWith('company:'))).toEqual([]);
+    });
+
+    it('clears status/statusReason/lastError on the next healthy sweep (recovery)', async () => {
+      const client = new FakeClient();
+      client.setObjectsWithFields(objectsWithRelationField(true));
+      client.seed('company', [
+        { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },
+        { id: 'v1', name: 'Acme (variation)', employees: 50, primaryRecordId: 'p1' },
+      ]);
+      client.seed('variationConfig', [
+        config({
+          status: 'OFFLINE',
+          statusReason: 'Relation field "primaryRecord" is missing',
+          lastError: 'Relation field "primaryRecord" is missing',
+        }),
+      ]);
+
+      await sweepVariationConfig(client, config());
+
+      const stored = client.get('variationConfig', 'vc1')!;
+      expect(stored.status).toBe('');
+      expect(stored.statusReason).toBe('');
+      expect(stored.lastError).toBe('');
+    });
+
+    it('does not falsely go OFFLINE off a stale cache: re-checks against fresh metadata first', async () => {
+      const client = new FakeClient();
+      // Stale cache: relation field missing; fresh metadata: present.
+      client.setObjectsWithFields([
+        {
+          ...objectsWithRelationField(true)[0],
+          fields: objectsWithRelationField(true)[0].fields.filter(
+            (field) => field.name !== 'primaryRecord',
+          ),
+        },
+      ]);
+      __setMetadataCacheInvalidationListenerForTests(() => {
+        client.setObjectsWithFields(objectsWithRelationField(true));
+      });
+      client.seed('company', [
+        { id: 'p1', name: 'Acme', employees: 50, primaryRecordId: null },
+        { id: 'v1', name: 'Acme (variation)', employees: 10, primaryRecordId: 'p1' },
+      ]);
+      client.seed('variationConfig', [config()]);
+
+      const outcome = await sweepVariationConfig(client, config());
+
+      expect(outcome.written).toBe(1);
+      expect(client.get('variationConfig', 'vc1')!.status).toBe('');
+      expect(client.get('company', 'v1')!.employees).toBe(50);
+    });
   });
 });

@@ -68,6 +68,10 @@ export class FakeClient implements FormulaClient {
     this.queryFailures.set(key, error);
   }
 
+  clearQueryFailuresFor(key: string): void {
+    this.queryFailures.delete(key);
+  }
+
   failMutationsFor(key: string, error: unknown): void {
     this.mutationFailures.set(key, error);
   }

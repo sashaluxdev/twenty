@@ -1,4 +1,8 @@
-import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
+import {
+  invalidateMetadataCache,
+  loadAllObjectsWithFields,
+  type MetadataObjectInfo,
+} from 'src/logic-functions/lib/metadata-objects';
 import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
 import { isSafeGraphqlIdentifier } from 'src/logic-functions/lib/identifier';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
@@ -12,15 +16,53 @@ import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-ty
 //   - name equals targetObject (the deterministic one-config-per-object key)
 //   - relationFieldName present and a safe identifier
 //   - no OTHER config (different id) already covers this object
+//   - the relation field exists, is active, and is a RELATION field (R3 —
+//     previously skipped, which let a config with a dead relation field read
+//     as healthy while every sync path threw raw GraphQL)
 //   - the object has at least one syncable field
-// Deliberately NOT checked here: whether the relation field exists yet — a
-// fresh wizard draft is validated before field creation; the wizard's own
-// create path guarantees the field, and a broken API-created config surfaces
-// through the sweep's lastError instead.
+// The wizard-draft flow stays safe with the relation-field check: a draft has
+// an empty relationFieldName (rejected earlier, exactly as before), and the
+// finalize event fires AFTER the wizard created the field — the check below
+// forces a fresh metadata pull before declaring the field missing, so the
+// ≤60s cache cannot fail a just-finalized config.
 
 export type ConfigValidationResult =
   | { valid: true }
   | { valid: false; error: string };
+
+export type RelationFieldHealth = { ok: true } | { ok: false; error: string };
+
+// Shared by save-time validation and the sweep's health signal: is the
+// config's relation field live? Trust the cached metadata when it says yes;
+// before declaring the field dead, invalidate and re-pull once (bounded) so a
+// stale cache can neither fail a field created seconds ago (wizard finalize)
+// nor pass a field deleted seconds ago.
+export const checkRelationFieldHealth = async (
+  targetObject: string,
+  relationFieldName: string,
+): Promise<RelationFieldHealth> => {
+  const fieldIsLive = (objects: MetadataObjectInfo[]): boolean => {
+    const object = objects.find(
+      (candidate) => candidate.nameSingular === targetObject,
+    );
+    const field = object?.fields.find(
+      (candidate) => candidate.name === relationFieldName,
+    );
+    return field !== undefined && field.isActive && field.type === 'RELATION';
+  };
+
+  if (fieldIsLive(await loadAllObjectsWithFields())) {
+    return { ok: true };
+  }
+  invalidateMetadataCache();
+  if (fieldIsLive(await loadAllObjectsWithFields())) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    error: `Relation field "${relationFieldName}" is missing, inactive, or not a relation field on "${targetObject}"`,
+  };
+};
 
 export const validateVariationConfig = async (
   client: FormulaClient,
@@ -70,6 +112,13 @@ export const validateVariationConfig = async (
       valid: false,
       error: `Object "${targetObject}" does not exist`,
     };
+  }
+  const relationFieldHealth = await checkRelationFieldHealth(
+    targetObject,
+    relationFieldName,
+  );
+  if (!relationFieldHealth.ok) {
+    return { valid: false, error: relationFieldHealth.error };
   }
   const syncable = await computeSyncableFields(
     client,
