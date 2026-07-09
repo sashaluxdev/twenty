@@ -456,5 +456,12 @@ export const resyncDivergedField = async (
   // override must be off before the copy. If the sync then errors, the override
   // stays deactivated and the hourly sweep converges the field — acceptable.
   await deactivateOverride(client, targetObject, field.name, variationRecordId);
-  return syncOneVariation(client, targetObject, primary, variationRecordId, [field]);
+  return syncOneVariation(
+    client,
+    targetObject,
+    primary,
+    variationRecordId,
+    [field],
+    relationFieldName,
+  );
 };

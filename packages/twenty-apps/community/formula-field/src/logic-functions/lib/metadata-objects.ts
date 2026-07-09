@@ -103,6 +103,30 @@ export const __clearMetadataCacheForTests = (): void => {
   objectsCacheByWorkspace.clear();
 };
 
+// Test-only: lets a unit test model "the world changed and the next load sees
+// it" — the fake-objects seam bypasses the TTL cache entirely, so without this
+// hook a test could never make invalidateMetadataCache observable. Production
+// code never registers a listener.
+let invalidationListenerForTests: (() => void) | null = null;
+export const __setMetadataCacheInvalidationListenerForTests = (
+  listener: (() => void) | null,
+): void => {
+  invalidationListenerForTests = listener;
+};
+
+// Production invalidation seam (poison-window remedy R1): a sync read/write
+// that fails against the LIVE schema while this cache still lists a
+// deactivated/deleted/renamed field must be able to force the next
+// loadAllObjectsWithFields to re-pull reality instead of waiting out the 60s
+// TTL. Scoped to the current workspace's entry — other workspaces' caches are
+// not at fault. The fieldKinds cache in dynamic-client.ts is deliberately NOT
+// invalidated here: variation sync builds its sub-selections from
+// SyncableFieldInfo.kind (this cache), never from client.fieldKinds.
+export const invalidateMetadataCache = (): void => {
+  objectsCacheByWorkspace.delete(workspaceCacheKey());
+  invalidationListenerForTests?.();
+};
+
 export const loadAllObjectsWithFields = async (): Promise<
   MetadataObjectInfo[]
 > => {

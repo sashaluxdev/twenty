@@ -1,5 +1,6 @@
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
+import { invalidateMetadataCache } from 'src/logic-functions/lib/metadata-objects';
 import { selectionEntryForMirrorKind } from 'src/logic-functions/lib/mirror-kinds';
 import { navigatePath } from 'src/logic-functions/lib/coercion';
 import {
@@ -115,76 +116,124 @@ export const loadVariationRecordIds = async (
   return ids;
 };
 
+// R1 poison-window remedy, shared by every sync path: the syncable set is
+// derived from a ≤60s-stale metadata cache while reads/writes hit the LIVE
+// schema, so for up to a minute after a field is deactivated/deleted/renamed
+// every selection naming the dead field throws — and because sync batches all
+// fields, one dead field used to poison the whole variation. On a failure we
+// invalidate the cache and re-derive ONCE (never a loop), keeping only the
+// requested fields that survive with an UNCHANGED kind — a field that changed
+// kind is dropped this round because the caller's primary snapshot was read
+// with the old kind's sub-selection (writing that shape to the new kind would
+// corrupt); a field that newly JOINED the set is deliberately not added, since
+// the snapshot has no value for it (writing null would be data loss) — the
+// next sweep backfills it, the same ≤1h convention as a freshly-added field.
+const refreshFieldsAfterSyncFailure = async (
+  client: FormulaClient,
+  targetObject: string,
+  relationFieldName: string,
+  currentFields: SyncableFieldInfo[],
+): Promise<SyncableFieldInfo[]> => {
+  invalidateMetadataCache();
+  try {
+    const fresh = await computeSyncableFields(client, targetObject, relationFieldName);
+    const freshKindByName = new Map(fresh.map((field) => [field.name, field.kind]));
+    return currentFields.filter(
+      (field) => freshKindByName.get(field.name) === field.kind,
+    );
+  } catch {
+    // Metadata reload failed -> keep the original set; the retry stays bounded
+    // either way.
+    return currentFields;
+  }
+};
+
+// The read -> diff -> write core of one sync attempt for one variation.
+// Throws on a read/write failure so syncOneVariation can drive the
+// poison-window retry/degrade ladder around it.
+const syncVariationFieldsBatch = async (
+  client: FormulaClient,
+  targetObject: string,
+  primaryRecord: Record<string, unknown>,
+  variationId: string,
+  fieldsToSync: SyncableFieldInfo[],
+): Promise<{ found: boolean; changedFields: string[] }> => {
+  const variationRecord = await fetchRecordById(
+    client,
+    targetObject,
+    variationId,
+    fieldsToSync.map((field) => field.name),
+    selectionOverridesFor(fieldsToSync),
+  );
+  if (!variationRecord) {
+    return { found: false, changedFields: [] };
+  }
+
+  const data: Record<string, unknown> = {};
+  const changedFieldNames: string[] = [];
+  for (const field of fieldsToSync) {
+    const primaryValue = navigatePath(primaryRecord, field.name) ?? null;
+    const variationValue = navigatePath(variationRecord, field.name) ?? null;
+    if (!deepJsonEqual(primaryValue, variationValue)) {
+      data[field.name] = primaryValue;
+      changedFieldNames.push(field.name);
+    }
+  }
+
+  if (changedFieldNames.length === 0) {
+    return { found: true, changedFields: [] };
+  }
+
+  const mutationName = `update${capitalize(targetObject)}`;
+  await withRetry(() =>
+    client.mutation({
+      [mutationName]: { __args: { id: variationId, data }, id: true },
+    }),
+  );
+
+  return { found: true, changedFields: changedFieldNames };
+};
+
+const NOT_FOUND_ERROR = 'Variation record not found';
+
+const outcomeFromBatch = (
+  variationId: string,
+  batch: { found: boolean; changedFields: string[] },
+): SyncOutcome => ({
+  variationRecordId: variationId,
+  changed: batch.changedFields.length > 0,
+  changedFields: batch.changedFields,
+  error: batch.found ? null : NOT_FOUND_ERROR,
+});
+
 // Copies `fieldsToConsider` from `primaryRecord` onto one variation: skips
 // fields with an active override, compares the rest with deepJsonEqual against
 // the variation's CURRENT stored value, and writes only the ones that actually
 // differ, batched into ONE update mutation (sync owns many columns at once,
-// unlike per-formula recompute's single-field write).
+// unlike per-formula recompute's single-field write). On a batch failure the
+// R1 ladder applies: refresh metadata + one batch retry, then per-field
+// degrade so a permanently-bad field can never block the other fields.
 export const syncOneVariation = async (
   client: FormulaClient,
   targetObject: string,
   primaryRecord: Record<string, unknown>,
   variationId: string,
   fieldsToConsider: SyncableFieldInfo[],
+  relationFieldName: string,
 ): Promise<SyncOutcome> => {
+  let fieldsToSync: SyncableFieldInfo[];
   try {
     const overriddenFields = await loadActiveOverrideFieldsForRecord(
       client,
       targetObject,
       variationId,
     );
-    const fieldsToSync = fieldsToConsider.filter(
+    fieldsToSync = fieldsToConsider.filter(
       (field) => !overriddenFields.has(field.name),
     );
-    if (fieldsToSync.length === 0) {
-      return { variationRecordId: variationId, changed: false, changedFields: [], error: null };
-    }
-
-    const variationRecord = await fetchRecordById(
-      client,
-      targetObject,
-      variationId,
-      fieldsToSync.map((field) => field.name),
-      selectionOverridesFor(fieldsToSync),
-    );
-    if (!variationRecord) {
-      return {
-        variationRecordId: variationId,
-        changed: false,
-        changedFields: [],
-        error: 'Variation record not found',
-      };
-    }
-
-    const data: Record<string, unknown> = {};
-    const changedFieldNames: string[] = [];
-    for (const field of fieldsToSync) {
-      const primaryValue = navigatePath(primaryRecord, field.name) ?? null;
-      const variationValue = navigatePath(variationRecord, field.name) ?? null;
-      if (!deepJsonEqual(primaryValue, variationValue)) {
-        data[field.name] = primaryValue;
-        changedFieldNames.push(field.name);
-      }
-    }
-
-    if (changedFieldNames.length === 0) {
-      return { variationRecordId: variationId, changed: false, changedFields: [], error: null };
-    }
-
-    const mutationName = `update${capitalize(targetObject)}`;
-    await withRetry(() =>
-      client.mutation({
-        [mutationName]: { __args: { id: variationId, data }, id: true },
-      }),
-    );
-
-    return {
-      variationRecordId: variationId,
-      changed: true,
-      changedFields: changedFieldNames,
-      error: null,
-    };
   } catch (error) {
+    // The overrides read never selects a syncable field, so a failure here is
+    // not a poison-window suspect — report it, do not retry.
     return {
       variationRecordId: variationId,
       changed: false,
@@ -192,68 +241,77 @@ export const syncOneVariation = async (
       error: String(error),
     };
   }
-};
-
-export type PrimaryUpdateSyncArgs = {
-  client: FormulaClient;
-  targetObject: string;
-  primaryRecordId: string;
-  // Which fields changed on the primary (from the event). undefined/empty is
-  // never expected here (the caller always has updatedFields for an update
-  // event) but is handled defensively as "nothing changed".
-  updatedFields: string[] | undefined;
-  relationFieldName: string;
-};
-
-// Primary updated: copy the changed syncable fields onto every one of its
-// variations. Scoped to this primary's OWN variations only (never "recompute
-// the whole object") — the m5 fan-out cliff this design explicitly avoids.
-export const syncPrimaryUpdateToVariations = async ({
-  client,
-  targetObject,
-  primaryRecordId,
-  updatedFields,
-  relationFieldName,
-}: PrimaryUpdateSyncArgs): Promise<SyncOutcome[]> => {
-  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
-  const syncableByName = new Map(syncable.map((field) => [field.name, field]));
-
-  const changedSyncableFields = (updatedFields ?? [])
-    .filter((field) => syncableByName.has(field))
-    .map((field) => syncableByName.get(field)!);
-
-  if (changedSyncableFields.length === 0) {
-    return [];
+  if (fieldsToSync.length === 0) {
+    return { variationRecordId: variationId, changed: false, changedFields: [], error: null };
   }
 
-  // Fresh, kind-aware fetch of the primary for exactly the changed fields —
-  // never trust the event's `after` payload for composite kinds (see Global
-  // Constraints).
-  const primary = await fetchRecordById(
-    client,
-    targetObject,
-    primaryRecordId,
-    changedSyncableFields.map((field) => field.name),
-    selectionOverridesFor(changedSyncableFields),
-  );
-  if (!primary) {
-    return [];
-  }
-
-  const variationIds = await loadVariationRecordIds(
-    client,
-    targetObject,
-    relationFieldName,
-    primaryRecordId,
-  );
-
-  const outcomes: SyncOutcome[] = [];
-  for (const variationId of variationIds) {
-    outcomes.push(
-      await syncOneVariation(client, targetObject, primary, variationId, changedSyncableFields),
+  try {
+    const batch = await syncVariationFieldsBatch(
+      client,
+      targetObject,
+      primaryRecord,
+      variationId,
+      fieldsToSync,
     );
+    return outcomeFromBatch(variationId, batch);
+  } catch {
+    const refreshedFields = await refreshFieldsAfterSyncFailure(
+      client,
+      targetObject,
+      relationFieldName,
+      fieldsToSync,
+    );
+    if (refreshedFields.length === 0) {
+      // Every considered field left the syncable set -> nothing to sync.
+      return { variationRecordId: variationId, changed: false, changedFields: [], error: null };
+    }
+
+    try {
+      const batch = await syncVariationFieldsBatch(
+        client,
+        targetObject,
+        primaryRecord,
+        variationId,
+        refreshedFields,
+      );
+      return outcomeFromBatch(variationId, batch);
+    } catch {
+      // Fresh metadata still disagrees with the live schema about some field.
+      // Degrade to per-field sync: each field pays its own read+write, so the
+      // bad one is isolated and reported while the rest still converge. Still
+      // bounded — one pass, no recursion.
+      const changedFields: string[] = [];
+      let firstError = '';
+      for (const field of refreshedFields) {
+        try {
+          const single = await syncVariationFieldsBatch(
+            client,
+            targetObject,
+            primaryRecord,
+            variationId,
+            [field],
+          );
+          if (!single.found) {
+            return {
+              variationRecordId: variationId,
+              changed: changedFields.length > 0,
+              changedFields,
+              error: NOT_FOUND_ERROR,
+            };
+          }
+          changedFields.push(...single.changedFields);
+        } catch (error) {
+          if (!firstError) firstError = String(error);
+        }
+      }
+      return {
+        variationRecordId: variationId,
+        changed: changedFields.length > 0,
+        changedFields,
+        error: firstError || null,
+      };
+    }
   }
-  return outcomes;
 };
 
 export type PrimaryFetchResult = {
@@ -318,6 +376,172 @@ export const fetchPrimaryRecordInclTrashed = async (
   return { record: node, frozen: false };
 };
 
+type ResilientPrimaryFetch = {
+  result: PrimaryFetchResult;
+  // Subset of the requested fields that was actually read — narrowed by the
+  // fresh-metadata retry and/or the per-field degrade, so callers sync exactly
+  // what the record snapshot really contains.
+  fields: SyncableFieldInfo[];
+  // First per-field read error from the degraded path (null when nothing was
+  // dropped): the honest trace of a field metadata lists but the live schema
+  // rejects, for the sweep to persist on lastError.
+  error: string | null;
+};
+
+// fetchPrimaryRecordInclTrashed wrapped in the R1 poison-window ladder: full
+// batch read, then invalidate + one batch retry against the fresh syncable
+// set, then per-field degrade — base row first (id/deletedAt/pointer always
+// exist), then one single-field read each, dropping only the fields the live
+// schema rejects. Bounded: at most 2 + 1 + N calls, never a loop. A base-read
+// failure (real outage, not a dead field) propagates to the caller's existing
+// error handling.
+const fetchPrimaryResilient = async (
+  client: FormulaClient,
+  targetObject: string,
+  primaryRecordId: string,
+  fields: SyncableFieldInfo[],
+  relationFieldName: string,
+): Promise<ResilientPrimaryFetch> => {
+  try {
+    const result = await fetchPrimaryRecordInclTrashed(
+      client,
+      targetObject,
+      primaryRecordId,
+      fields.map((field) => field.name),
+      selectionOverridesFor(fields),
+      relationFieldName,
+    );
+    return { result, fields, error: null };
+  } catch {
+    const refreshedFields = await refreshFieldsAfterSyncFailure(
+      client,
+      targetObject,
+      relationFieldName,
+      fields,
+    );
+    try {
+      const result = await fetchPrimaryRecordInclTrashed(
+        client,
+        targetObject,
+        primaryRecordId,
+        refreshedFields.map((field) => field.name),
+        selectionOverridesFor(refreshedFields),
+        relationFieldName,
+      );
+      return { result, fields: refreshedFields, error: null };
+    } catch {
+      const base = await fetchPrimaryRecordInclTrashed(
+        client,
+        targetObject,
+        primaryRecordId,
+        [],
+        {},
+        relationFieldName,
+      );
+      if (!base.record || base.frozen) {
+        return { result: base, fields: [], error: null };
+      }
+      const survivors: SyncableFieldInfo[] = [];
+      let firstError = '';
+      for (const field of refreshedFields) {
+        try {
+          const single = await fetchPrimaryRecordInclTrashed(
+            client,
+            targetObject,
+            primaryRecordId,
+            [field.name],
+            selectionOverridesFor([field]),
+            relationFieldName,
+          );
+          if (single.record) {
+            base.record[field.name] = single.record[field.name] ?? null;
+            survivors.push(field);
+          }
+        } catch (error) {
+          // Dead on the live schema -> dropped; everything else still syncs.
+          if (!firstError) firstError = String(error);
+        }
+      }
+      return { result: base, fields: survivors, error: firstError || null };
+    }
+  }
+};
+
+export type PrimaryUpdateSyncArgs = {
+  client: FormulaClient;
+  targetObject: string;
+  primaryRecordId: string;
+  // Which fields changed on the primary (from the event). undefined/empty is
+  // never expected here (the caller always has updatedFields for an update
+  // event) but is handled defensively as "nothing changed".
+  updatedFields: string[] | undefined;
+  relationFieldName: string;
+};
+
+// Primary updated: copy the changed syncable fields onto every one of its
+// variations. Scoped to this primary's OWN variations only (never "recompute
+// the whole object") — the m5 fan-out cliff this design explicitly avoids.
+export const syncPrimaryUpdateToVariations = async ({
+  client,
+  targetObject,
+  primaryRecordId,
+  updatedFields,
+  relationFieldName,
+}: PrimaryUpdateSyncArgs): Promise<SyncOutcome[]> => {
+  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
+  const syncableByName = new Map(syncable.map((field) => [field.name, field]));
+
+  const changedSyncableFields = (updatedFields ?? [])
+    .filter((field) => syncableByName.has(field))
+    .map((field) => syncableByName.get(field)!);
+
+  if (changedSyncableFields.length === 0) {
+    return [];
+  }
+
+  // Fresh, kind-aware fetch of the primary for exactly the changed fields —
+  // never trust the event's `after` payload for composite kinds (see Global
+  // Constraints). Resilient (R1): a poisoned selection refreshes metadata and
+  // narrows instead of killing the whole fan-out. The deletedAt-inclusive read
+  // reports a trashed primary as frozen — the same "nothing to fan out" skip
+  // the previous default-scope null read produced.
+  const {
+    result: { record: primary, frozen },
+    fields: liveFields,
+  } = await fetchPrimaryResilient(
+    client,
+    targetObject,
+    primaryRecordId,
+    changedSyncableFields,
+    relationFieldName,
+  );
+  if (frozen || !primary || liveFields.length === 0) {
+    return [];
+  }
+
+  const variationIds = await loadVariationRecordIds(
+    client,
+    targetObject,
+    relationFieldName,
+    primaryRecordId,
+  );
+
+  const outcomes: SyncOutcome[] = [];
+  for (const variationId of variationIds) {
+    outcomes.push(
+      await syncOneVariation(
+        client,
+        targetObject,
+        primary,
+        variationId,
+        liveFields,
+        relationFieldName,
+      ),
+    );
+  }
+  return outcomes;
+};
+
 export type NewVariationSyncArgs = {
   client: FormulaClient;
   targetObject: string;
@@ -341,12 +565,14 @@ export const syncNewVariationRecord = async ({
   const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
   const pointerField = `${relationFieldName}Id`;
 
-  const { record: primary, frozen } = await fetchPrimaryRecordInclTrashed(
+  const {
+    result: { record: primary, frozen },
+    fields: liveFields,
+  } = await fetchPrimaryResilient(
     client,
     targetObject,
     primaryRecordId,
-    syncable.map((field) => field.name),
-    selectionOverridesFor(syncable),
+    syncable,
     relationFieldName,
   );
 
@@ -374,7 +600,14 @@ export const syncNewVariationRecord = async ({
     };
   }
 
-  const outcome = await syncOneVariation(client, targetObject, primary, variationRecordId, syncable);
+  const outcome = await syncOneVariation(
+    client,
+    targetObject,
+    primary,
+    variationRecordId,
+    liveFields,
+    relationFieldName,
+  );
   return outcome;
 };
 
@@ -511,7 +744,7 @@ export const sweepVariationConfig = async (
   const relationFieldName = config.relationFieldName ?? 'primaryRecord';
   const pluralName = pluralize(targetObject);
   const pointerField = `${relationFieldName}Id`;
-  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
+  let syncable = await computeSyncableFields(client, targetObject, relationFieldName);
 
   let evaluated = 0;
   let written = 0;
@@ -548,14 +781,20 @@ export const sweepVariationConfig = async (
       evaluated += 1;
 
       try {
-        const { record: primary, frozen: isFrozen } = await fetchPrimaryRecordInclTrashed(
+        const {
+          result: { record: primary, frozen: isFrozen },
+          fields: liveFields,
+          error: droppedFieldsError,
+        } = await fetchPrimaryResilient(
           client,
           targetObject,
           primaryRecordId,
-          syncable.map((field) => field.name),
-          selectionOverridesFor(syncable),
+          syncable,
           relationFieldName,
         );
+        // A field metadata lists but the live schema rejects is dropped, not
+        // fatal — but it must not be silent: it is this sweep's lastError.
+        if (droppedFieldsError && !firstError) firstError = droppedFieldsError;
         if (isFrozen || !primary) {
           frozen += 1;
           continue;
@@ -564,7 +803,18 @@ export const sweepVariationConfig = async (
           skippedNestedPrimary += 1;
           continue;
         }
-        const outcome = await syncOneVariation(client, targetObject, primary, variationId, syncable);
+        // Narrow the set for the REST of this run once the resilient fetch
+        // dropped fields, so a big sweep pays the degrade ladder once, not
+        // once per record. Next run recomputes from (now-fresh) metadata.
+        if (liveFields.length < syncable.length) syncable = liveFields;
+        const outcome = await syncOneVariation(
+          client,
+          targetObject,
+          primary,
+          variationId,
+          liveFields,
+          relationFieldName,
+        );
         if (outcome.error) {
           errored += 1;
           if (!firstError) firstError = outcome.error;

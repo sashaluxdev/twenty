@@ -55,9 +55,47 @@ export class FakeClient implements FormulaClient {
   // that fails (e.g. a GraphQL-shaped error) and assert the caller propagates
   // it instead of masking the failure.
   private queryFailures = new Map<string, unknown>();
+  // Mutation key -> error to throw, so a test can simulate a failing write
+  // (e.g. a bookkeeping update) and assert the caller's containment.
+  private mutationFailures = new Map<string, unknown>();
+  // object -> field names the LIVE schema no longer has (deactivated/deleted/
+  // renamed server-side while stale metadata may still list them). Any read
+  // selecting one, or any write touching one, throws a GraphQL-shaped schema
+  // error — the poison-window failure mode (R1).
+  private deadServerFieldsByObject = new Map<string, Set<string>>();
 
   failQueriesFor(key: string, error: unknown): void {
     this.queryFailures.set(key, error);
+  }
+
+  failMutationsFor(key: string, error: unknown): void {
+    this.mutationFailures.set(key, error);
+  }
+
+  rejectFieldOnServer(object: string, fieldName: string): void {
+    const dead = this.deadServerFieldsByObject.get(object) ?? new Set<string>();
+    dead.add(fieldName);
+    this.deadServerFieldsByObject.set(object, dead);
+  }
+
+  restoreFieldOnServer(object: string, fieldName: string): void {
+    this.deadServerFieldsByObject.get(object)?.delete(fieldName);
+  }
+
+  private assertSelectedFieldsAlive(
+    object: string,
+    selected: Iterable<string>,
+  ): void {
+    const dead = this.deadServerFieldsByObject.get(object);
+    if (!dead || dead.size === 0) return;
+    for (const field of selected) {
+      if (field === '__args' || field === 'edges' || field === 'pageInfo') {
+        continue;
+      }
+      if (dead.has(field)) {
+        throw new Error(`Cannot query field "${field}" on type "${cap(object)}".`);
+      }
+    }
   }
 
   seed(object: string, records: Rec[]): void {
@@ -106,10 +144,15 @@ export class FakeClient implements FormulaClient {
       (obj) => pluralize(obj) === key,
     );
     if (singularForPlural && node.edges) {
+      this.assertSelectedFieldsAlive(
+        singularForPlural,
+        Object.keys(node.edges?.node ?? {}),
+      );
       return { [key]: this.connection(singularForPlural, node) };
     }
 
     // singular record read
+    this.assertSelectedFieldsAlive(key, Object.keys(node ?? {}));
     const filterId = node?.__args?.filter?.id?.eq;
     const record = filterId
       ? this.store.get(key)?.get(filterId) ?? null
@@ -272,7 +315,19 @@ export class FakeClient implements FormulaClient {
   async mutation(selection: any): Promise<any> {
     this.mutations += 1;
     const key = Object.keys(selection)[0];
+    if (this.mutationFailures.has(key)) {
+      throw this.mutationFailures.get(key);
+    }
     const node = selection[key];
+    // Dead-field guard for writes: update<Object>/create<Object> data touching
+    // a field the live schema dropped throws, like the real server.
+    if (key.startsWith('update') || key.startsWith('create')) {
+      const object = lowerFirst(key.replace(/^(update|create)/, ''));
+      const data = node?.__args?.data as Record<string, unknown> | undefined;
+      if (data) {
+        this.assertSelectedFieldsAlive(object, Object.keys(data));
+      }
+    }
 
     if (key === 'createFormulaDefinition') {
       const data = node.__args.data as Record<string, unknown>;
