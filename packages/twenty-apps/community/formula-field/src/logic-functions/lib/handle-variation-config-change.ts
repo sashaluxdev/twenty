@@ -1,5 +1,6 @@
 import { validateVariationConfig } from 'src/logic-functions/lib/variation-config-validation';
 import {
+  findVariationConfigById,
   loadAllEnabledVariationConfigs,
   updateVariationConfigBookkeeping,
 } from 'src/logic-functions/lib/variation-config-repository';
@@ -67,13 +68,32 @@ export const handleVariationConfigChange = async ({
   const result = await validateVariationConfig(client, after, existing);
 
   if (!result.valid) {
+    // Stale-event guard (mirrors variation-sync's echo-race discipline): the
+    // `after` snapshot can be a superseded draft — a wizard draft is
+    // enabled-by-default (variation-config.object.ts) yet invalid until its
+    // relation field is wired — whose disable is only now landing, after a
+    // newer valid enable already converged. Validating the PAYLOAD alone would
+    // let that straggler silently revert the good save. Re-fetch and re-validate
+    // the CURRENT stored record before disabling.
+    const fresh = await findVariationConfigById(client, after.id);
+    if (!fresh) {
+      // Record vanished/trashed since the event -> nothing left to disable.
+      return { handled: false, reason: 'superseded-missing' };
+    }
+    const freshResult = await validateVariationConfig(client, fresh, existing);
+    if (freshResult.valid) {
+      // Stale snapshot superseded by a valid write; the execution that made it
+      // valid already ran its own sweep/bookkeeping. Do not disable.
+      return { handled: false, reason: 'superseded' };
+    }
+
     const needsWrite =
-      after.enabled !== false || (after.lastError ?? '') !== result.error;
+      fresh.enabled !== false || (fresh.lastError ?? '') !== freshResult.error;
     if (needsWrite) {
       // enabled: false rides the same bookkeeping write; the recursion guards
       // above keep this from looping.
       await updateVariationConfigBookkeeping(client, after.id, {
-        lastError: result.error,
+        lastError: freshResult.error,
       });
       await client.mutation({
         updateVariationConfig: {
@@ -82,7 +102,7 @@ export const handleVariationConfigChange = async ({
         },
       });
     }
-    return { handled: true, valid: false, error: result.error };
+    return { handled: true, valid: false, error: freshResult.error };
   }
 
   const clearError = (after.lastError ?? '') !== '';

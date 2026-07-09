@@ -66,6 +66,26 @@ export const findVariationConfigByTargetObject = async (
   );
 };
 
+// Single fresh read of one config by id (singular-record convention, same shape
+// as variation-sync's fetchRecordById). Used to re-check the CURRENT stored
+// record before acting on a possibly-stale trigger snapshot.
+export const findVariationConfigById = async (
+  client: FormulaClient,
+  configId: string,
+): Promise<VariationConfigRecord | null> => {
+  const response = await withRetry(() =>
+    client.query({
+      variationConfig: {
+        __args: { filter: { id: { eq: configId } } },
+        ...VARIATION_CONFIG_FIELDS_SELECTION,
+      },
+    }),
+  );
+  return (
+    (response?.variationConfig as VariationConfigRecord | null) ?? null
+  );
+};
+
 export const updateVariationConfigBookkeeping = async (
   client: FormulaClient,
   configId: string,
