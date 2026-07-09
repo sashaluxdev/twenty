@@ -317,11 +317,59 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
     broke ALL sync — unique fields are now excluded from the syncable set.
   - **v1 limits**: variations get NO name on exotic label kinds (only TEXT /
     FULL_NAME are numbered "(variation N)"); no native record-grid diverged badges
-    (the widget is the sole surface); per-field opt-out is out of scope; the widget's
-    async effects lack `.catch` (a non-retryable read failure can strand on
-    "Loading…" — mirrors the formula-editor precedent; backlog). Human-edit→override
+    (the widget is the sole surface); per-field opt-out is out of scope; ~~the widget's
+    async effects lack `.catch`~~ (FIXED 2026-07-09: load() try/catch + error row,
+    see the 2026-07-09 arc block). Human-edit→override
     DETECTION isn't drivable by synthetic Playwright events (the override CONSUMPTION
     + diverged-listing paths are verified) — a 30s manual field-edit confirms it.
+
+- **2026-07-09 ARC (sweep + boolean logic + IFS/SWITCH + variation hardening; 27
+  commits 5659cec1a3..3a01759ccf, 835 unit tests, whole-branch reviewed)**:
+  - **Quality sweep (Phase 0, test-less)**: dead exports removed (readTargetValue,
+    isStaleTodayFormula, MAX_EVALUATION_DEPTH alias); max eval depth single-sourced
+    (engine exports DEFAULT_MAX_DEPTH, recompute imports it); README grammar /
+    context.md string-literal claim / ADR index drift fixed.
+  - **Stale-event disable race FIXED** (`handle-variation-config-change.ts`): the
+    invalid path now re-fetches + re-validates the config FRESH before disabling —
+    a straggler trigger carrying a stale draft snapshot can no longer revert a
+    newer valid enable (this silently disabled the first cloud config 2026-07-07;
+    cloud trigger latency reorders events, local never reproduces).
+  - **ADR 0017 IMPLEMENTED**: AND / OR / NOT / ISBLANK (condition context) +
+    IFBLANK (value context). Null logic is **full-evaluation Kleene** (user
+    decision, same-day revision of the ADR's original strict rule — see ADR 0017's
+    decision-history note): OR any-true→true, AND any-false→false, else any-null→
+    null; ALL args always evaluated so errors always fire. ISBLANK is raw-first
+    for bare field/crossref operands (empty/whitespace string ⇒ blank).
+    walkStringComparisons now recurses into AND/OR/NOT (save-time kind validation
+    reaches nested comparisons).
+  - **ADR 0018 IMPLEMENTED**: IFS / SWITCH as pure parser sugar desugaring to
+    nested IfNodes (+ parser-internal NullNode). Short-circuit/null/deps/validation
+    all inherited; SWITCH string keys reach save-time kind validation for free.
+  - **Variation widget/UX**: disabled-config hint instead of a blank tab
+    (`resolveHiddenReason`; the "Variations" tab is never removed, so this is the
+    disabled-state surface); `load()` errors now render an error row instead of
+    stranding/blank (allSettled probes: any-resolve wins, all-failed+rejection ⇒
+    surfaced error); index views renamed to "Formulas" / "Variations".
+  - **Delete Completely for variation configs** (danger zone in the config editor,
+    `lib/delete-variation-config-completely.ts`): deletes the wizard-created
+    relation field (createdRelationField provenance guard), destroys the config,
+    NEVER deletes override rows (shared key space); field-delete-before-destroy is
+    retry-idempotent with the destroyed handler. UI not yet live-verified in a
+    browser (thin shell over tested core).
+  - **Sync resilience (R1/R3/R2 + M1)** in `variation-sync.ts` and friends: stale
+    metadata poison window collapsed (invalidate+retry-once ladder, per-field
+    degrade so one dead field can't break a whole variation; bounded, no loops);
+    event-path sync errors land in config.lastError (write-avoidant) + relation-
+    field health check sets status/statusReason (no more false-healthy config);
+    field RENAMES no longer clobber diverged pins (orphaned-override reconcile,
+    value-as-witness transfer, heldFields survives the retry ladder). FakeClient
+    gained composite-selection fidelity (kind-aware scalar-null), opt-in
+    pagination, and failure injection — the mock-vs-server classes that bit live
+    are now catchable in units.
+  - **Cloud note**: hosted instance still runs v0.1.2 — NONE of this arc is
+    deployed; the race fix esp. matters before enabling more variation configs on
+    cloud. The activity variation config was manually re-enabled by the user
+    2026-07-09 and works.
 
 ## What is NOT done (next work)
 
