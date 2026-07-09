@@ -67,16 +67,22 @@ opens a whitelisted string literal — legal **only** as a direct `=`/`!=` opera
 inside an IF condition (see below); single quotes are never accepted.
 
 ```
-expression := term (('+' | '-') term)*
-term       := unary (('*' | '/' | '%') unary)*
-unary      := ('+' | '-') unary | primary
-primary    := NUMBER | FIELD | CROSSREF | IF | TODAY | SUM | '(' expression ')'
-IF         := 'IF' '(' condition ',' expression ',' expression ')'
-TODAY      := 'TODAY' '(' ')'
-SUM        := 'SUM' '(' expression (',' expression)* ')'
-condition  := operand (compareOp operand)?
-operand    := STRING | expression            // STRING only as a =/!= operand
-compareOp  := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
+expression   := term (('+' | '-') term)*
+term         := unary (('*' | '/' | '%') unary)*
+unary        := ('+' | '-') unary | primary
+primary      := NUMBER | FIELD | CROSSREF | IF | TODAY | SUM | IFBLANK
+              | '(' expression ')'
+IF           := 'IF' '(' condition ',' expression ',' expression ')'
+TODAY        := 'TODAY' '(' ')'
+SUM          := 'SUM' '(' expression (',' expression)* ')'
+IFBLANK      := 'IFBLANK' '(' expression ',' expression ')'
+condition    := boolFunction | operand (compareOp operand)?
+boolFunction := 'AND' '(' condition (',' condition)+ ')'
+              | 'OR'  '(' condition (',' condition)+ ')'
+              | 'NOT' '(' condition ')'
+              | 'ISBLANK' '(' expression ')'
+operand      := STRING | expression            // STRING only as a =/!= operand
+compareOp    := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 
 NUMBER   := digits ['.' digits]              // e.g. 42, 3.14, .5
 FIELD    := ident ('.' ident)*               // same-record dotted path
@@ -86,7 +92,9 @@ ident    := (letter | '_') (letter | digit | '_')*
 ```
 
 `TODAY()` resolves to the current epoch-day (ADR 0012), `SUM(...)` totals its
-non-null arguments (ADR 0016). Both are reserved words (see below).
+non-null arguments (ADR 0016), `IFBLANK(value, fallback)` substitutes a fallback
+for a null value (ADR 0017), and `AND`/`OR`/`NOT`/`ISBLANK` are condition-only
+combinators (ADR 0017). All are reserved words (see below).
 
 Binary operators are left-associative; `*` `/` `%` bind tighter than `+` `-`;
 unary `+`/`-` bind tighter than binary but looser than parentheses. Arithmetic
@@ -107,6 +115,9 @@ IF(a >= 10, 1, IF(a >= 5, 0.5, 0))          nested IF (tiering)
 IF(stage = "won", amount.amountMicros, 0)   double-quoted string equality
 TODAY() - startDate                          days elapsed since a date field
 SUM(amount.amountMicros, tax, shipping)      variadic total, ignores null args
+IF(AND(stage = "won", amount > 1000), 1, 0)  compound condition (AND/OR/NOT)
+IF(ISBLANK(email), 0, 1)                      test whether a field is blank
+revenue + IFBLANK(upsell, 0)                  treat a blank input as 0
 ```
 
 A same-record path like `amount.amountMicros` reaches into a composite field;
@@ -144,9 +155,55 @@ case-insensitive (`IF` / `if` / `If`). Rules:
   condition AND both branches (the untaken branch's inputs can flip the
   condition's outcome next time), so recompute triggers and cycle detection see
   the whole conditional.
-- **`if`, `today` and `sum` are reserved words** (case-insensitive). A bare
-  same-record field named `if`, `today` or `sum` is no longer expressible
-  (dotted paths like `if.x` / `today.x` / `sum.x` still are).
+- **`if`, `today`, `sum`, `ifblank`, `and`, `or`, `not` and `isblank` are
+  reserved words** (case-insensitive). A bare same-record field with one of
+  those names is no longer expressible (dotted paths like `if.x` / `and.x` /
+  `ifblank.y` still are, and cross-refs `[obj:id:and]` are unaffected).
+
+### Boolean condition functions (ADR 0017)
+
+Four condition-context combinators compose comparisons inside an IF condition
+(function-style, not infix — `a > 1 AND b < 2` is **not** supported):
+
+- `AND(cond1, ..., condN)` / `OR(cond1, ..., condN)` — variadic, **at least 2
+  arguments** (a 1-arg AND/OR is a parse error, almost always a mistake).
+- `NOT(cond)` — exactly 1 argument.
+- `ISBLANK(value)` — exactly 1 argument; true when the value is blank (see
+  below). These are legal **only** inside an IF condition (or nested inside each
+  other); using one where a value is expected — `AND(a>1, b>2)` at the top
+  level, or `IF(a>1, NOT(b), 0)` — is a parse error.
+
+- **Strict null propagation, NO short-circuit.** Every argument is always
+  evaluated (so an error — division by zero, unknown field — in any argument
+  always fires, like SUM). If **any** argument's truth is null, the whole
+  combinator is null, which nulls the enclosing IF. This is deliberately **not**
+  Kleene/SQL three-valued logic: `AND(false, null)` and `OR(true, null)` are
+  both null, not false/true. Consequence: mixing a blank-poisoned comparison
+  into an AND/OR still nulls the result — to tolerate a blank input, substitute a
+  value with `IFBLANK` (below) rather than relying on `OR(ISBLANK(x), x > 10)`.
+
+### Blank handling: ISBLANK and IFBLANK (ADR 0017)
+
+`ISBLANK(value)` **observes** blankness instead of propagating null — it returns
+true/false (never null) for a successfully evaluated argument; a typo'd field
+name inside it still throws `UNKNOWN_VARIABLE` (a formula bug, not a blank).
+
+- **Bare field / cross-record operand** — raw-first: an empty or whitespace-only
+  string is blank, any other non-empty string is not blank (so `ISBLANK(email)`
+  works on TEXT / SELECT fields day one). A non-string raw value falls back to
+  numeric: `null` is blank, a number is not, a missing linked record reads as
+  blank.
+- **Compound operand** (`ISBLANK(a + b)`) — evaluated in the numeric domain; a
+  null result (from internal null propagation) counts as blank.
+
+`IFBLANK(value, fallback)` returns `value` unless it is null, otherwise
+`fallback` (which may itself be null). It is a **value** function, legal anywhere
+a number is — `revenue + IFBLANK(upsell, 0)` fixes the most common
+null-propagation complaint, and `IF(IFBLANK(amount, 0) > 1000, …)` reads as
+"treat a blank amount as 0". **Both arguments are always evaluated** (SUM
+precedent), so an error in the fallback fires even when the value is non-null.
+IFBLANK stays purely numeric — a text field inside it goes through the numeric
+resolver, a deliberate asymmetry with ISBLANK (only ISBLANK observes raw values).
 
 ### Dates (Excel serial model, ADR 0011)
 

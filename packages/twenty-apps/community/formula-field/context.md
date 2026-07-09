@@ -348,10 +348,16 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 
 **Next-work candidates (2026-07-07, user exploring — NOT committed):**
 
-- **Excel logic pack** — AND / OR / NOT / IFS / SWITCH (compose in the IF
-  condition context) + numeric ROUND / ABS / MIN / MAX / INT + named date
-  helpers. Assessed cheap: rides the reserved-function machinery IF/TODAY
-  built; value domain untouched; roughly one plan of 4-6 tasks.
+- **Excel logic pack** — AND / OR / NOT **LANDED 2026-07-09 (ADR 0017)**, together
+  with ISBLANK (condition-context) and IFBLANK(value, fallback) (value-context).
+  Strict null propagation, no short-circuit (any null arg nulls the combinator —
+  deliberately NOT Kleene). CAVEAT flagged during impl: ADR 0017's prose lists
+  `OR(ISBLANK(x), x>10)` / `AND(NOT(ISBLANK(x)), x>10)` as null-tolerance idioms,
+  but those only work under Kleene, which the binding decision rejects — under
+  strict they null out, so `IFBLANK` is the real escape hatch; the ADR idiom
+  prose should be corrected or the decision revisited. Still pending for the
+  pack: **IFS / SWITCH** (ADR 0018, parser sugar, lands next) + numeric ROUND /
+  ABS / MIN / MAX / INT + named date helpers.
 - **LET** — moderate: needs a binding environment in the (currently
   stateless) evaluator + bound-name rules for dependency extraction and
   autocomplete; own small ADR.

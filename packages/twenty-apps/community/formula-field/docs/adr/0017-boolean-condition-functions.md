@@ -1,10 +1,21 @@
 # ADR 0017: Boolean condition functions — AND, OR, NOT, ISBLANK, IFBLANK
 
-**Status: ACCEPTED (design approved 2026-07-09) — implementation not started.**
+**Status: IMPLEMENTED (design approved 2026-07-09; implemented 2026-07-09).**
 All open questions from the 2026-07-08 draft are resolved and recorded below.
-A fresh session can implement from this document without re-exploration.
 Companion: ADR 0018 (IFS/SWITCH parser sugar) is scoped to land immediately
 after this one — see "Relationship to ADR 0018" at the end.
+
+**Implementation note (2026-07-09):** the "null-tolerance idioms" list under
+"Null handling" (`OR(ISBLANK(x), x > 10)` skip-when-blank; `AND(NOT(ISBLANK(x)),
+x > 10)` fail-when-blank) is INCONSISTENT with the binding strict-propagation
+decision it sits under: under strict semantics a null comparison operand nulls
+the whole combinator regardless of the ISBLANK result, so those two idioms
+produce null, not the described true/false. Only the third idiom — substitute a
+value with `IFBLANK(x, 0) > 10` — actually tolerates blanks. The engine
+implements the binding strict rule; the two combinator idioms above should be
+treated as erroneous prose pending an ADR correction (or a deliberate switch to
+full-evaluation Kleene, which would surface errors order-independently and make
+the idioms work — a design decision for the maintainer, not made here).
 
 ## Context
 
