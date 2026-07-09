@@ -1,4 +1,9 @@
-import { type BareReference, bareReferenceOf, compileFormula } from 'src/engine';
+import {
+  type BareReference,
+  bareReferenceOf,
+  compileFormula,
+  DEFAULT_MAX_DEPTH,
+} from 'src/engine';
 import { type FormulaDependencies, usesToday } from 'src/engine/dependencies';
 import { FormulaError, isFormulaError } from 'src/engine/errors';
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
@@ -28,10 +33,6 @@ import {
   type RecomputeOutcome,
 } from 'src/logic-functions/lib/types';
 import { withRetry } from 'src/logic-functions/lib/with-retry';
-
-// Runtime evaluation-depth ceiling — second line of defence behind save-time
-// cycle detection (ADR 0004/0005).
-const MAX_EVAL_DEPTH = 64;
 
 const capitalize = (value: string): string =>
   value.charAt(0).toUpperCase() + value.slice(1);
@@ -337,7 +338,11 @@ export const computeFormulaValueForRecord = async ({
       compiled.ast,
       buildResolver(sameRecord, crossRecords),
       {
-        maxDepth: MAX_EVAL_DEPTH,
+        // Runtime evaluation-depth ceiling — second line of defence behind
+        // save-time cycle detection (ADR 0004/0005). Sourced from the engine's
+        // own DEFAULT_MAX_DEPTH so the production ceiling can never drift from
+        // the value the evaluator documents.
+        maxDepth: DEFAULT_MAX_DEPTH,
         todayEpochDay: currentEpochDay(),
         resolveRaw: buildRawResolver(sameRecord, crossRecords),
       },
@@ -737,5 +742,4 @@ export const recomputeAllRecords = async (
   return outcomes;
 };
 
-export const MAX_EVALUATION_DEPTH = MAX_EVAL_DEPTH;
 export { FormulaError };

@@ -40,7 +40,7 @@ export type VariableResolver = (
 // untouched — string support is purely additive via EvaluateOptions.resolveRaw.
 export type RawVariableResolver = (reference: VariableReference) => unknown;
 
-const DEFAULT_MAX_DEPTH = 64;
+export const DEFAULT_MAX_DEPTH = 64;
 
 export type EvaluateOptions = {
   maxDepth?: number;

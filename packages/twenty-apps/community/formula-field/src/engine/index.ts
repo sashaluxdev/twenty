@@ -20,6 +20,7 @@ export {
 } from 'src/engine/dependencies';
 export { FormulaError, isFormulaError, type FormulaErrorCode } from 'src/engine/errors';
 export {
+  DEFAULT_MAX_DEPTH,
   evaluate,
   type EvaluateOptions,
   type RawVariableResolver,
