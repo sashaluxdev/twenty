@@ -87,6 +87,7 @@ const VariationWidget = () => {
   const [hiddenReason, setHiddenReason] = useState<HiddenReason>('no-config');
   const [variations, setVariations] = useState<VariationListEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
   const [divergedFields, setDivergedFields] = useState<DivergedField[]>([]);
@@ -101,48 +102,78 @@ const VariationWidget = () => {
     // genql type map (runtime-created, per every precedent widget call site).
     const client = createDynamicCoreClient();
 
-    if (!resolvedHost.current && recordId) {
-      const configs = await loadAllEnabledVariationConfigs(client);
-      const candidates = Array.from(
-        new Set(configs.map((config) => config.targetObject).filter(Boolean)),
-      ) as string[];
-      const probes = await Promise.all(
-        candidates.map((candidate) =>
-          client
-            .query({
-              [candidate]: {
-                __args: { filter: { id: { eq: recordId } } },
-                id: true,
-              },
-            })
-            .then((response: any) => (response?.[candidate] ? candidate : null))
-            .catch(() => null),
-        ),
+    try {
+      if (!resolvedHost.current && recordId) {
+        const configs = await loadAllEnabledVariationConfigs(client);
+        const candidates = Array.from(
+          new Set(configs.map((config) => config.targetObject).filter(Boolean)),
+        ) as string[];
+        // Probe every candidate object for this record id. A candidate error
+        // only matters when NO candidate resolves: if any resolves we proceed
+        // with it and ignore the others; if none resolves but a probe threw,
+        // that is a read failure to surface — not a silent "record isn't here".
+        const probes = await Promise.allSettled(
+          candidates.map((candidate) =>
+            client
+              .query({
+                [candidate]: {
+                  __args: { filter: { id: { eq: recordId } } },
+                  id: true,
+                },
+              })
+              .then((response: any) => (response?.[candidate] ? candidate : null)),
+          ),
+        );
+        const resolved = probes.find(
+          (probe): probe is PromiseFulfilledResult<string> =>
+            probe.status === 'fulfilled' && probe.value !== null,
+        );
+        if (resolved) {
+          resolvedHost.current = resolved.value;
+        } else {
+          const rejection = probes.find(
+            (probe): probe is PromiseRejectedResult => probe.status === 'rejected',
+          );
+          if (rejection) {
+            throw rejection.reason;
+          }
+          resolvedHost.current = null;
+        }
+      }
+      const host = resolvedHost.current;
+
+      if (!host || !recordId) {
+        // No enabled config claims this object (or the app's own objects, which
+        // never appear in the candidate list above). Tell "unconfigured" (stay
+        // invisible) apart from "config exists but disabled" (show a hint) so a
+        // disabled config no longer leaves a permanently blank pane.
+        setHiddenReason(recordId ? await resolveHiddenReason(client, recordId) : 'no-config');
+        setRole({ kind: 'hidden' });
+        setVariations([]);
+        setLoadError('');
+        setLoading(false);
+        return;
+      }
+
+      const nextRole = await resolveWidgetRole(client, host, recordId);
+      setRole(nextRole);
+      setVariations(
+        nextRole.kind === 'primary'
+          ? await loadVariationList(client, nextRole.config, recordId)
+          : [],
       );
-      resolvedHost.current = probes.find(Boolean) ?? null;
-    }
-    const host = resolvedHost.current;
-
-    if (!host || !recordId) {
-      // No enabled config claims this object (or the app's own objects, which
-      // never appear in the candidate list above). Tell "unconfigured" (stay
-      // invisible) apart from "config exists but disabled" (show a hint) so a
-      // disabled config no longer leaves a permanently blank pane.
-      setHiddenReason(recordId ? await resolveHiddenReason(client, recordId) : 'no-config');
-      setRole({ kind: 'hidden' });
-      setVariations([]);
+      setLoadError('');
       setLoading(false);
-      return;
+    } catch (error) {
+      // Surface the failure instead of a blank pane or eternal "Loading…". The
+      // 4s poll re-runs load(), so a transient failure self-heals (loadError is
+      // cleared on the next success).
+      const rawMessage = String((error as { message?: unknown })?.message ?? error);
+      setLoadError(
+        rawMessage.length > 200 ? `${rawMessage.slice(0, 200)}…` : rawMessage,
+      );
+      setLoading(false);
     }
-
-    const nextRole = await resolveWidgetRole(client, host, recordId);
-    setRole(nextRole);
-    setVariations(
-      nextRole.kind === 'primary'
-        ? await loadVariationList(client, nextRole.config, recordId)
-        : [],
-    );
-    setLoading(false);
   }, [recordId]);
 
   useEffect(() => {
@@ -270,6 +301,16 @@ const VariationWidget = () => {
     return (
       <WidgetRoot style={layout.container}>
         <MutedText as="div">Loading…</MutedText>
+      </WidgetRoot>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <WidgetRoot style={layout.container}>
+        <ErrText as="div" style={layout.error}>
+          Couldn't load variations: {loadError}
+        </ErrText>
       </WidgetRoot>
     );
   }

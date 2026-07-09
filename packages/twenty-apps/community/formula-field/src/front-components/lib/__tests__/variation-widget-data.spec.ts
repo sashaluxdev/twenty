@@ -168,6 +168,35 @@ describe('variation-widget-data', () => {
     });
   });
 
+  describe('resolveWidgetRole error propagation', () => {
+    // A GraphQL error the client surfaces as a thrown object carrying errors[];
+    // BAD_USER_INPUT is not in withRetry's RETRYABLE_CODES, so it rethrows at
+    // once rather than looping.
+    const NON_RETRYABLE_ERROR = {
+      errors: [{ extensions: { code: 'BAD_USER_INPUT' } }],
+      message: 'boom',
+    };
+
+    it('propagates a read error instead of silently returning hidden', async () => {
+      seedConfig(client);
+      client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
+      client.failQueriesFor('variationConfigs', NON_RETRYABLE_ERROR);
+
+      await expect(resolveWidgetRole(client, 'company', 'p1')).rejects.toBe(
+        NON_RETRYABLE_ERROR,
+      );
+    });
+
+    it('resolves normally when the config and reads succeed', async () => {
+      seedConfig(client);
+      client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
+
+      const role = await resolveWidgetRole(client, 'company', 'p1');
+
+      expect(role.kind).toBe('primary');
+    });
+  });
+
   describe('loadVariationList', () => {
     it('counts diverged fields (active ∩ syncable) with a single overrides query', async () => {
       client.seed('company', [

@@ -51,6 +51,14 @@ export class FakeClient implements FormulaClient {
   public writes: string[] = [];
   // Every query selection object, for asserting the built selections.
   public querySelections: any[] = [];
+  // Top-level selection key -> error to throw, so a test can simulate a read
+  // that fails (e.g. a GraphQL-shaped error) and assert the caller propagates
+  // it instead of masking the failure.
+  private queryFailures = new Map<string, unknown>();
+
+  failQueriesFor(key: string, error: unknown): void {
+    this.queryFailures.set(key, error);
+  }
 
   seed(object: string, records: Rec[]): void {
     const map = this.store.get(object) ?? new Map<string, Rec>();
@@ -83,6 +91,9 @@ export class FakeClient implements FormulaClient {
     this.queries += 1;
     this.querySelections.push(selection);
     const key = Object.keys(selection)[0];
+    if (this.queryFailures.has(key)) {
+      throw this.queryFailures.get(key);
+    }
     const node = selection[key];
 
     // formulaDefinitions connection
