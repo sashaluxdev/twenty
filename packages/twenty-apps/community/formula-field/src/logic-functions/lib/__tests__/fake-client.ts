@@ -168,12 +168,37 @@ export class FakeClient implements FormulaClient {
         ),
       );
     }
+
+    // Opt-in cursor pagination. When `first` is absent the mock keeps its
+    // legacy "everything in one page" behaviour (hasNextPage: false), so the
+    // existing single-page tests are unaffected. When `first` is present it
+    // honours the record API's cursor contract: a stable id-ordered sequence,
+    // `after` drops everything up to and including that cursor, the page is the
+    // next `first` records, `hasNextPage` reflects whether any remain, and
+    // `endCursor` is the last cursor in the page (a never-advancing cursor would
+    // resend page 1 forever -> the loop test would hang or duplicate ids).
+    const first = node?.__args?.first as number | undefined;
+    const after = node?.__args?.after as string | undefined;
+    let hasNextPage = false;
+    let endCursor: string | null = null;
+    if (first !== undefined) {
+      const sorted = [...records].sort((a, b) =>
+        a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+      );
+      const startIndex =
+        after != null ? sorted.findIndex((record) => record.id === after) + 1 : 0;
+      const remaining = sorted.slice(startIndex);
+      records = remaining.slice(0, first);
+      hasNextPage = remaining.length > first;
+      endCursor = records.length > 0 ? records[records.length - 1].id : null;
+    }
+
     const nodeSelection = node?.edges?.node ?? { id: true };
     return {
       edges: records.map((record) => ({
         node: this.project(record, nodeSelection, object),
       })),
-      pageInfo: { hasNextPage: false, endCursor: null },
+      pageInfo: { hasNextPage, endCursor },
     };
   }
 
