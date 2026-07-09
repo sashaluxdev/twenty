@@ -61,23 +61,32 @@ through a front component on the record page.
 The engine (`src/engine/`) is a whitelist tokenizer → recursive-descent parser →
 tree-walking interpreter. There is no `eval` / `new Function` anywhere. Only the
 characters that make up the grammar below are accepted; everything else (`;`,
-quotes, backslashes, unicode homoglyph operators, …) is rejected at the exact
-offset where it appears.
+single quotes, backslashes, unicode homoglyph operators, …) is rejected at the
+exact offset where it appears. The sole exception is the double-quote `"`, which
+opens a whitelisted string literal — legal **only** as a direct `=`/`!=` operand
+inside an IF condition (see below); single quotes are never accepted.
 
 ```
 expression := term (('+' | '-') term)*
 term       := unary (('*' | '/' | '%') unary)*
 unary      := ('+' | '-') unary | primary
-primary    := NUMBER | FIELD | CROSSREF | IF | '(' expression ')'
+primary    := NUMBER | FIELD | CROSSREF | IF | TODAY | SUM | '(' expression ')'
 IF         := 'IF' '(' condition ',' expression ',' expression ')'
-condition  := expression (compareOp expression)?
+TODAY      := 'TODAY' '(' ')'
+SUM        := 'SUM' '(' expression (',' expression)* ')'
+condition  := operand (compareOp operand)?
+operand    := STRING | expression            // STRING only as a =/!= operand
 compareOp  := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 
 NUMBER   := digits ['.' digits]              // e.g. 42, 3.14, .5
 FIELD    := ident ('.' ident)*               // same-record dotted path
 CROSSREF := '[' object ':' uuidV4 ':' fieldPath ']'
+STRING   := '"' chars '"'                     // double-quoted; =/!= operand only
 ident    := (letter | '_') (letter | digit | '_')*
 ```
+
+`TODAY()` resolves to the current epoch-day (ADR 0012), `SUM(...)` totals its
+non-null arguments (ADR 0016). Both are reserved words (see below).
 
 Binary operators are left-associative; `*` `/` `%` bind tighter than `+` `-`;
 unary `+`/`-` bind tighter than binary but looser than parentheses. Arithmetic
@@ -95,6 +104,9 @@ amount.amountMicros + [company:…:budget]    mixing same- and cross-record
 IF(probability > 50, amount.amountMicros, 0)    conditional on a threshold
 IF(discount, price - discount, price)       numeric condition (0 = false)
 IF(a >= 10, 1, IF(a >= 5, 0.5, 0))          nested IF (tiering)
+IF(stage = "won", amount.amountMicros, 0)   double-quoted string equality
+TODAY() - startDate                          days elapsed since a date field
+SUM(amount.amountMicros, tax, shipping)      variadic total, ignores null args
 ```
 
 A same-record path like `amount.amountMicros` reaches into a composite field;
@@ -121,6 +133,10 @@ case-insensitive (`IF` / `if` / `If`). Rules:
   comparison operand, makes the **entire IF result null**. This deliberately
   deviates from Excel (where a blank cell compares as 0) to match the app's
   null-propagation policy — an empty input never silently becomes a 0.
+- **String literals (double-quoted).** `"..."` is legal only as a direct `=` /
+  `!=` operand at the top level of an IF condition (e.g. `IF(stage = "won", …)`);
+  strings compare for equality only, never ordering, and appear nowhere else.
+  Single quotes are always rejected.
 - **Lazy evaluation.** Only the taken branch is evaluated: an error in the
   untaken branch (e.g. division by zero) never fires. The condition is always
   evaluated.
@@ -128,8 +144,9 @@ case-insensitive (`IF` / `if` / `If`). Rules:
   condition AND both branches (the untaken branch's inputs can flip the
   condition's outcome next time), so recompute triggers and cycle detection see
   the whole conditional.
-- **`if` is a reserved word.** A bare same-record field named `if` is no longer
-  expressible (dotted paths like `if.x` still are).
+- **`if`, `today` and `sum` are reserved words** (case-insensitive). A bare
+  same-record field named `if`, `today` or `sum` is no longer expressible
+  (dotted paths like `if.x` / `today.x` / `sum.x` still are).
 
 ### Dates (Excel serial model, ADR 0011)
 
