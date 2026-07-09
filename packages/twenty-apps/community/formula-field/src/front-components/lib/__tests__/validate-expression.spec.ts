@@ -82,6 +82,23 @@ describe('validateExpression', () => {
     );
   });
 
+  it('rejects a SWITCH with a string key on a NUMBER field at save-time validation', () => {
+    // SWITCH(amount, "big", 1, 0) desugars to IF(amount = "big", 1, 0): a string
+    // comparison against a NUMBER field. The kind check runs on the desugared
+    // AST, so the sugar is rejected with the same message as the raw comparison.
+    expect(
+      validateExpression(
+        'SWITCH(amount, "big", 1, 0)',
+        'opportunity',
+        'formulaScore',
+        [],
+        () => new Map([['amount', 'NUMBER']]),
+      ),
+    ).toBe(
+      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
+    );
+  });
+
   it('rejects a MULTI_SELECT field string comparison with the exact message', () => {
     expect(
       validateExpression(

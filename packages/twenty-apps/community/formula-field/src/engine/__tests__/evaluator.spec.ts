@@ -571,6 +571,27 @@ describe('evaluator IFS / SWITCH sugar (ADR 0018)', () => {
     expect(run(ladder, { tier: 2 })).toBe(20);
     expect(run(ladder, { tier: 9 })).toBe(0);
   });
+
+  it('trips the eval-depth guard gracefully when an all-miss ladder descends past DEFAULT_MAX_DEPTH', () => {
+    // Each rung desugars to one IF frame; with every condition false (`0`) the
+    // evaluator walks the whole else chain, so descent depth equals the rung
+    // count. DEFAULT_MAX_DEPTH is 64, and MAX_PARSE_DEPTH is 200, so 65 rungs is
+    // squarely inside the window where PARSE passes but EVAL trips: 64 rungs
+    // evaluate to the default, 65 exceed the guard. A raw ~65-deep ladder is a
+    // pathological but legal expression — it must fail loud with
+    // MAX_DEPTH_EXCEEDED, never blow the JS stack.
+    const rungs = 65;
+    const source =
+      'IFS(' + Array.from({ length: rungs }, () => '0, 1').join(', ') + ', 999)';
+    const parsed = parse(source); // parse succeeds (well under MAX_PARSE_DEPTH)
+    try {
+      evaluate(parsed, resolverFor({}));
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).code).toBe('MAX_DEPTH_EXCEEDED');
+    }
+  });
 });
 
 describe('evaluator errors', () => {

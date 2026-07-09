@@ -709,6 +709,15 @@ describe('parser IFS sugar (ADR 0018)', () => {
     );
   });
 
+  it('rejects a comparison in the trailing default slot (the default is a value, not a condition)', () => {
+    // Odd arg count -> `b > 3` is the trailing default, collected via
+    // parseCondition but required to be a value; a comparison there is the same
+    // illegality as any other value context (isConditionOnlyNode guard).
+    expect(() => parse('IFS(a > 1, 2, b > 3)')).toThrowError(
+      /Comparison "b" is only allowed in the condition of IF\(condition, then, else\)/,
+    );
+  });
+
   it('rejects an unterminated IFS when the closing parenthesis is missing', () => {
     expect(() => parse('IFS(a > 1, 2')).toThrowError(/closing parenthesis/);
   });
