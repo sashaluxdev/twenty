@@ -395,8 +395,13 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   `*.updated` trigger carries no `updatedFields` filter. Consequences: relation
   overrides show the COLUMN name (`accountOwnerId`) in `targetField` via the JSON
   text slot; ONE_TO_MANY inverses (no local FK) and MORPH_RELATION (discriminator
-  column) stay excluded — backlog, alongside RICH_TEXT. NOT deployed to cloud
-  (stays on v0.1.4 until user approves).
+  column) stay excluded — backlog, alongside RICH_TEXT. DEPLOYED to cloud as
+  **v0.1.5** (2026-07-10, user-approved; platform on the 2.19 line, client-config
+  reported v2.19.2; publish typecheck clean, zero id collisions; post-install
+  verified 4/4 — app 0.1.5, checksums match local manifest, activity config
+  enabled/no error, 17/17 formulas healthy). Publish emitted one deprecation
+  warning: `defaultRoleUniversalIdentifier` on defineApplication() → use
+  defineApplicationRole() (backlog).
 
 ## What is NOT done (next work)
 
