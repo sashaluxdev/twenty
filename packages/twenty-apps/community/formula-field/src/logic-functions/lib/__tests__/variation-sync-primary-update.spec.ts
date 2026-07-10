@@ -17,6 +17,7 @@ describe('syncPrimaryUpdateToVariations', () => {
           { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
           { id: 'field-domain', name: 'domainName', type: 'LINKS', isActive: true, isSystem: false },
           { id: 'field-employees', name: 'employees', type: 'NUMBER', isActive: true, isSystem: false },
+          { id: 'field-owner', name: 'accountOwner', type: 'RELATION', isActive: true, isSystem: false, relationType: 'MANY_TO_ONE', joinColumnName: 'accountOwnerId' },
           { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
         ],
       },
@@ -102,5 +103,77 @@ describe('syncPrimaryUpdateToVariations', () => {
 
     expect(outcomes).toEqual([]);
     expect(client.mutations).toBe(0);
+  });
+
+  it('mirrors a MANY_TO_ONE relation change by copying the join column onto variations', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', domainName: null, employees: 50, accountOwnerId: 'user-2', primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', domainName: null, employees: 50, accountOwnerId: 'user-1', primaryRecordId: 'p1' },
+    ]);
+
+    // Server-shape fidelity (cloud 2.19): a relation change reports BOTH the
+    // relation name and the join column in updatedFields.
+    const outcomes = await syncPrimaryUpdateToVariations({
+      client,
+      targetObject: 'company',
+      primaryRecordId: 'p1',
+      updatedFields: ['accountOwner', 'accountOwnerId'],
+      relationFieldName: 'primaryRecord',
+    });
+
+    expect(outcomes.find((outcome) => outcome.variationRecordId === 'v1')?.changed).toBe(true);
+    expect(client.get('company', 'v1')!.accountOwnerId).toBe('user-2');
+  });
+
+  it('mirrors a relation cleared to null on the primary', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', domainName: null, employees: 50, accountOwnerId: null, primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', domainName: null, employees: 50, accountOwnerId: 'user-1', primaryRecordId: 'p1' },
+    ]);
+
+    await syncPrimaryUpdateToVariations({
+      client,
+      targetObject: 'company',
+      primaryRecordId: 'p1',
+      updatedFields: ['accountOwner', 'accountOwnerId'],
+      relationFieldName: 'primaryRecord',
+    });
+
+    expect(client.get('company', 'v1')!.accountOwnerId).toBeNull();
+  });
+
+  it('respects an active override pinning a variation relation (does not overwrite the pinned join column)', async () => {
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', domainName: null, employees: 99, accountOwnerId: 'user-2', primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', domainName: null, employees: 50, accountOwnerId: 'user-1', primaryRecordId: 'p1' },
+    ]);
+    // Same override shape as 'skips a field with an active override ...' above,
+    // but the pinned field is the JOIN COLUMN and the pinned id JSON-encodes
+    // into the text slot (overrideSlotFor routes every non-NUMBER kind there).
+    client.seed('formulaOverride', [
+      {
+        id: 'ov1',
+        name: 'company.accountOwnerId#v1',
+        targetObject: 'company',
+        targetField: 'accountOwnerId',
+        recordId: 'v1',
+        overrideValue: null,
+        overrideValueText: JSON.stringify('user-1'),
+        active: true,
+      },
+    ]);
+
+    const outcomes = await syncPrimaryUpdateToVariations({
+      client,
+      targetObject: 'company',
+      primaryRecordId: 'p1',
+      updatedFields: ['accountOwner', 'accountOwnerId', 'employees'],
+      relationFieldName: 'primaryRecord',
+    });
+
+    // The pinned relation is skipped; the other changed field still syncs.
+    expect(outcomes[0].changedFields).toEqual(['employees']);
+    expect(client.get('company', 'v1')!.accountOwnerId).toBe('user-1');
+    expect(client.get('company', 'v1')!.employees).toBe(99);
   });
 });

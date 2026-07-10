@@ -19,6 +19,7 @@ describe('detectVariationDivergence', () => {
           { id: 'field-domain', name: 'domainName', type: 'LINKS', isActive: true, isSystem: false },
           { id: 'field-budget', name: 'budget', type: 'CURRENCY', isActive: true, isSystem: false },
           { id: 'field-renew', name: 'renewDate', type: 'DATE', isActive: true, isSystem: false },
+          { id: 'field-owner', name: 'accountOwner', type: 'RELATION', isActive: true, isSystem: false, relationType: 'MANY_TO_ONE', joinColumnName: 'accountOwnerId' },
           { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
         ],
       },
@@ -133,6 +134,35 @@ describe('detectVariationDivergence', () => {
     );
     expect(stored.overrideValue).toBeNull();
     expect(JSON.parse(stored.overrideValueText)).toBe('2026-12-25');
+  });
+
+  it('creates a text-slot override when a variation relation join column diverges from the primary', async () => {
+    // A human re-pointing a relation on a variation pins it: the join column
+    // diverging from the primary creates a JSON-text-slot override (the raw FK
+    // id round-trips through overrideValueText, no numeric slot — same path as
+    // the DATE case above, contrasting the formula engine's numeric override).
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', accountOwnerId: 'user-2', primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', accountOwnerId: 'user-9', primaryRecordId: 'p1' },
+    ]);
+
+    await detectVariationDivergence({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      after: { accountOwnerId: 'user-9' },
+      updatedFields: ['accountOwner', 'accountOwnerId'],
+      actorWorkspaceMemberId: 'wm-1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    const stored: any = Array.from((client as any).store.get('formulaOverride').values()).find(
+      (o: any) => o.targetField === 'accountOwnerId',
+    );
+    expect(stored.overrideValue).toBeNull();
+    expect(stored.overrideValueText).toBe(JSON.stringify('user-9'));
+    expect(JSON.parse(stored.overrideValueText)).toBe('user-9');
   });
 
   it('does NOT create an override when the value equals the primary (app echo)', async () => {

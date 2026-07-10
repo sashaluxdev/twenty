@@ -16,6 +16,7 @@ describe('syncNewVariationRecord', () => {
         fields: [
           { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
           { id: 'field-employees', name: 'employees', type: 'NUMBER', isActive: true, isSystem: false },
+          { id: 'field-owner', name: 'accountOwner', type: 'RELATION', isActive: true, isSystem: false, relationType: 'MANY_TO_ONE', joinColumnName: 'accountOwnerId' },
           { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
         ],
       },
@@ -94,5 +95,26 @@ describe('syncNewVariationRecord', () => {
     expect(outcome.skippedNestedPrimary).toBe(true);
     expect(outcome.changed).toBe(false);
     expect(client.get('company', 'v1')!.employees).toBeNull();
+  });
+
+  it('copies a MANY_TO_ONE relation join column onto a freshly created variation', async () => {
+    // employees already matches -> only the relation join column diverges, so
+    // the initial sync copies the FK scalar exactly like any other field.
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', employees: 42, accountOwnerId: 'user-2', primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', employees: 42, accountOwnerId: null, primaryRecordId: 'p1' },
+    ]);
+
+    const outcome = await syncNewVariationRecord({
+      client,
+      targetObject: 'company',
+      variationRecordId: 'v1',
+      primaryRecordId: 'p1',
+      relationFieldName: 'primaryRecord',
+    });
+
+    expect(outcome.changed).toBe(true);
+    expect(outcome.changedFields).toEqual(['accountOwnerId']);
+    expect(client.get('company', 'v1')!.accountOwnerId).toBe('user-2');
   });
 });
