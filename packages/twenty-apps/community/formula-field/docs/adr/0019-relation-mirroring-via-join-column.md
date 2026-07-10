@@ -57,8 +57,14 @@ entry.** `computeSyncableFields` emits, for a `RELATION` field whose metadata
 name. The metadata loader (`metadata-objects.ts`) pulls `settings` and exposes
 `relationType`/`joinColumnName` on `MetadataFieldInfo`.
 
-Everything downstream in `variation-sync.ts` then works **unchanged**, because
-every path already operates on the FK scalar:
+Every VALUE path downstream in `variation-sync.ts` works **unchanged**, because
+each already operates on the FK scalar. The one exception (found in final
+review, fixed with a single focused change) is the orphan-classification path of
+`syncOneVariation`: it built its live-field set from metadata NAMES, which never
+contain a relation's join column, so an active relation pin (keyed by
+`accountOwnerId`) was mistaken for a rename/delete orphan. That path is now
+join-column-aware — a relation pin counts as live iff its join column belongs to
+a live MANY_TO_ONE relation. The value paths below are unchanged:
 
 - **GraphQL selection**: `selectionEntryForMirrorKind('RELATION')` falls through
   to the `default` scalar `true` (mirror-kinds.ts untouched), so the join column
@@ -74,7 +80,9 @@ every path already operates on the FK scalar:
 
 This was proven end-to-end: five specs (primary-update mirror, null-clear,
 override-pin, divergence text-slot, new-variation copy) pass with **zero**
-changes to `variation-sync.ts`. The `*.updated` trigger
+changes to the value paths of `variation-sync.ts` — the only source change was
+the join-column-aware orphan-classification fix above (final review), covered by
+its own regression spec. The `*.updated` trigger
 (`on-record-updated-variations.ts:53`) carries no `updatedFields` filter — it
 subscribes to `{ eventName: '*.updated' }` and passes `updatedFields` through
 untouched — so join-column names reach the handler unfiltered.
