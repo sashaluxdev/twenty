@@ -23,6 +23,11 @@ export type MetadataFieldInfo = {
   // fixture across the suite to set it. `!field.isUnique` downstream treats
   // undefined the same as false, so optional is safe.
   isUnique?: boolean;
+  // RELATION-only (parsed from the metadata `settings` JSON): the FK-owning
+  // MANY_TO_ONE side carries joinColumnName; the ONE_TO_MANY inverse has null.
+  // Cloud 2.19 shape verified 2026-07-10 (docs/plans/2026-07-10-relation-mirroring.md).
+  relationType?: string | null;
+  joinColumnName?: string | null;
 };
 
 export type MetadataObjectInfo = {
@@ -168,6 +173,7 @@ export const loadAllObjectsWithFields = async (): Promise<
               isActive: true,
               isSystem: true,
               isUnique: true,
+              settings: true,
             },
           },
         },
@@ -183,6 +189,10 @@ export const loadAllObjectsWithFields = async (): Promise<
       const fields: MetadataFieldInfo[] = [];
       for (const field of node.fieldsList ?? []) {
         if (field?.id && field?.name && field?.type) {
+          const settings = (field.settings ?? null) as {
+            relationType?: string | null;
+            joinColumnName?: string | null;
+          } | null;
           fields.push({
             id: field.id,
             name: field.name,
@@ -190,6 +200,8 @@ export const loadAllObjectsWithFields = async (): Promise<
             isActive: field.isActive !== false,
             isSystem: field.isSystem === true,
             isUnique: field.isUnique === true,
+            relationType: settings?.relationType ?? null,
+            joinColumnName: settings?.joinColumnName ?? null,
           });
         }
       }

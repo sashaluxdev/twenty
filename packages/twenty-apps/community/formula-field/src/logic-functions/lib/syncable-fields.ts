@@ -21,10 +21,13 @@ export type SyncableFieldInfo = { name: string; kind: string };
 // object, computed fresh from metadata every call (never persisted) so a field
 // added to the object later is picked up automatically. Excludes: the object's
 // label-identifier field (variations must stay distinguishable), the relation
-// field itself, inactive/system fields, anything outside the syncable kind
-// allowlist (which already excludes RELATION/MORPH_RELATION/ACTOR/RICH_TEXT/
-// POSITION/TS_VECTOR by construction — they are simply not in either source
-// set), any field an enabled FormulaDefinition targets on this object (the
+// field itself, inactive/system fields, and anything outside the syncable kind
+// allowlist. MANY_TO_ONE relations ARE syncable — they mirror via their FK
+// join column (emitted as a RELATION-kind entry named after joinColumnName);
+// ONE_TO_MANY inverses (no local FK) and MORPH_RELATION (discriminator column,
+// deferred) stay excluded, as do ACTOR/RICH_TEXT/POSITION/TS_VECTOR (simply not
+// in either source set). Also excluded: any field an enabled FormulaDefinition
+// targets on this object (the
 // formula owns that column; the two write sets must stay disjoint), and any
 // UNIQUE-constrained field (e.g. Company domainName) — a unique value can
 // never be legitimately mirrored onto a second record without colliding with
@@ -58,7 +61,22 @@ export const computeSyncableFields = async (
     .filter((field) => field.id !== object.labelIdentifierFieldMetadataId)
     .filter((field) => field.name !== relationFieldName)
     .filter((field) => !formulaTargetFields.has(field.name))
-    .filter((field) => SYNCABLE_KINDS.has(field.type))
     .filter((field) => !field.isUnique)
-    .map((field) => ({ name: field.name, kind: field.type }));
+    .flatMap((field) => {
+      // MANY_TO_ONE relations mirror via their FK join column: the server
+      // reports that column in updatedFields and event payloads, and the
+      // dynamic client reads/writes it as a plain scalar — so the syncable
+      // entry IS the join column, and every downstream path (selection, diff,
+      // write, divergence, override slot) treats it as an ordinary scalar.
+      // ONE_TO_MANY inverses (no local FK) and MORPH_RELATION (discriminator
+      // column, deferred) stay excluded.
+      if (field.type === 'RELATION') {
+        return field.relationType === 'MANY_TO_ONE' && field.joinColumnName
+          ? [{ name: field.joinColumnName, kind: 'RELATION' }]
+          : [];
+      }
+      return SYNCABLE_KINDS.has(field.type)
+        ? [{ name: field.name, kind: field.type }]
+        : [];
+    });
 };
