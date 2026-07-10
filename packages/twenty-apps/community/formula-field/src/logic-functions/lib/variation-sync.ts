@@ -395,16 +395,34 @@ export const syncOneVariation = async (
     );
     if (options.reconcileOverrides !== false && overrideRows.length > 0) {
       const objects = await loadAllObjectsWithFields();
-      const objectFieldNames = new Set(
-        objects
-          .find((candidate) => candidate.nameSingular === targetObject)
-          ?.fields.map((field) => field.name) ?? [],
+      const object = objects.find(
+        (candidate) => candidate.nameSingular === targetObject,
       );
+      // Live-name set for orphan classification: an override is orphaned (a
+      // rename/delete casualty) iff its targetField names no live field. A
+      // MANY_TO_ONE relation pin is keyed by the FK JOIN COLUMN
+      // (accountOwnerId), never the relation's metadata name (accountOwner)
+      // — see computeSyncableFields / ADR 0019 — so the join column is what
+      // marks such a pin as live. Add each live MANY_TO_ONE relation's join
+      // column alongside the ordinary field names; a deleted/renamed relation
+      // stops emitting its join column here, so its pin correctly falls
+      // through to the orphan path like any other removed field.
+      const liveFieldNames = new Set<string>();
+      for (const field of object?.fields ?? []) {
+        liveFieldNames.add(field.name);
+        if (
+          field.type === 'RELATION' &&
+          field.relationType === 'MANY_TO_ONE' &&
+          field.joinColumnName
+        ) {
+          liveFieldNames.add(field.joinColumnName);
+        }
+      }
       // An unresolvable object (deleted mid-flight) yields no orphan
       // inference at all rather than treating EVERY row as orphaned.
-      if (objectFieldNames.size > 0) {
+      if (liveFieldNames.size > 0) {
         orphanedOverrides.push(
-          ...overrideRows.filter((row) => !objectFieldNames.has(row.targetField)),
+          ...overrideRows.filter((row) => !liveFieldNames.has(row.targetField)),
         );
       }
     }

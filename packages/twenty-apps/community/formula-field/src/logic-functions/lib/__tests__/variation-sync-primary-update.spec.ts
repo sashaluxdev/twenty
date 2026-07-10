@@ -176,4 +176,47 @@ describe('syncPrimaryUpdateToVariations', () => {
     expect(client.get('company', 'v1')!.accountOwnerId).toBe('user-1');
     expect(client.get('company', 'v1')!.employees).toBe(99);
   });
+
+  it('does not treat an active relation pin as an orphan (null FK pin must not collide with a null-valued field)', async () => {
+    // Regression: relation overrides store the JOIN COLUMN name
+    // (accountOwnerId), but orphan classification built its live-name set from
+    // metadata NAMES (accountOwner) — so every active relation pin was
+    // mistaken for a rename/delete orphan. A null-cleared relation pin
+    // (overrideValueText 'null') then collides with ANY other changed field
+    // whose current value is null: the value-as-witness reconcile deactivates
+    // the real relation pin and spuriously pins the unrelated field.
+    client.seed('company', [
+      { id: 'p1', name: 'Acme', domainName: null, employees: 99, accountOwnerId: 'user-2', primaryRecordId: null },
+      { id: 'v1', name: 'Acme (variation)', domainName: null, employees: null, accountOwnerId: null, primaryRecordId: 'p1' },
+    ]);
+    client.seed('formulaOverride', [
+      {
+        id: 'ov-owner',
+        name: 'company.accountOwnerId#v1',
+        targetObject: 'company',
+        targetField: 'accountOwnerId',
+        recordId: 'v1',
+        overrideValue: null,
+        overrideValueText: JSON.stringify(null),
+        active: true,
+      },
+    ]);
+
+    const outcomes = await syncPrimaryUpdateToVariations({
+      client,
+      targetObject: 'company',
+      primaryRecordId: 'p1',
+      updatedFields: ['accountOwner', 'accountOwnerId', 'employees'],
+      relationFieldName: 'primaryRecord',
+    });
+
+    // The relation pin is respected: the FK stays null and the pin stays active.
+    expect(client.get('company', 'v1')!.accountOwnerId).toBeNull();
+    expect(client.get('formulaOverride', 'ov-owner')!.active).toBe(true);
+    // The unrelated changed field syncs to the primary's value...
+    expect(outcomes[0].changedFields).toEqual(['employees']);
+    expect(client.get('company', 'v1')!.employees).toBe(99);
+    // ...with NO spurious override created for it (the null-pin collision).
+    expect(client.get('formulaOverride', 'formulaOverride-1')).toBeUndefined();
+  });
 });
