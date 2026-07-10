@@ -371,6 +371,26 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
     cloud. The activity variation config was manually re-enabled by the user
     2026-07-09 and works.
 
+- **2026-07-10 ARC (variation sync mirrors MANY_TO_ONE relations; ADR 0019, 842
+  unit tests)**: RELATION fields were silently non-mirroring — a relation set on
+  a primary stayed stale on variations because `RELATION` was in neither the
+  MIRRORABLE nor ENGINE_FAMILY kind set. Fix: `computeSyncableFields` now emits
+  the **FK join column** (`accountOwnerId`, kind `RELATION`) for a MANY_TO_ONE
+  relation whose metadata `settings.joinColumnName` is non-empty; the metadata
+  loader pulls `settings`. Everything downstream in `variation-sync.ts` treats
+  the join column as an ordinary scalar and needed **ZERO changes** — the server
+  (twenty-server 2.19 line) reports a relation change in `record.updated` with
+  BOTH the relation name and the join column in `updatedFields`
+  (`computeUpdatedFieldsFromDiff`, pinned by `object-record-changed-values.spec.ts:309`),
+  and the record API reads/writes the FK column as a plain scalar. Proven by
+  five end-to-end specs (primary mirror, null-clear, override pin, divergence
+  text-slot, new-variation copy), all green with no engine change; the
+  `*.updated` trigger carries no `updatedFields` filter. Consequences: relation
+  overrides show the COLUMN name (`accountOwnerId`) in `targetField` via the JSON
+  text slot; ONE_TO_MANY inverses (no local FK) and MORPH_RELATION (discriminator
+  column) stay excluded — backlog, alongside RICH_TEXT. NOT deployed to cloud
+  (stays on v0.1.4 until user approves).
+
 ## What is NOT done (next work)
 
 - Add description field for each formula that shows as a tooltip on the per-widget record view.
