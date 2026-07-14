@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
-import { cleanupFormulaTimelineNoise } from 'src/logic-functions/lib/timeline-cleanup';
+import {
+  cleanupFormulaTimelineNoise,
+  parentRecordIdSelectionFor,
+} from 'src/logic-functions/lib/timeline-cleanup';
 
 // Seeds a FormulaDefinition so its targetField (+ companion status field) counts
 // as app-managed for the given object.
@@ -328,6 +331,18 @@ const seedVariationConfig = (client: FakeClient): void => {
 // off the fake seam, not client.query). Backs the one-query caching assertion.
 const parentReadCount = (client: FakeClient, objectName: string): number =>
   client.querySelections.filter((selection) => objectName in selection).length;
+
+describe('parentRecordIdSelectionFor', () => {
+  it('pins the server naming: target${Capitalized}Id for standard AND custom objects', () => {
+    // Standard objects match the typed columns on
+    // timeline-activity.workspace-entity.ts (targetCompanyId, ...).
+    expect(parentRecordIdSelectionFor('company')).toBe('targetCompanyId');
+    expect(parentRecordIdSelectionFor('opportunity')).toBe('targetOpportunityId');
+    // Custom objects run the SAME server-side builder (no standard/custom
+    // branch): only the first character is upper-cased, the rest untouched.
+    expect(parentRecordIdSelectionFor('myThing')).toBe('targetMyThingId');
+  });
+});
 
 describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
   let client: FakeClient;

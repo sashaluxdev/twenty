@@ -67,7 +67,7 @@ const capitalize = (value: string): string =>
 // object, so a custom object `myThing` is `targetMyThingId` (the entity's
 // generic `targetCustom` morph carries it). Only the first character is
 // upper-cased; the rest of the name is untouched.
-const parentRecordIdSelectionFor = (objectNameSingular: string): string =>
+export const parentRecordIdSelectionFor = (objectNameSingular: string): string =>
   `target${capitalize(objectNameSingular)}Id`;
 
 type RowOutcome = 'deleted' | 'stripped' | 'kept';
@@ -226,8 +226,10 @@ const buildManagedModel = async (
 
 // Is the record at `parentRecordId` itself a variation? A variation carries a
 // non-null config-relation FK (`${relationFieldName}Id`). The verdict is cached
-// per run so N rows for one record cost one lookup. Fail-safe: a missing record
-// or a failed read returns null (unresolvable), which the caller treats as KEEP.
+// per run so N rows for one record cost one lookup — keyed `object:recordId` to
+// make the one-object-per-uuid invariant explicit rather than assumed. Fail-safe:
+// a missing record or a failed read returns null (unresolvable), which the
+// caller treats as KEEP.
 const resolveParentIsVariation = async (
   client: FormulaClient,
   objectName: string,
@@ -235,7 +237,8 @@ const resolveParentIsVariation = async (
   parentRecordId: string,
   verdictCache: Map<string, boolean>,
 ): Promise<boolean | null> => {
-  const cached = verdictCache.get(parentRecordId);
+  const cacheKey = `${objectName}:${parentRecordId}`;
+  const cached = verdictCache.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
@@ -260,7 +263,7 @@ const resolveParentIsVariation = async (
       return null;
     }
     const isVariation = record[pointerField] != null;
-    verdictCache.set(parentRecordId, isVariation);
+    verdictCache.set(cacheKey, isVariation);
     return isVariation;
   } catch {
     // Read failed -> fail-safe keep; leave the cache empty so a genuinely
@@ -446,7 +449,8 @@ export const cleanupFormulaTimelineNoise = async (
     happensAt: { gte: new Date(Date.now() - LOOKBACK_MS).toISOString() },
   };
 
-  // Per-record variation verdict cache, one lookup per record for the whole run.
+  // Per-record variation verdict cache (keyed `object:recordId`), one lookup
+  // per record for the whole run.
   const verdictCache = new Map<string, boolean>();
 
   let after: string | undefined;
