@@ -403,7 +403,7 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   warning: `defaultRoleUniversalIdentifier` on defineApplication() → use
   defineApplicationRole() (backlog).
 
-- **2026-07-14 ARC (Timeline noise cleanup; ADR 0020, 861 unit tests)**: the
+- **2026-07-14 ARC (Timeline noise cleanup + fast load; ADR 0020, 876 unit tests)**: the
   app's automated writes (formula recompute + FxStatus companion, field mirror,
   variation primary→variation copies) each emit an `<object>.updated`
   timelineActivity row, flooding record Timelines. The platform offers no
@@ -423,7 +423,24 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   visible noise between runs; a null-member API integration writing ONLY
   formula-managed fields would be culled (accepted); retire the mechanism if the
   platform ever ships field-level audit exclusion. User chose app-side cleanup
-  over an upstream twenty-server PR. NOT yet deployed to cloud (still v0.1.5).
+  over an upstream twenty-server PR. Same arc, FAST LOAD (Tasks 4-6): the
+  slow-loading root cause was `useObjectFields` fetching the FULL object/field
+  catalog per formula row per mount (N+1, uncached) — now a thin hook over the
+  shared 60s-cached `loadAllObjectsWithFields` (which gained `label`/`options`
+  optional members + in-flight dedup keyed by `workspaceCacheKey()`), with the
+  pure mapping extracted as `deriveObjectFields`. Variation labels now ride the
+  ids read (`loadVariationRecordsWithLabels`; `fetchVariationLabel` removed;
+  1+M queries → 1/page), `loadVariationList` and the editor's record+overrides
+  reads parallelized, and all four widgets poll at `POLL_INTERVAL_MS` (30s,
+  `lib/poll-interval.ts`) instead of 4s. Bundle trim was evaluated and REJECTED:
+  the record-page widget's recompute/engine imports are load-bearing
+  (refresh-on-view, ADR 0015) and the SDK bundler can't code-split (esbuild
+  `splitting:false`, blob-URL execution). Backlog from final review:
+  `invalidateMetadataCache()` doesn't clear the in-flight dedup slot (currently
+  unreachable; note a bare slot-delete is only a partial fix — a settling stale
+  pull still re-caches, full fix needs generation tokens); `labelSelectionArgs`
+  comment names one of two consumers; unused `happensAt` node selection in
+  timeline-cleanup. NOT yet deployed to cloud (still v0.1.5).
 
 ## What is NOT done (next work)
 
