@@ -4,7 +4,6 @@ import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { enqueueSnackbar } from 'twenty-sdk/front-component';
 
 import { ensureFormulaTabOnObject } from 'src/front-components/lib/ensure-formula-tab';
-import { ensureFieldLayoutVisibility } from 'src/logic-functions/lib/fx-status-field';
 import { FormatOptionsFields } from 'src/front-components/lib/format-options-fields';
 import {
   areFormatOptionsValid,
@@ -36,7 +35,6 @@ import {
   PrimaryButton,
   StepTitle,
   TextInput,
-  WarnText,
 } from 'src/front-components/lib/ui';
 import { TOKENS } from 'src/front-components/lib/ui-tokens';
 
@@ -49,32 +47,13 @@ import { TOKENS } from 'src/front-components/lib/ui-tokens';
 // The definition record IS the draft: every selection is persisted to it as
 // it is made (targetObject / outputFormat / currencyCode / name), and the
 // wizard seeds itself from the record on mount — navigating away and back
-// resumes where the user left off. The final create step is idempotent: if a
-// previous attempt already created the field pair, it is adopted instead of
-// colliding.
+// resumes where the user left off. A prior attempt's value field is NOT
+// adopted on the next attempt: there is no reliable signal to tell an
+// interrupted attempt's field apart from a user's own field of the same
+// name, so any existing field with the derived name is a collision.
 
 // The app's own objects can't host formula fields.
 const EXCLUDED_OBJECTS = new Set(['formulaDefinition', 'formulaOverride']);
-
-// Options for the hidden "FX Status" companion SELECT created next to every
-// value field (ADR 0009). Fixed option ids: the remote-dom sandbox has no
-// reliable crypto.randomUUID, and options are scoped per field anyway.
-const FX_STATUS_OPTIONS = [
-  {
-    id: '51b9f3f0-7143-41c1-9dc6-ebaf5b066409',
-    label: 'Offline',
-    value: 'OFFLINE',
-    color: 'red',
-    position: 0,
-  },
-  {
-    id: '51b9f3f0-7143-41c1-9dc6-ebaf5b066410',
-    label: 'Upstream break',
-    value: 'UPSTREAM',
-    color: 'orange',
-    position: 1,
-  },
-];
 
 type FieldInfo = { id: string; isActive: boolean };
 
@@ -370,7 +349,7 @@ export const FormulaSetupWizard = ({
     return () => clearTimeout(handle);
   }, [label, persistDraft]);
 
-  // Serializes and persists the current format + options as the resumable draft.
+  // Serializes and persists the current format + options onto the draft.
   const persistFormatOptions = useCallback(
     (formatKey: OutputFormat, nextOptions: FormatOptions) => {
       const settings = buildFieldSettings(formatKey, nextOptions);
@@ -483,13 +462,7 @@ export const FormulaSetupWizard = ({
 
   const fieldName = useMemo(() => deriveFieldName(label), [label]);
   const existingField = selectedObject?.fields.get(fieldName);
-  const existingCompanion = selectedObject?.fields.get(`${fieldName}FxStatus`);
-  // Both halves already exist -> a previous attempt got interrupted after
-  // field creation; adopt the pair instead of colliding.
-  const resumable = Boolean(fieldName && existingField && existingCompanion);
-  const collision = Boolean(
-    fieldName && !resumable && (existingField || existingCompanion),
-  );
+  const collision = Boolean(fieldName && existingField);
 
   const visibleObjects = useMemo(() => {
     const needle = objectFilter.trim().toLowerCase();
@@ -608,74 +581,12 @@ export const FormulaSetupWizard = ({
         !creating &&
         (!format || areFormatOptionsValid(format, options));
 
-  // Shared tail for both create paths: create/heal the FX Status companion, add
-  // the record-page tab, hide the companion chip via layout, then write the
+  // Shared tail for both create paths: add the record-page tab, then write the
   // finished definition (format-specific `data`) and notify. The value field
   // itself is created by the caller (format vs mirror shapes differ).
   const finalizeCreation = useCallback(
-    async ({
-      metadataClient,
-      valueFieldId,
-      definitionData,
-    }: {
-      metadataClient: MetadataApiClient;
-      valueFieldId: string | null;
-      definitionData: Record<string, unknown>;
-    }) => {
+    async ({ definitionData }: { definitionData: Record<string, unknown> }) => {
       if (!selectedObject) return;
-
-      // Companion "FX Status" SELECT: always ACTIVE (values stay writable and
-      // accurate); it is hidden/shown purely via record-page LAYOUT, slotted
-      // right under its parent value field (ADR 0009).
-      let companionId = existingCompanion?.id ?? null;
-      if (!companionId) {
-        const companion = await metadataClient.mutation({
-          createOneField: {
-            __args: {
-              input: {
-                field: {
-                  objectMetadataId: selectedObject.id,
-                  type: 'SELECT',
-                  name: `${fieldName}FxStatus`,
-                  label: `${label.trim() || fieldName} FX Status`,
-                  description:
-                    'System-managed formula health flag (Formula Field app). ' +
-                    'Hidden while the formula is healthy.',
-                  icon: 'IconHeartbeat',
-                  isUIEditable: false,
-                  options: FX_STATUS_OPTIONS,
-                },
-              },
-            },
-            id: true,
-          },
-        });
-        companionId = companion?.createOneField?.id ?? null;
-      }
-      // Heal a companion left inactive by the old design or an interrupted
-      // attempt — companions are always-active now.
-      if (companionId && existingCompanion?.isActive === false) {
-        await metadataClient.mutation({
-          updateOneField: {
-            __args: { input: { id: companionId, update: { isActive: true } } },
-            id: true,
-          },
-        });
-      }
-
-      // Hide the chip via layout, parked directly under its value field.
-      if (companionId) {
-        try {
-          await ensureFieldLayoutVisibility({
-            objectMetadataId: selectedObject.id,
-            fieldMetadataId: companionId,
-            visible: false,
-            anchorFieldMetadataId: valueFieldId ?? undefined,
-          });
-        } catch {
-          // Cosmetic only — the status sync re-converges layout later.
-        }
-      }
 
       // Give the target object a record-page "Formulas" tab (idempotent).
       // Best-effort: a layout failure must not block the formula itself.
@@ -710,7 +621,7 @@ export const FormulaSetupWizard = ({
       }
       onCreated();
     },
-    [selectedObject, existingCompanion, fieldName, label, draft.id, onCreated],
+    [selectedObject, draft.id, onCreated],
   );
 
   const create = useCallback(async () => {
@@ -723,9 +634,8 @@ export const FormulaSetupWizard = ({
       const settings = buildFieldSettings(format, options);
       const metadataClient = new MetadataApiClient();
 
-      let valueFieldId = existingField?.id ?? null;
       if (!existingField) {
-        const createdField = await metadataClient.mutation({
+        await metadataClient.mutation({
           createOneField: {
             __args: {
               input: {
@@ -753,12 +663,9 @@ export const FormulaSetupWizard = ({
             name: true,
           },
         });
-        valueFieldId = createdField?.createOneField?.id ?? null;
       }
 
       await finalizeCreation({
-        metadataClient,
-        valueFieldId,
         definitionData: {
           targetObject: selectedObject.nameSingular,
           targetField: fieldName,
@@ -813,9 +720,8 @@ export const FormulaSetupWizard = ({
         ? cloneMirrorOptions(sourceField.options)
         : [];
 
-      let valueFieldId = existingField?.id ?? null;
       if (!existingField) {
-        const createdField = await metadataClient.mutation({
+        await metadataClient.mutation({
           createOneField: {
             __args: {
               input: {
@@ -840,12 +746,9 @@ export const FormulaSetupWizard = ({
             name: true,
           },
         });
-        valueFieldId = createdField?.createOneField?.id ?? null;
       }
 
       await finalizeCreation({
-        metadataClient,
-        valueFieldId,
         definitionData: {
           targetObject: selectedObject.nameSingular,
           targetField: fieldName,
@@ -1072,13 +975,6 @@ export const FormulaSetupWizard = ({
                 — already exists on {selectedObject?.labelSingular}
               </ErrText>
             ) : null}
-            {resumable ? (
-              <WarnText>
-                {' '}
-                — fields from an interrupted attempt found; creating will adopt
-                them
-              </WarnText>
-            ) : null}
           </MutedText>
         ) : null}
       </div>
@@ -1090,11 +986,9 @@ export const FormulaSetupWizard = ({
         >
           {creating
             ? 'Creating field…'
-            : resumable
-              ? 'Adopt fields & finish setup'
-              : mode === 'mirror'
-                ? 'Create mirror field'
-                : 'Create formula field'}
+            : mode === 'mirror'
+              ? 'Create mirror field'
+              : 'Create formula field'}
         </PrimaryButton>
         <MutedText>
           Progress is saved — you can leave and resume anytime.

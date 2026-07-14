@@ -56,10 +56,7 @@ import {
   epochDaysToIsoDateTime,
 } from 'src/logic-functions/lib/date-serial';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
-import {
-  convergeFormulaFieldLayout,
-  convergeTrashedDefinitionLayout,
-} from 'src/logic-functions/lib/fx-status-field';
+import { convergeTrashedDefinitionLayout } from 'src/logic-functions/lib/fx-status-field';
 import { loadTrashedFormulas } from 'src/logic-functions/lib/formula-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import {
@@ -362,16 +359,6 @@ const FormulaEditor = () => {
     if (!draggingRef.current) {
       setDefinitions(sortedDefs);
       definitionsRef.current = sortedDefs;
-    }
-
-    // Converge chip visibility/position in the record-page layout (throttled;
-    // must run client-side — view mutations reject the app's server token).
-    for (const definition of defs) {
-      convergeFormulaFieldLayout({
-        objectNameSingular: definition.targetObject,
-        targetField: definition.targetField,
-        statusVisible: definition.status !== '',
-      });
     }
 
     // Hide the fields of TRASHED definitions on this object. A naive delete no

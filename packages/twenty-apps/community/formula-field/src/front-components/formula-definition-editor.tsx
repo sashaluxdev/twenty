@@ -22,7 +22,6 @@ import {
   type RefreshThrottleState,
 } from 'src/front-components/lib/refresh-stale-formulas';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
-import { convergeFormulaFieldLayout } from 'src/logic-functions/lib/fx-status-field';
 import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
 import { validateExpression } from 'src/front-components/lib/validate-expression';
@@ -367,13 +366,6 @@ const FormulaDefinitionEditor = () => {
     // is null and the target object/field are unknown — the record-page
     // formula-editor is the convergence surface that hides trashed fields.
     if (current?.targetObject && current?.targetField) {
-      // Converge chip visibility/position in the target object's record-page
-      // layout (throttled; view mutations require this user-token context).
-      convergeFormulaFieldLayout({
-        objectNameSingular: current.targetObject,
-        targetField: current.targetField,
-        statusVisible: current.status !== '',
-      });
       // Refresh-on-view (ADR 0015): this widget IS the definition's own page
       // (no viewed record) — the honest recomputeAllRecords refresh fixes
       // every record and advances lastEvaluatedAt, clearing the stale note.

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  convergeFormulaFieldLayout,
   convergeTrashedDefinitionLayout,
   ensureFieldLayoutVisibility,
   getLayoutConvergenceKeys,
@@ -321,56 +320,35 @@ describe('ensureFieldLayoutVisibility', () => {
 });
 
 // A trashed (soft-deleted) definition whose field this app owns and that no live
-// definition still targets must have its value field + FX-Status companion
-// hidden from the record layout — the value metadata stays ACTIVE after a naive
-// delete, so this layout flip is the only thing that removes it from the page.
+// definition still targets must have its value field hidden from the record
+// layout — the value metadata stays ACTIVE after a naive delete, so this
+// layout flip is the only thing that removes it from the page.
 describe('convergeTrashedDefinitionLayout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetLayoutConvergenceThrottle();
   });
 
-  const objectsWith = (
-    valueActive: boolean,
-    companionActive: boolean,
-    includeCompanion = true,
-  ): FakeObjectRow[] => [
+  const objectsWith = (valueActive: boolean): FakeObjectRow[] => [
     {
       id: objectMetadataId,
       nameSingular: 'company',
       fieldsList: [
         { id: 'value-field', name: 'revenue', type: 'NUMBER', isActive: valueActive },
-        ...(includeCompanion
-          ? [
-              {
-                id: 'companion-field',
-                name: 'revenueFxStatus',
-                type: 'SELECT',
-                isActive: companionActive,
-              },
-            ]
-          : []),
       ],
     },
   ];
 
-  it('hides the value field and its companion when their viewField rows exist', async () => {
+  it('hides the value field when its viewField row exists', async () => {
     const fake = useFake({
       viewId: 'view-1',
-      objects: objectsWith(true, true),
+      objects: objectsWith(true),
       viewFields: [
         {
           id: 'vf-value',
           fieldMetadataId: 'value-field',
           isVisible: true,
           position: 2,
-          viewFieldGroupId: 'group-1',
-        },
-        {
-          id: 'vf-companion',
-          fieldMetadataId: 'companion-field',
-          isVisible: true,
-          position: 2.5,
           viewFieldGroupId: 'group-1',
         },
       ],
@@ -382,18 +360,17 @@ describe('convergeTrashedDefinitionLayout', () => {
     });
 
     expect(fake.createdFields).toHaveLength(0);
-    expect(fake.updatedFields).toHaveLength(2);
-    const byId = Object.fromEntries(
-      fake.updatedFields.map((update) => [update.id, update.update]),
-    );
-    expect(byId['vf-value'].isVisible).toBe(false);
-    expect(byId['vf-companion'].isVisible).toBe(false);
+    expect(fake.updatedFields).toHaveLength(1);
+    expect(fake.updatedFields[0]).toEqual({
+      id: 'vf-value',
+      update: { isVisible: false, viewFieldGroupId: 'group-1' },
+    });
   });
 
   it('does not create a viewField row when the field has no row (a missing row is already invisible)', async () => {
     const fake = useFake({
       viewId: 'view-1',
-      objects: objectsWith(true, true, false),
+      objects: objectsWith(true),
       viewFields: [],
     });
 
@@ -409,7 +386,7 @@ describe('convergeTrashedDefinitionLayout', () => {
   it('skips inactive fields (legacy deletes) and touches nothing for them', async () => {
     const fake = useFake({
       viewId: 'view-1',
-      objects: objectsWith(false, false),
+      objects: objectsWith(false),
       viewFields: [
         {
           id: 'vf-value',
@@ -430,10 +407,10 @@ describe('convergeTrashedDefinitionLayout', () => {
     expect(fake.updatedFields).toHaveLength(0);
   });
 
-  it('is throttled per object.field:trashed key and clears the live-converge keys', async () => {
+  it('is throttled per object.field:trashed key', async () => {
     const fake = useFake({
       viewId: 'view-1',
-      objects: objectsWith(true, true),
+      objects: objectsWith(true),
       viewFields: [
         {
           id: 'vf-value',
@@ -442,26 +419,9 @@ describe('convergeTrashedDefinitionLayout', () => {
           position: 2,
           viewFieldGroupId: 'group-1',
         },
-        {
-          id: 'vf-companion',
-          fieldMetadataId: 'companion-field',
-          isVisible: true,
-          position: 2.5,
-          viewFieldGroupId: 'group-1',
-        },
       ],
     });
 
-    // A prior live convergence seeds a live-converge key for this field.
-    await convergeFormulaFieldLayout({
-      objectNameSingular: 'company',
-      targetField: 'revenue',
-      statusVisible: false,
-    });
-    expect(getLayoutConvergenceKeys()).toContain('company.revenue:false');
-
-    fake.updatedFields = [];
-    fake.createdFields = [];
     await convergeTrashedDefinitionLayout({
       objectNameSingular: 'company',
       targetField: 'revenue',
@@ -469,8 +429,6 @@ describe('convergeTrashedDefinitionLayout', () => {
 
     const keysAfterFirst = getLayoutConvergenceKeys();
     expect(keysAfterFirst).toContain('company.revenue:trashed');
-    expect(keysAfterFirst).not.toContain('company.revenue:true');
-    expect(keysAfterFirst).not.toContain('company.revenue:false');
     expect(fake.updatedFields.length).toBeGreaterThan(0);
 
     // Second call within the TTL is a no-op.
@@ -480,44 +438,5 @@ describe('convergeTrashedDefinitionLayout', () => {
       targetField: 'revenue',
     });
     expect(fake.updatedFields).toHaveLength(0);
-  });
-
-  it('is un-throttled by a live convergence, which clears the trashed key (delete -> restore round trip)', async () => {
-    useFake({
-      viewId: 'view-1',
-      objects: objectsWith(true, true),
-      viewFields: [
-        {
-          id: 'vf-value',
-          fieldMetadataId: 'value-field',
-          isVisible: true,
-          position: 2,
-          viewFieldGroupId: 'group-1',
-        },
-        {
-          id: 'vf-companion',
-          fieldMetadataId: 'companion-field',
-          isVisible: true,
-          position: 2.5,
-          viewFieldGroupId: 'group-1',
-        },
-      ],
-    });
-
-    await convergeTrashedDefinitionLayout({
-      objectNameSingular: 'company',
-      targetField: 'revenue',
-    });
-    expect(getLayoutConvergenceKeys()).toContain('company.revenue:trashed');
-
-    await convergeFormulaFieldLayout({
-      objectNameSingular: 'company',
-      targetField: 'revenue',
-      statusVisible: false,
-    });
-
-    const keys = getLayoutConvergenceKeys();
-    expect(keys).not.toContain('company.revenue:trashed');
-    expect(keys).toContain('company.revenue:false');
   });
 });

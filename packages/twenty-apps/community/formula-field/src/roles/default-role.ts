@@ -16,12 +16,13 @@ import { defineRole } from 'twenty-sdk/define';
 // - canUpdateAllSettings is genuinely required by the APP token — but NOT for
 //   the wizard. The wizard's createOneField runs under the USER token (a front
 //   component on the host token bridge), so the user's own DATA_MODEL permission
-//   gates it, not this role. The real consumer is server-side:
-//   syncCompanionStatusField -> setFieldActive (fx-status-field.ts) calls the
-//   metadata mutation updateOneField (isActive) under the app token to heal a
-//   deactivated FX Status companion during refreshFormulaStatuses (sweep /
-//   save / lifecycle). updateOneField is settings-gated, so without
-//   canUpdateAllSettings that heal would be denied. Kept and documented.
+//   gates it, not this role. The real consumer is server-side: the legacy
+//   companion-field setFieldActive() in handle-definition-lifecycle.ts calls
+//   the metadata mutation updateOneField (isActive) under the app token during
+//   delete/restore lifecycle handling (deliberate legacy tolerance — ADR 0021
+//   removed companion creation/sync going forward, but old deployed companions
+//   still need this). updateOneField is settings-gated, so without
+//   canUpdateAllSettings that path would be denied. Kept and documented.
 export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER =
   'ac4d683d-f20b-4728-9ab0-7d52938dd36b';
 

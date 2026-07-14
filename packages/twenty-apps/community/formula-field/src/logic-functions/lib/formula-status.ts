@@ -7,10 +7,6 @@ import {
 } from 'src/logic-functions/lib/formula-repository';
 import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
 import {
-  loadObjectFieldIndex,
-  syncCompanionStatusField,
-} from 'src/logic-functions/lib/fx-status-field';
-import {
   type FormulaClient,
   type FormulaDefinitionRecord,
 } from 'src/logic-functions/lib/types';
@@ -195,9 +191,9 @@ export const loadFieldLiveness = async (): Promise<FieldLiveness> => {
   }
 };
 
-// Recomputes and persists every enabled formula's operational status, and
-// syncs the per-record FX Status companion fields. Write-avoidant; safe to
-// call after any lifecycle event (delete/restore/save) and from the sweep.
+// Recomputes and persists every enabled formula's operational status.
+// Write-avoidant; safe to call after any lifecycle event
+// (delete/restore/save) and from the sweep.
 export const refreshFormulaStatuses = async (
   client: FormulaClient,
   isFieldLive?: FieldLiveness,
@@ -216,7 +212,6 @@ export const refreshFormulaStatuses = async (
   const liveness: FieldLiveness = (object, field) =>
     baseLiveness(object, field) && !trashDeadKeys.has(fieldKey(object, field));
   const statuses = computeFormulaStatuses(definitions, liveness);
-  const objectFieldIndex = await loadObjectFieldIndex();
 
   let offline = 0;
   let upstream = 0;
@@ -238,17 +233,6 @@ export const refreshFormulaStatuses = async (
         statusReason: next.reason,
       });
     }
-
-    // Companion sync runs on every refresh (not only transitions) so records
-    // created while a formula was broken converge too; it is write-avoidant.
-    await syncCompanionStatusField(
-      client,
-      definition.targetObject
-        ? objectFieldIndex.get(definition.targetObject)
-        : undefined,
-      definition,
-      next.status,
-    );
   }
 
   return { offline, upstream, byId: statuses };
