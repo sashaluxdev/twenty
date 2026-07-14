@@ -6,6 +6,7 @@ import {
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
 import { refreshFormulaStatuses } from 'src/logic-functions/lib/formula-status';
+import { cleanupCompanionFields } from 'src/logic-functions/lib/fx-status-cleanup';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 import {
   findCyclicTargets,
@@ -20,9 +21,11 @@ import {
 const handler = async (): Promise<Record<string, unknown>> => {
   // Dynamic client: wizard-created value fields are not in the genql type map.
   const client = createDynamicCoreClient();
-  // Refresh operational statuses first (converges companions too), then load
-  // the definitions fresh so the OFFLINE skip below sees current verdicts.
+  // Refresh operational statuses first, then load the definitions fresh so
+  // the OFFLINE skip below sees current verdicts.
   const statusResult = await refreshFormulaStatuses(client);
+  // Legacy FX Status companion removal (ADR 0021) — no-op once converged.
+  const companionCleanup = await cleanupCompanionFields(client);
   const formulas = await loadAllEnabledFormulas(client);
   const cyclic = findCyclicTargets(formulas);
 
@@ -76,6 +79,7 @@ const handler = async (): Promise<Record<string, unknown>> => {
     skippedOffline,
     offline: statusResult.offline,
     upstream: statusResult.upstream,
+    companionCleanup,
   };
 };
 
