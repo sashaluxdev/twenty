@@ -18,6 +18,7 @@ import {
   FormulaFieldInput,
   useObjectFields,
 } from 'src/front-components/lib/formula-field-input';
+import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import {
   refreshStaleTodayFormulas,
   type RefreshThrottleState,
@@ -523,7 +524,7 @@ const FormulaEditor = () => {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 4000);
+    const interval = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [load]);
 

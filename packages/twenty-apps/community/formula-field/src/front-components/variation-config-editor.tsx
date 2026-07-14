@@ -10,6 +10,7 @@ import {
   planDeleteVariationConfig,
 } from 'src/front-components/lib/delete-variation-config-completely';
 import { formatRelativePast } from 'src/front-components/lib/format-relative-past';
+import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import { VariationSetupWizard } from 'src/front-components/lib/variation-setup-wizard';
 import {
   BannerDanger,
@@ -250,7 +251,7 @@ const VariationConfigEditor = () => {
   useEffect(() => {
     if (deleted) return;
     load();
-    const interval = setInterval(load, 4000);
+    const interval = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [load, deleted]);
 
