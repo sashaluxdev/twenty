@@ -440,7 +440,7 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   unreachable; note a bare slot-delete is only a partial fix — a settling stale
   pull still re-caches, full fix needs generation tokens); `labelSelectionArgs`
   comment names one of two consumers; unused `happensAt` node selection in
-  timeline-cleanup. NOT yet deployed to cloud (still v0.1.5).
+  timeline-cleanup. Deployed to cloud as v0.1.6 (2026-07-14 morning).
 
 - **2026-07-14 ARC (FX Status companion removed, replaced by a status
   snackbar; ADR 0021)**: three tasks, same day, on top of the timeline/
@@ -477,8 +477,11 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   leaves companions deactivated (out of all views) and retrying hourly. What
   stays: OFFLINE/UPSTREAM detection (`status`/`statusReason`), the in-widget
   banners, `companionFieldName`. Docs: ADR 0021 + ADR 0009 amendment + README/
-  context updates (Task 4, this entry). App version stays 0.1.6 — NOT deployed
-  to cloud yet (deploy is a separate, user-gated step per project convention).
+  context updates (Task 4, this entry). DEPLOYED to cloud as **v0.1.7**
+  (2026-07-14 afternoon; platform on the 2.21 line, built/published with the
+  matching npm twenty-sdk from a scratch dir per the SDK-match rule below).
+  Legacy companions existed pre-deploy — verify the first hourly sweep's
+  `companionCleanup` counters purge them.
 
 ## What is NOT done (next work)
 
@@ -641,8 +644,10 @@ Then:
    from the app dir: bump `version` in package.json, then
    `... cli.cjs app:publish --private -r cloud` (server rejects a
    non-incremented version) followed by `... cli.cjs app:install -r cloud`.
-   Currently deployed to cloud: **v0.1.2** (the fx-status value-field
-   auto-reshow removal). Only deploy to cloud when the user explicitly asks —
+   Currently deployed to cloud: **v0.1.7** (FX Status companion removal +
+   status snackbar, ADR 0021; 2026-07-14 — platform had moved to the 2.21
+   line, npm twenty-sdk@2.21.0 used for build/publish/install, zero
+   collisions). Only deploy to cloud when the user explicitly asks —
    it targets their real production workspace.
 6. Possible polish: surface wizard-created VALUE fields in table (index) views
    automatically — new fields are hidden in views by default, and layout
