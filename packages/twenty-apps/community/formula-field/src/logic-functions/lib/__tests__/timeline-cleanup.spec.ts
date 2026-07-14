@@ -6,6 +6,21 @@ import {
   parentRecordIdSelectionFor,
 } from 'src/logic-functions/lib/timeline-cleanup';
 
+// The cron entry file builds its own client via createDynamicCoreClient; the
+// handler test below injects a FakeClient by mocking only that factory. Every
+// other dynamic-client export (notably graphqlEnum, which the lib uses to emit
+// the NULL member filter) stays real via importOriginal.
+const handlerMocks = vi.hoisted(() => ({ client: null as FakeClient | null }));
+
+vi.mock('src/logic-functions/lib/dynamic-client', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('src/logic-functions/lib/dynamic-client')
+  >()),
+  createDynamicCoreClient: () => handlerMocks.client,
+}));
+
+import timelineCleanupFunction from 'src/logic-functions/timeline-cleanup';
+
 // Seeds a FormulaDefinition so its targetField (+ companion status field) counts
 // as app-managed for the given object.
 const seedDefinition = (
@@ -516,5 +531,37 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     expect(client.get('timelineActivity', 't1')).toBeUndefined();
     // The variation path never engaged: no parent-record read was issued.
     expect(parentReadCount(client, 'company')).toBe(0);
+  });
+});
+
+describe('timeline-cleanup cron (default export handler)', () => {
+  it('sweeps app noise via the injected client and returns the outcome counts', async () => {
+    const client = new FakeClient();
+    handlerMocks.client = client;
+    seedDefinition(client);
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'company.updated',
+        properties: { diff: { revenue: { before: 1, after: 2 } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const result = (await timelineCleanupFunction.config.handler()) as Record<
+      string,
+      number | boolean
+    >;
+
+    // The handler is a thin wrapper: it must spread the lib's counts back out
+    // (so the cron log shows scanned/deleted) and actually delete the row.
+    expect(result.scanned).toBe(1);
+    expect(result.deleted).toBe(1);
+    expect(result.kept).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeUndefined();
+    // The cron contract this file exists to pin.
+    expect(timelineCleanupFunction.config.cronTriggerSettings?.pattern).toBe(
+      '*/10 * * * *',
+    );
   });
 });
