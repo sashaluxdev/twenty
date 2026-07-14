@@ -6,6 +6,7 @@ import {
   loadActiveOverrideFieldsForRecord,
 } from 'src/logic-functions/lib/override-repository';
 import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
+import { pluralize } from 'src/logic-functions/lib/recompute';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 import {
   findVariationConfigByTargetObject,
@@ -14,7 +15,6 @@ import {
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import {
   fetchPrimaryRecordInclTrashed,
-  loadVariationRecordIds,
   syncOneVariation,
   type SyncOutcome,
 } from 'src/logic-functions/lib/variation-sync';
@@ -238,36 +238,66 @@ const loadActiveOverridesGroupedByRecord = async (
   return grouped;
 };
 
-// Reads one variation's kind-aware label. A separate singular read per
-// variation (not batched): only the OVERRIDE load is contractually single-query
-// — labels can't ride that formulaOverrides read.
-const fetchVariationLabel = async (
+type VariationRecordWithLabel = { id: string; label: string | null };
+
+// Every variation id AND its kind-aware label in ONE paginated read: the label
+// field (already resolved from the ≤60s metadata cache) rides the same
+// variation-ids query that filters the plural object by the config relation FK.
+// A page of M variations costs one query instead of M singular label reads. The
+// label selection is part of the per-query node selection, so it is applied to
+// EVERY page automatically — pagination never dilutes it. No selectable label
+// field -> ids-only selection and label:null for every entry (the OVERRIDE load
+// still can't ride this read, but labels always could — they belong to the
+// variation record itself, not the formulaOverrides connection).
+const loadVariationRecordsWithLabels = async (
   client: FormulaClient,
   targetObject: string,
-  recordId: string,
+  relationFieldName: string,
+  primaryRecordId: string,
   labelField: LabelFieldInfo | null,
-): Promise<string | null> => {
+  pageSize = 200,
+): Promise<VariationRecordWithLabel[]> => {
+  const pluralName = pluralize(targetObject);
+  const filterFieldName = `${relationFieldName}Id`;
   const selectable = selectableLabelField(labelField);
-  if (!selectable) {
-    return null;
+  const { fields, overrides } = labelSelectionArgs(labelField);
+  const labelSelection: Record<string, unknown> = {
+    ...Object.fromEntries(fields.map((fieldName) => [fieldName, true])),
+    ...overrides,
+  };
+
+  const records: VariationRecordWithLabel[] = [];
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        [pluralName]: {
+          __args: {
+            first: pageSize,
+            filter: { [filterFieldName]: { eq: primaryRecordId } },
+            ...(after ? { after } : {}),
+          },
+          edges: { node: { id: true, ...labelSelection } },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+    const connection = response?.[pluralName];
+    for (const edge of connection?.edges ?? []) {
+      const node = edge?.node as Record<string, unknown> | undefined;
+      const id = node?.id as string | undefined;
+      if (!id) continue;
+      const label = selectable
+        ? deriveRecordDisplayLabel(node, selectable.name, selectable.kind)
+        : null;
+      records.push({ id, label });
+    }
+    if (!connection?.pageInfo?.hasNextPage) break;
+    after = connection.pageInfo.endCursor ?? undefined;
   }
-  const selection =
-    selectable.kind === 'FULL_NAME'
-      ? { [selectable.name]: selectionEntryForMirrorKind('FULL_NAME') }
-      : { [selectable.name]: true };
-  const response = await withRetry(() =>
-    client.query({
-      [targetObject]: {
-        __args: { filter: { id: { eq: recordId } } },
-        id: true,
-        ...selection,
-      },
-    }),
-  );
-  const record = response?.[targetObject] as Record<string, unknown> | null | undefined;
-  return record
-    ? deriveRecordDisplayLabel(record, selectable.name, selectable.kind)
-    : null;
+
+  return records;
 };
 
 export type VariationListEntry = {
@@ -286,28 +316,32 @@ export const loadVariationList = async (
   const targetObject = config.targetObject ?? '';
   const relationFieldName = relationFieldOf(config);
 
-  const variationIds = await loadVariationRecordIds(
-    client,
-    targetObject,
-    relationFieldName,
-    primaryRecordId,
-  );
-  const syncable = await computeSyncableFields(client, targetObject, relationFieldName);
-  const syncableNames = new Set(syncable.map((field) => field.name));
-  const overridesByRecord = await loadActiveOverridesGroupedByRecord(client, targetObject);
+  // Label-field resolution must precede the ids+labels read (it shapes that
+  // read's selection) — but it's a cached-metadata lookup, not a query. The
+  // three actual reads below are mutually independent, so they run in parallel.
   const labelField = await resolveLabelField(targetObject);
 
-  const entries: VariationListEntry[] = [];
-  for (const variationId of variationIds) {
-    const overrideFields = overridesByRecord.get(variationId) ?? new Set<string>();
+  const [syncable, overridesByRecord, variations] = await Promise.all([
+    computeSyncableFields(client, targetObject, relationFieldName),
+    loadActiveOverridesGroupedByRecord(client, targetObject),
+    loadVariationRecordsWithLabels(
+      client,
+      targetObject,
+      relationFieldName,
+      primaryRecordId,
+      labelField,
+    ),
+  ]);
+  const syncableNames = new Set(syncable.map((field) => field.name));
+
+  return variations.map((variation) => {
+    const overrideFields = overridesByRecord.get(variation.id) ?? new Set<string>();
     let divergedCount = 0;
     for (const fieldName of overrideFields) {
       if (syncableNames.has(fieldName)) divergedCount += 1;
     }
-    const label = await fetchVariationLabel(client, targetObject, variationId, labelField);
-    entries.push({ id: variationId, label, divergedCount });
-  }
-  return entries;
+    return { id: variation.id, label: variation.label, divergedCount };
+  });
 };
 
 export type DivergedField = { name: string; kind: string };

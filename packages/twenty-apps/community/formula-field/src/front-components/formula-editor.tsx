@@ -432,12 +432,36 @@ const FormulaEditor = () => {
           ? selectionEntryForMirrorKind(definition.targetFieldType)
           : selectionEntryForFieldKind(definition.targetFieldType);
       }
-      const recordResponse = await client.query({
-        [host]: {
-          __args: { filter: { id: { eq: recordId } } },
-          ...selection,
-        },
-      });
+      // The host-record read and the overrides read are mutually independent
+      // (each needs only host/recordId/defs) — fire them together instead of
+      // waterfalling the second behind the first.
+      const [recordResponse, overrideResponse] = await Promise.all([
+        client.query({
+          [host]: {
+            __args: { filter: { id: { eq: recordId } } },
+            ...selection,
+          },
+        }),
+        client.query({
+          formulaOverrides: {
+            __args: {
+              first: 100,
+              filter: {
+                targetObject: { eq: host },
+                recordId: { eq: recordId },
+              },
+            },
+            edges: {
+              node: {
+                targetField: true,
+                overrideValue: true,
+                overrideValueText: true,
+                active: true,
+              },
+            },
+          },
+        }),
+      ]);
       const record = recordResponse?.[host] ?? {};
       const nextValues: Record<string, unknown> = {};
       for (const definition of defs) {
@@ -449,25 +473,6 @@ const FormulaEditor = () => {
       }
       setValues(nextValues);
 
-      const overrideResponse = await client.query({
-        formulaOverrides: {
-          __args: {
-            first: 100,
-            filter: {
-              targetObject: { eq: host },
-              recordId: { eq: recordId },
-            },
-          },
-          edges: {
-            node: {
-              targetField: true,
-              overrideValue: true,
-              overrideValueText: true,
-              active: true,
-            },
-          },
-        },
-      });
       const nextOverrides: Record<
         string,
         { value: unknown; active: boolean }

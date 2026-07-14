@@ -39,6 +39,36 @@ const CONFIG: VariationConfigRecord = {
   statusReason: '',
 };
 
+// A person object whose label identifier is a FULL_NAME composite, to exercise
+// the composite label sub-selection riding the batched ids query.
+const PERSON_OBJECT = {
+  id: 'obj-person',
+  nameSingular: 'person',
+  labelIdentifierFieldMetadataId: 'field-fullname',
+  fields: [
+    { id: 'field-fullname', name: 'name', type: 'FULL_NAME', isActive: true, isSystem: false },
+    { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
+  ],
+};
+
+const PERSON_CONFIG: VariationConfigRecord = {
+  ...CONFIG,
+  id: 'vc-person',
+  name: 'person',
+  targetObject: 'person',
+};
+
+// An object with no resolvable label identifier -> labels are all null.
+const NO_LABEL_OBJECT = {
+  id: 'obj-company',
+  nameSingular: 'company',
+  labelIdentifierFieldMetadataId: null,
+  fields: [
+    { id: 'field-employees', name: 'employees', type: 'NUMBER', isActive: true, isSystem: false },
+    { id: 'field-primary', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
+  ],
+};
+
 const seedConfig = (client: FakeClient, overrides: Partial<VariationConfigRecord> = {}) => {
   client.seed('variationConfig', [{ ...CONFIG, ...overrides }]);
 };
@@ -225,6 +255,80 @@ describe('variation-widget-data', () => {
         (selection) => Object.keys(selection)[0] === 'formulaOverrides',
       );
       expect(overrideQueries).toHaveLength(1);
+    });
+
+    it('issues exactly ONE records query for ids+labels across all variations', async () => {
+      client.seed('company', [
+        { id: 'p1', name: 'Acme', primaryRecordId: null },
+        { id: 'v1', name: 'Acme (variation)', primaryRecordId: 'p1' },
+        { id: 'v2', name: 'Acme (variation 2)', primaryRecordId: 'p1' },
+        { id: 'v3', name: 'Acme (variation 3)', primaryRecordId: 'p1' },
+      ]);
+
+      await loadVariationList(client, CONFIG, 'p1');
+
+      const recordQueries = client.querySelections.filter((selection) => {
+        const key = Object.keys(selection)[0];
+        return key === 'company' || key === 'companies';
+      });
+      expect(recordQueries).toHaveLength(1);
+    });
+
+    it('extracts TEXT labels and selects the label scalar in the ids query', async () => {
+      client.seed('company', [
+        { id: 'p1', name: 'Acme', primaryRecordId: null },
+        { id: 'v1', name: 'Acme (variation)', primaryRecordId: 'p1' },
+      ]);
+
+      const list = await loadVariationList(client, CONFIG, 'p1');
+      expect(list).toEqual([
+        { id: 'v1', label: 'Acme (variation)', divergedCount: 0 },
+      ]);
+
+      const recordsQuery = client.querySelections.find(
+        (selection) => Object.keys(selection)[0] === 'companies',
+      );
+      expect(recordsQuery.companies.edges.node).toMatchObject({
+        id: true,
+        name: true,
+      });
+    });
+
+    it('extracts FULL_NAME labels with the composite sub-selection in the ids query', async () => {
+      client.setObjectsWithFields([PERSON_OBJECT]);
+      client.seed('person', [
+        { id: 'v1', name: { firstName: 'Jane', lastName: 'Doe' }, primaryRecordId: 'p1' },
+      ]);
+
+      const list = await loadVariationList(client, PERSON_CONFIG, 'p1');
+      expect(list).toEqual([{ id: 'v1', label: 'Jane Doe', divergedCount: 0 }]);
+
+      const recordsQuery = client.querySelections.find(
+        (selection) => Object.keys(selection)[0] === 'people',
+      );
+      expect(recordsQuery.people.edges.node.name).toEqual({
+        firstName: true,
+        lastName: true,
+      });
+    });
+
+    it('returns null labels and an ids-only query when no label field resolves', async () => {
+      client.setObjectsWithFields([NO_LABEL_OBJECT]);
+      client.seed('company', [
+        { id: 'v1', name: 'ignored', primaryRecordId: 'p1' },
+        { id: 'v2', name: 'ignored 2', primaryRecordId: 'p1' },
+      ]);
+
+      const list = await loadVariationList(client, CONFIG, 'p1');
+      expect(list).toEqual([
+        { id: 'v1', label: null, divergedCount: 0 },
+        { id: 'v2', label: null, divergedCount: 0 },
+      ]);
+
+      const recordsQuery = client.querySelections.find(
+        (selection) => Object.keys(selection)[0] === 'companies',
+      );
+      expect(Object.keys(recordsQuery.companies.edges.node)).toEqual(['id']);
     });
   });
 
