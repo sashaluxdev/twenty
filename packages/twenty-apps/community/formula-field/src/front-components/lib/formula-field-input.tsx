@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 
 import { caretFromDiff } from 'src/front-components/lib/caret-from-diff';
 import {
@@ -9,6 +8,10 @@ import {
   TextArea,
 } from 'src/front-components/lib/ui';
 import { TOKENS } from 'src/front-components/lib/ui-tokens';
+import {
+  loadAllObjectsWithFields,
+  type MetadataObjectInfo,
+} from 'src/logic-functions/lib/metadata-objects';
 
 // Reusable formula text input with inline, same-record field autocomplete.
 // As the user types an identifier, a dropdown shows the target object's numeric
@@ -129,14 +132,72 @@ export type ObjectFields = {
   kindsByName: Map<string, string>;
 };
 
-// Fetches the suggestible fields of an object (by nameSingular) via metadata.
+// Pure mapping from the shared metadata catalog to an object's ObjectFields:
+// active + non-system fields; `kindsByName` over ALL active fields (unfiltered
+// by suggestibility — the validate-expression kind check needs the true kind of
+// fields it will never suggest, e.g. MULTI_SELECT, to reject string comparisons
+// against them); `fields` narrowed to SUGGESTIBLE_FIELD_TYPES with option sets
+// mapped to {value,label} pairs, label falling back to name, sorted by label.
+// Missing `label`/`options` (older fixtures) degrade to label←name / no options.
+// Extracted from the old useObjectFields body so it is unit-testable without React.
+export const deriveObjectFields = (
+  objects: MetadataObjectInfo[],
+  targetObject: string | undefined,
+): ObjectFields => {
+  if (!targetObject) {
+    return { fields: [], kindsByName: new Map() };
+  }
+
+  const object = objects.find((node) => node.nameSingular === targetObject);
+  if (!object) {
+    return { fields: [], kindsByName: new Map() };
+  }
+
+  const activeFields = object.fields.filter(
+    (field) => field.isActive && !field.isSystem,
+  );
+
+  const kindsByName = new Map<string, string>(
+    activeFields
+      .filter(
+        (field) =>
+          typeof field.name === 'string' && typeof field.type === 'string',
+      )
+      .map((field) => [field.name, field.type]),
+  );
+
+  const fields: FieldOption[] = activeFields
+    .filter((field) => SUGGESTIBLE_FIELD_TYPES.has(field.type))
+    .map((field) => {
+      const rawOptions = Array.isArray(field.options) ? field.options : [];
+      const fieldOptions = rawOptions
+        .filter((option: any) => typeof option?.value === 'string')
+        .map((option: any) => ({
+          value: option.value as string,
+          label: (option.label as string) ?? option.value,
+        }));
+      return {
+        name: field.name,
+        label: field.label ?? field.name,
+        type: field.type,
+        ...(fieldOptions.length > 0 ? { options: fieldOptions } : {}),
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  return { fields, kindsByName };
+};
+
+// Fetches the suggestible fields of an object (by nameSingular) via the shared,
+// 60s-cached + in-flight-deduped metadata catalog. N formula rows + the editor
+// now share ONE catalog pull per worker per 60s instead of each firing its own.
 export const useObjectFields = (
   targetObject: string | undefined,
 ): ObjectFields => {
-  const [fields, setFields] = useState<FieldOption[]>([]);
-  const [kindsByName, setKindsByName] = useState<Map<string, string>>(
-    () => new Map(),
-  );
+  const [objectFields, setObjectFields] = useState<ObjectFields>(() => ({
+    fields: [],
+    kindsByName: new Map(),
+  }));
 
   useEffect(() => {
     if (!targetObject) return;
@@ -144,83 +205,13 @@ export const useObjectFields = (
 
     (async () => {
       try {
-        const client = new MetadataApiClient();
-        const response = await client.query({
-          objects: {
-            __args: { filter: {}, paging: { first: 200 } },
-            edges: {
-              node: {
-                nameSingular: true,
-                fields: {
-                  __args: { paging: { first: 200 }, filter: {} },
-                  edges: {
-                    node: {
-                      name: true,
-                      label: true,
-                      type: true,
-                      isActive: true,
-                      isSystem: true,
-                      // JSON scalar: a SELECT/MULTI_SELECT field's option set
-                      // (array of { value, label, color, ... }).
-                      options: true,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        });
-
-        const objectNode = (response?.objects?.edges ?? [])
-          .map((edge: any) => edge.node)
-          .find((node: any) => node?.nameSingular === targetObject);
-
-        const activeNodes: any[] = (objectNode?.fields?.edges ?? [])
-          .map((edge: any) => edge.node)
-          .filter((node: any) => node?.isActive && !node?.isSystem);
-
-        // Full kind map (name -> type) over every active field, unfiltered by
-        // suggestibility — the validate-expression kind check needs the true
-        // kind of fields it will never suggest (e.g. MULTI_SELECT) to reject
-        // string comparisons against them.
-        const kinds = new Map<string, string>(
-          activeNodes
-            .filter(
-              (node: any) =>
-                typeof node?.name === 'string' && typeof node?.type === 'string',
-            )
-            .map((node: any) => [node.name as string, node.type as string]),
-        );
-
-        const options: FieldOption[] = activeNodes
-          .filter((node: any) => SUGGESTIBLE_FIELD_TYPES.has(node?.type))
-          .map((node: any) => {
-            const rawOptions = Array.isArray(node.options) ? node.options : [];
-            const fieldOptions = rawOptions
-              .filter((option: any) => typeof option?.value === 'string')
-              .map((option: any) => ({
-                value: option.value as string,
-                label: (option.label as string) ?? option.value,
-              }));
-            return {
-              name: node.name as string,
-              label: (node.label as string) ?? node.name,
-              type: node.type as string,
-              ...(fieldOptions.length > 0 ? { options: fieldOptions } : {}),
-            };
-          })
-          .sort((a: FieldOption, b: FieldOption) =>
-            a.label.localeCompare(b.label),
-          );
-
+        const objects = await loadAllObjectsWithFields();
         if (!cancelled) {
-          setFields(options);
-          setKindsByName(kinds);
+          setObjectFields(deriveObjectFields(objects, targetObject));
         }
       } catch {
         if (!cancelled) {
-          setFields([]);
-          setKindsByName(new Map());
+          setObjectFields({ fields: [], kindsByName: new Map() });
         }
       }
     })();
@@ -230,7 +221,7 @@ export const useObjectFields = (
     };
   }, [targetObject]);
 
-  return { fields, kindsByName };
+  return objectFields;
 };
 
 // True when the caret sits inside an unclosed "[" — i.e. within a cross-record

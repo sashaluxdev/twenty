@@ -28,6 +28,12 @@ export type MetadataFieldInfo = {
   // Cloud 2.19 shape verified 2026-07-10 (docs/plans/2026-07-10-relation-mirroring.md).
   relationType?: string | null;
   joinColumnName?: string | null;
+  // Front-autocomplete display data, added for the shared-catalog N+1 collapse
+  // (Task 4). Optional so no existing `__setFakeObjectsWithFieldsForTests`
+  // fixture has to set them: `label` falls back to `name` and a missing
+  // `options` reads as "no option set" downstream (deriveObjectFields).
+  label?: string | null;
+  options?: unknown;
 };
 
 export type MetadataObjectInfo = {
@@ -88,6 +94,13 @@ type ObjectsCacheEntry = {
 };
 const objectsCacheByWorkspace = new Map<string, ObjectsCacheEntry>();
 
+// In-flight dedup (Task 4): with N formula rows mounting at once, each fired its
+// own full catalog pull against a cold cache — the N+1. Keyed by workspace, this
+// lets concurrent cold-cache callers share ONE fetch. The slot is cleared on
+// settle; a rejected pull is never cached AND clears the slot, so the next call
+// retries reality instead of a poisoned promise.
+const inFlightByWorkspace = new Map<string, Promise<MetadataObjectInfo[]>>();
+
 let fakeObjectsForTests: MetadataObjectInfo[] | null = null;
 
 // Test-only escape hatch: loadAllObjectsWithFields talks to the real
@@ -147,6 +160,26 @@ export const loadAllObjectsWithFields = async (): Promise<
     return cached.objects;
   }
 
+  // Share one fetch across concurrent cold-cache callers (the N+1 collapse).
+  const inFlight = inFlightByWorkspace.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const fetchPromise = fetchAllObjectsWithFields(cacheKey);
+  inFlightByWorkspace.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    // Clear on settle either way: a rejected pull leaves nothing cached (the
+    // throw skips the cache.set below), so the next caller must be free to retry.
+    inFlightByWorkspace.delete(cacheKey);
+  }
+};
+
+const fetchAllObjectsWithFields = async (
+  cacheKey: string,
+): Promise<MetadataObjectInfo[]> => {
   const client = new MetadataApiClient();
   const results: MetadataObjectInfo[] = [];
   let after: string | undefined;
@@ -174,6 +207,10 @@ export const loadAllObjectsWithFields = async (): Promise<
               isSystem: true,
               isUnique: true,
               settings: true,
+              // Front autocomplete display data (Task 4): the SELECT/MULTI_SELECT
+              // option set and the human label, carried on the same shared pull.
+              label: true,
+              options: true,
             },
           },
         },
@@ -202,6 +239,8 @@ export const loadAllObjectsWithFields = async (): Promise<
             isUnique: field.isUnique === true,
             relationType: settings?.relationType ?? null,
             joinColumnName: settings?.joinColumnName ?? null,
+            label: field.label ?? null,
+            options: field.options ?? null,
           });
         }
       }
