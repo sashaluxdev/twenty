@@ -49,9 +49,10 @@ through a front component on the record page.
   record, or a field on a specific record of any object by uuid.
 - **Manual per-record overrides** — a human editing the value directly pins that
   record; recompute leaves it alone until the override is cleared (ADR 0006).
-- **Operational status + FX Status chips** — when an input field is
+- **Operational status + status snackbar** — when an input field is
   deactivated/missing a formula goes OFFLINE; downstream formulas go UPSTREAM.
-  A companion SELECT chip surfaces the status right next to the value (ADR 0009).
+  The record-page Formulas widget fires a toast on mount and on every status
+  change, pointing at the Formulas tab for details (ADR 0009, ADR 0021).
 - **Definition lifecycle** — trashing a definition deactivates its
   wizard-created field (data kept, reversible); restore reactivates and
   recomputes; purge keeps the column deactivated forever (ADR 0009).
@@ -348,13 +349,14 @@ the evaluator independently caps AST depth at runtime.
         │ triggers                           │            │
    ┌────┴──────────────────────────┐    ┌────┴────────────┴───────────────┐
    │ *.updated / *.created (wildcard)│    │ formula-editor.tsx (record tab) │
-   │ formulaDefinition.{created,      │    │ formula-definition-editor.tsx   │
-   │   updated,deleted,restored,      │    │   + setup wizard                │
-   │   destroyed}                     │    │ convergeFormulaFieldLayout ────►│ viewFields
-   │ formula-sweep (hourly cron)      │    └─────────────────────────────────┘
-   └──────────────────────────────────┘
+   │ formulaDefinition.{created,      │    │   status snackbar on mount/     │
+   │   updated,deleted,restored,      │    │   status change (enqueueSnackbar)│
+   │   destroyed}                     │    │ formula-definition-editor.tsx   │
+   │ formula-sweep (hourly cron:      │    │   + setup wizard                │
+   │   status recompute + legacy      │    │ convergeTrashedDefinitionLayout │
+   │   FX Status companion cleanup)   │    │   (trashed value field) ───────►│ viewFields
+   └──────────────────────────────────┘    └─────────────────────────────────┘
                     FormulaOverride object (hidden) — one row per pinned record
-                    FX Status companion field (<field>FxStatus SELECT chip)
 ```
 
 - **Pure engine** (`src/engine/`, ADR 0002) — tokenizer, parser, AST, evaluator,
@@ -384,7 +386,10 @@ the evaluator independently caps AST depth at runtime.
   keep it deactivated and clean up override rows on destroy. Status is always
   recomputed from scratch, so event reordering under retries is harmless.
 - **Hourly sweep** (`formula-sweep.ts`) — cron backstop that reconverges every
-  enabled formula and its status (catches missed events).
+  enabled formula and its status (catches missed events), then runs
+  `cleanupCompanionFields` (`fx-status-cleanup.ts`, ADR 0021) to deactivate and
+  hard-delete any legacy `<field>FxStatus` companion field left over from a
+  pre-ADR-0021 install.
 - **Front widgets** — `formula-editor.tsx` (record-page tab: value + editable
   expression with autocomplete + Override toggle) and
   `formula-definition-editor.tsx` (FormulaDefinition record page: setup wizard
@@ -397,14 +402,19 @@ the evaluator independently caps AST depth at runtime.
 - **FormulaOverride object** (`src/objects/formula-override.object.ts`, ADR 0006)
   — hidden technical object, one row per (targetObject, targetField, recordId)
   with an `active` flag. Recompute skips active overrides.
-- **FX Status companions + layout convergence** (`fx-status-field.ts`, ADR 0009 +
-  its 2026-07-03 amendment) — a `<field>FxStatus` SELECT chip next to each value
-  field, always active, its VALUE bulk-written server-side (null when healthy,
-  OFFLINE/UPSTREAM when broken). Its record-page **visibility** is a viewField
-  layout flip converged from the front components (`convergeFormulaFieldLayout`,
-  throttled 60s) because viewField mutations reject application tokens. The chip
-  viewField is slotted into the anchor value field's `viewFieldGroup` — a
-  group-less viewField never renders when the view has groups.
+- **Status snackbar** (`status-toast.ts` + `formula-editor.tsx`, ADR 0021 —
+  supersedes the FX Status companion field of ADR 0009) — on record-page
+  widget mount and on every OFFLINE/UPSTREAM status transition, the widget
+  calls `enqueueSnackbar`: `error` variant for OFFLINE, `warning` for
+  UPSTREAM, each pointing the user at the Formulas tab for the reason. A
+  per-definition dedupe key and a session-local "already notified" map keep an
+  unchanged status quiet on every subsequent poll while still re-toasting a
+  heal-then-re-break. No extra field, no bulk value write, no viewField layout
+  convergence — the mechanism that used to require a user-token front-component
+  render just to make a chip visible is gone. `fx-status-field.ts` keeps only
+  `companionFieldName` (legacy bookkeeping for the cleanup sweep and other
+  legacy-tolerance paths) and `convergeTrashedDefinitionLayout`, which now
+  hides only the value field of a trashed definition.
 
 ## Limitations (honest)
 
@@ -414,12 +424,14 @@ the evaluator independently caps AST depth at runtime.
   value, not by actor — a recompute write inherits the triggering user's id).
 - **No inline cell badge.** Apps cannot decorate a native field cell
   (`FieldDisplay` is a fixed internal switch). The override indicator is a toggle
-  *inside the widget*, and status surfaces via the separate FX Status column.
-- **Layout convergence needs a user-token front-component render.** viewField
-  mutations reject application tokens, so the worker can never touch view layout;
-  chips become visible only after a widget renders under a user with the VIEWS
-  permission. Convergence currently touches record-page Fields views only, not
-  index (table) views.
+  *inside the widget*, and status surfaces via a snackbar toast fired from the
+  record-page widget (ADR 0021) rather than a column in the record itself.
+- **The status snackbar only fires from a record page.** It is wired into
+  `formula-editor.tsx`'s mount/poll cycle, so there is no passive OFFLINE/
+  UPSTREAM signal from list (index) views — a user only learns a formula is
+  broken by opening a record page of the affected object (or the Formulas
+  tab directly). Workspaces deployed before ADR 0021 may still show a stale,
+  no-longer-synced FX Status chip until the hourly sweep deletes it.
 - **Runtime-created fields are not app-owned.** `createOneField` stamps the
   workspace custom application, not this app (the wizard runs under the user
   token). App uninstall will NOT remove wizard-created fields; provenance is
@@ -490,10 +502,17 @@ workspace-scoped API_KEY JWT). Read it in Node scripts; never mint/forge tokens.
   formula; it keeps computing on frozen inputs but is flagged. `statusReason`
   names where the chain broke. Fix the root OFFLINE formula; UPSTREAM clears on
   reconvergence.
-- **FX Status chips written but not visible.** The chip's viewField needs a
-  `viewFieldGroupId` (the Fields card only renders grouped viewFields) and a
-  front component under a user with the VIEWS permission must render to converge
-  layout. Open the record page as such a user; convergence is throttled 60s.
+- **No status snackbar seen for a broken formula.** The toast only fires from
+  the record-page Formulas widget's mount/poll cycle (ADR 0021) — open a
+  record page of the formula's target object, or check the Formulas tab
+  directly; there is no signal from list/index views. If the same status was
+  already toasted this widget session, it won't repeat until it changes.
+- **A leftover FX Status chip / column from before ADR 0021.** On a workspace
+  deployed under the old design, `<field>FxStatus` fields stop being
+  value-synced immediately but are not deleted until the next hourly sweep
+  runs `cleanupCompanionFields` — expect up to ~1 hour of a stale, frozen chip.
+  If `deleteOneField` is denied to the app token, the field is left
+  deactivated (out of every view) and the delete retries on the next sweep.
 - **Override toggle behavior.** Editing a value field directly pins that record
   (an active FormulaOverride row). Toggle OFF deactivates the override (keeps the
   value) and recomputes; toggle ON restores the last override value and shows an

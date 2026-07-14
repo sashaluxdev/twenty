@@ -442,6 +442,43 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   comment names one of two consumers; unused `happensAt` node selection in
   timeline-cleanup. NOT yet deployed to cloud (still v0.1.5).
 
+- **2026-07-14 ARC (FX Status companion removed, replaced by a status
+  snackbar; ADR 0021)**: three tasks, same day, on top of the timeline/
+  fast-load arc above. Task 1 (`03607e5efd`): the wizard no longer creates a
+  `<targetField>FxStatus` companion field, and `refreshFormulaStatuses` no
+  longer bulk-writes chip values; `convergeFormulaFieldLayout` is deleted, and
+  `convergeTrashedDefinitionLayout` now hides only the value field. Side
+  effect: the wizard's "adopt an interrupted pair" resume path is gone — with
+  no companion to distinguish "my own interrupted attempt" from "an unrelated
+  field," any existing field with the derived name is now always a naming
+  collision. `companionFieldName` survives as legacy bookkeeping (lifecycle
+  triggers, delete-completely, timeline-cleanup all still reference it —
+  deliberately unchanged). Task 2 (`e817d0032`): `computeStatusToasts`
+  (`src/front-components/lib/status-toast.ts`) + wiring in `formula-editor.tsx`
+  — on record-page widget mount and on every status transition,
+  `enqueueSnackbar` fires OFFLINE (`error`) / UPSTREAM (`warning`) with a
+  per-definition dedupe key and a session-local "already notified" map (no
+  re-toast on an unchanged status; heal-then-re-break toasts again);
+  best-effort — the host bridge may be absent and `enqueueSnackbar` throws
+  synchronously then, swallowed. Task 3 (`eebdbadcd2`): `cleanupCompanionFields`
+  (`fx-status-cleanup.ts`) added to the hourly sweep — enumerates live (any
+  enabled state) AND trashed definitions, deactivates then hard-deletes each
+  surviving `<targetField>FxStatus` field; idempotent; per-field failure
+  isolation (a denied/failed delete retries next sweep; a deactivated-but-
+  undeleted companion is already out of every view). Known accepted limits:
+  the live-definitions query is `first: 200` with no cursor loop (tail
+  companions under a >200-live-definition workspace are skipped — under-
+  deletes only, never wrong-deletes); cleanup runs before the status-recompute
+  loop in the same sweep pass. Consequences (ADR 0021, reviewer-verified): the
+  passive signal now needs a record page of the affected object open (widget
+  mount) — no signal from list views; on already-deployed workspaces a stale
+  chip can linger up to ~1 hour until the sweep runs; a denied `deleteOneField`
+  leaves companions deactivated (out of all views) and retrying hourly. What
+  stays: OFFLINE/UPSTREAM detection (`status`/`statusReason`), the in-widget
+  banners, `companionFieldName`. Docs: ADR 0021 + ADR 0009 amendment + README/
+  context updates (Task 4, this entry). App version stays 0.1.6 — NOT deployed
+  to cloud yet (deploy is a separate, user-gated step per project convention).
+
 ## What is NOT done (next work)
 
 - Add description field for each formula that shows as a tooltip on the per-widget record view.
@@ -795,6 +832,11 @@ written at the app root (`README.md`).
   (`mint-api-key.mjs`); current key "claude-dev (post-reset)" expires end 2027.
 
 ## FX Status chip rendering — RESOLVED (2026-07-03)
+
+Historical record only — kept for context on the group-rendering gotcha below.
+**The chip itself no longer exists**: ADR 0021 (2026-07-14) removed the FX
+Status companion field entirely in favor of a record-page status snackbar; see
+the 2026-07-14 arc entry under "Current status" above.
 
 The FX Status layout redesign (always-active companion + layout-based
 visibility, `lib/fx-status-field.ts`: `ensureFieldLayoutVisibility` +

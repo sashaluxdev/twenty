@@ -122,3 +122,15 @@ renders when the view has groups**, so converging visibility and position is not
 enough — group membership must be converged too. Verified live: rows converged
 from null to the anchor group on first widget render and the chips render under
 their anchor fields.
+
+## Superseded in part (2026-07-14)
+
+**ADR 0021** removes the FX Status companion field entirely (both the
+2026-07-02 decision above and the 2026-07-03 group-convergence amendment): the
+wizard no longer creates a companion, `refreshFormulaStatuses` no longer syncs
+chip values, and a record-page snackbar replaces the chip as the passive
+OFFLINE/UPSTREAM signal. An hourly sweep pass deletes companion fields left
+over on workspaces deployed before this change. This section is left as-is —
+see ADR 0021 for the current design and rationale; the rest of this ADR
+(lifecycle ladder, OFFLINE/UPSTREAM status computation, `companionFieldName`
+as legacy-field bookkeeping) is unaffected and still governs.

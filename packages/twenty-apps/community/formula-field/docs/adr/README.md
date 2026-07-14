@@ -14,7 +14,7 @@ is maintainable without re-deriving the reasoning.
 | [0006](0006-manual-per-record-override.md) | Manual per-record override (FormulaOverride, value-based detection, restore) | Accepted |
 | [0007](0007-editor-ux-autocomplete-and-ui-constraints.md) | Editor UX: field autocomplete + front-component UI constraints | Accepted |
 | [0008](0008-add-formula-field-wizard-and-dynamic-client.md) | "Add formula field" wizard: runtime field creation, currency micros, wildcard triggers, dynamic client | Accepted |
-| [0009](0009-definition-lifecycle-and-operational-status.md) | Definition lifecycle: field deactivation on delete/restore, OFFLINE/UPSTREAM status, FX Status companions | Accepted |
+| [0009](0009-definition-lifecycle-and-operational-status.md) | Definition lifecycle: field deactivation on delete/restore, OFFLINE/UPSTREAM status, FX Status companions | Accepted (FX Status companion superseded by 0021) |
 | [0010](0010-if-conditionals.md) | IF conditionals with condition-confined transient comparisons | Accepted |
 | [0011](0011-excel-serial-dates.md) | Dates as Excel serial numbers (epoch-days), UTC-only, engine untouched | Accepted |
 | [0012](0012-today-function.md) | TODAY() as an injected, caller-supplied value | Accepted |
@@ -26,3 +26,4 @@ is maintainable without re-deriving the reasoning.
 | [0018](0018-ifs-switch-sugar.md) | IFS and SWITCH as parser-level sugar | Implemented |
 | [0019](0019-relation-mirroring-via-join-column.md) | Variation sync mirrors MANY_TO_ONE relations via join column | Implemented |
 | [0020](0020-timeline-noise-cleanup.md) | Timeline noise cleanup via a 10-minute cron sweep | Implemented |
+| [0021](0021-replace-fx-status-companion-with-snackbar.md) | Replace the FX Status companion field with a status snackbar | Implemented |
