@@ -6,7 +6,10 @@ import {
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
 import { refreshFormulaStatuses } from 'src/logic-functions/lib/formula-status';
-import { cleanupCompanionFields } from 'src/logic-functions/lib/fx-status-cleanup';
+import {
+  cleanupCompanionFields,
+  type CompanionCleanupResult,
+} from 'src/logic-functions/lib/fx-status-cleanup';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 import {
   findCyclicTargets,
@@ -25,7 +28,20 @@ const handler = async (): Promise<Record<string, unknown>> => {
   // the OFFLINE skip below sees current verdicts.
   const statusResult = await refreshFormulaStatuses(client);
   // Legacy FX Status companion removal (ADR 0021) — no-op once converged.
-  const companionCleanup = await cleanupCompanionFields(client);
+  // Optional cleanup must never abort the convergence backstop below, so a
+  // top-level failure (defs query dead after retries) is swallowed and the
+  // pass retries next hour.
+  let companionCleanup: CompanionCleanupResult = {
+    companions: 0,
+    deactivated: 0,
+    deleted: 0,
+    failed: 0,
+  };
+  try {
+    companionCleanup = await cleanupCompanionFields(client);
+  } catch {
+    // Counters stay zeroed; the cron result still reports the pass ran.
+  }
   const formulas = await loadAllEnabledFormulas(client);
   const cyclic = findCyclicTargets(formulas);
 

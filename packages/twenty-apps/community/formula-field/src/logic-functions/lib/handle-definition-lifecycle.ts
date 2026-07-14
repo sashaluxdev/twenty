@@ -178,8 +178,9 @@ export const handleDefinitionRestored = async (
     ]);
     // Reactivate the pair (companions are always-active; visibility is a
     // layout concern). The dropped viewField rows CANNOT be restored here —
-    // view mutations reject application tokens — the front components
-    // re-converge layout via convergeFormulaFieldLayout when rendered.
+    // view mutations reject application tokens — so a reactivated legacy
+    // companion is simply invisible until the hourly cleanup sweep deletes
+    // it (ADR 0021).
     for (const name of [after.targetField, companionName]) {
       const field = fields.get(name);
       if (field && !field.isActive) {

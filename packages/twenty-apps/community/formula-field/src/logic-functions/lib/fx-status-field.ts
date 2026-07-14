@@ -38,7 +38,8 @@ export const loadObjectFieldIndex = async (): Promise<
       });
     }
   } catch {
-    // Metadata unavailable -> empty index (companions simply not synced).
+    // Metadata unavailable -> empty index; fails open by skipping
+    // trashed-layout hiding and the companion cleanup for this pass.
   }
   return index;
 };
@@ -221,7 +222,7 @@ const layoutConvergedAt = new Map<string, number>();
 const LAYOUT_CONVERGE_TTL_MS = 60_000;
 
 // Test-only: reset / inspect the convergence throttle map so unit tests can
-// assert the key-clearing interaction without waiting out the 60s TTL.
+// exercise convergence again without waiting out the 60s TTL.
 export const resetLayoutConvergenceThrottle = (): void => {
   layoutConvergedAt.clear();
 };

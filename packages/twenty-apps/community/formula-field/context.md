@@ -468,8 +468,9 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   undeleted companion is already out of every view). Known accepted limits:
   the live-definitions query is `first: 200` with no cursor loop (tail
   companions under a >200-live-definition workspace are skipped — under-
-  deletes only, never wrong-deletes); cleanup runs before the status-recompute
-  loop in the same sweep pass. Consequences (ADR 0021, reviewer-verified): the
+  deletes only, never wrong-deletes); in the sweep pass, `refreshFormulaStatuses`
+  (status recompute) runs first, then cleanup, then the value-recompute loop.
+  Consequences (ADR 0021, reviewer-verified): the
   passive signal now needs a record page of the affected object open (widget
   mount) — no signal from list views; on already-deployed workspaces a stale
   chip can linger up to ~1 hour until the sweep runs; a denied `deleteOneField`
@@ -501,6 +502,19 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   have `convergeTrashedDefinitionLayout` record which viewIds it actually
   flipped to `isVisible:false`, and have the restore path replay
   `visible:true` only against that recorded set, never touching other views.
+- **Retire the `cleanupCompanionFields` sweep pass — track for sunset**: once
+  deployed installs have converged (watch the sweep's `companionCleanup`
+  counters staying at zero across passes), remove `cleanupCompanionFields`
+  (`lib/fx-status-cleanup.ts`) from `formula-sweep.ts` and drop the
+  `<targetField>FxStatus` namespace reservation (`companionFieldName`) from
+  the legacy-tolerance paths. Until then, the pass only name-matches
+  `<targetField>FxStatus` with no provenance check — a user-created field
+  that happens to be named exactly that would be deleted. If the pass needs
+  to live long, harden it first: only delete SELECT fields whose description
+  contains the wizard's old "System-managed formula health flag" marker.
+  Also carries the live-defs query's `first: 200` no-cursor cap (same known
+  limit noted in the 2026-07-14 ARC entry above) — retiring the pass removes
+  that cap concern too.
 
 **Next-work candidates (2026-07-07, user exploring — NOT committed):**
 
