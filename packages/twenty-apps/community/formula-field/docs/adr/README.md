@@ -25,3 +25,4 @@ is maintainable without re-deriving the reasoning.
 | [0017](0017-boolean-condition-functions.md) | Boolean condition functions — AND, OR, NOT, ISBLANK, IFBLANK | Implemented |
 | [0018](0018-ifs-switch-sugar.md) | IFS and SWITCH as parser-level sugar | Implemented |
 | [0019](0019-relation-mirroring-via-join-column.md) | Variation sync mirrors MANY_TO_ONE relations via join column | Implemented |
+| [0020](0020-timeline-noise-cleanup.md) | Timeline noise cleanup via a 10-minute cron sweep | Implemented |

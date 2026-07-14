@@ -403,6 +403,28 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   warning: `defaultRoleUniversalIdentifier` on defineApplication() → use
   defineApplicationRole() (backlog).
 
+- **2026-07-14 ARC (Timeline noise cleanup; ADR 0020, 861 unit tests)**: the
+  app's automated writes (formula recompute + FxStatus companion, field mirror,
+  variation primary→variation copies) each emit an `<object>.updated`
+  timelineActivity row, flooding record Timelines. The platform offers no
+  suppression: the server diff builder excludes only `updatedAt`/`searchVector`/
+  relation-typed fields with NO field-flag check
+  (`object-record-changed-values.ts:112-120`), the SDK exposes no audit-exclusion
+  flag, and timeline rows are inserted by an async queue job so no `.created`
+  trigger can catch them at birth (`timeline-activity.repository.ts:45-136` —
+  empty diff → zero rows, and same-`(recordId,name,workspaceMemberId)` rows merge
+  for 10 min). Fix: `cleanupFormulaTimelineNoise` lib (Tasks 1-2) soft-deletes
+  all-app-managed rows / strips managed keys from mixed rows / fails safe to KEEP,
+  gated on `workspaceMemberId IS NULL` so human rows are never fetched; wired to a
+  new 10-min cron `src/logic-functions/timeline-cleanup.ts`
+  (`*/10 * * * *`, universalIdentifier `9b7e5c14-…`) mirroring `variation-sweep.ts`.
+  The role already grants read/update/softDelete-all (`canDestroyAllObjectRecords`
+  stays false — soft deletes only). Consequences (ADR 0020): up to ~10 min of
+  visible noise between runs; a null-member API integration writing ONLY
+  formula-managed fields would be culled (accepted); retire the mechanism if the
+  platform ever ships field-level audit exclusion. User chose app-side cleanup
+  over an upstream twenty-server PR. NOT yet deployed to cloud (still v0.1.5).
+
 ## What is NOT done (next work)
 
 - Add description field for each formula that shows as a tooltip on the per-widget record view.
