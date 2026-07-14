@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { FORMULA_EDITOR_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { useRecordId } from 'twenty-sdk/front-component';
+import { enqueueSnackbar, useRecordId } from 'twenty-sdk/front-component';
 
 import { parse, usesToday } from 'src/engine';
 import {
@@ -28,6 +28,7 @@ import {
   movePreview,
   sortByOrder,
 } from 'src/front-components/lib/reorder-definitions';
+import { computeStatusToasts } from 'src/front-components/lib/status-toast';
 import {
   BannerDanger,
   BannerWarning,
@@ -230,6 +231,10 @@ const FormulaEditor = () => {
   // without re-rendering. Layout convergence is itself 60s-throttled, so
   // probing the server for trashed defs faster than that is pure waste.
   const trashedProbeAtRef = useRef(0);
+  // Per-definition "already toasted this status" bookkeeping for the status
+  // snackbars — a ref (same pattern as refreshStateRef) so it survives polls
+  // without re-rendering.
+  const statusToastsRef = useRef(new Map<string, string>());
   // Drag-to-reorder (ADR 0014, pointer events): pointerdown only records a
   // pending gesture (id + start coordinates) in pendingDragRef — it does NOT
   // arm the drag. A row's onPointerMove arms it once the pointer has moved
@@ -359,6 +364,18 @@ const FormulaEditor = () => {
     if (!draggingRef.current) {
       setDefinitions(sortedDefs);
       definitionsRef.current = sortedDefs;
+    }
+
+    // A broken formula announces itself with a snackbar (ADR 0021 — replaces
+    // the FX Status companion chip). Fires on mount and on status transitions
+    // only; best-effort — the host may not expose the snackbar bridge, and
+    // enqueueSnackbar throws synchronously when it doesn't.
+    try {
+      for (const toast of computeStatusToasts(defs, statusToastsRef.current)) {
+        void enqueueSnackbar(toast).catch(() => {});
+      }
+    } catch {
+      // No host snackbar — the Formulas tab banners still show the status.
     }
 
     // Hide the fields of TRASHED definitions on this object. A naive delete no
