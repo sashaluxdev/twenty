@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
+import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
+import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
 // Exercises the FakeClient's opt-in cursor pagination against a real cursor
@@ -68,5 +70,53 @@ describe('FakeClient cursor pagination (multi-page loop)', () => {
       (selection) => selection.formulaOverrides,
     );
     expect(pageQueries).toHaveLength(1);
+  });
+});
+
+// ADR 0022: recomputeAllRecords' heartbeat samples a "representative" value as
+// the first non-error, non-null outcome of the target-record scan. Without a
+// stable orderBy, an unordered scan can return records in a different order
+// each sweep, flipping the sample and churning a formulaDefinition.updated
+// timeline row per sweep even when nothing actually changed.
+describe('recomputeAllRecords target-record scan order (ADR 0022)', () => {
+  it('pages target records in stable id order so the heartbeat sample is deterministic', async () => {
+    const client = new FakeClient();
+    const formula: FormulaDefinitionRecord = {
+      id: 'f1',
+      targetObject: 'opportunity',
+      targetField: 'formulaScore',
+      expression: '1',
+      enabled: true,
+    };
+    client.seed(
+      'formulaDefinition',
+      [formula as unknown as Record<string, unknown> & { id: string }],
+    );
+    client.seed(
+      'opportunity',
+      Array.from({ length: 5 }, (_unused, index) => ({
+        id: `o${index + 1}`,
+        formulaScore: null,
+      })),
+    );
+
+    // Page size smaller than the row count forces multiple page queries, so
+    // the assertion below covers every page, not just the first.
+    await recomputeAllRecords(client, formula, 2);
+
+    const pageQueries = client.querySelections.filter(
+      (selection) => selection.opportunities,
+    );
+    expect(pageQueries.length).toBeGreaterThan(1);
+    for (const query of pageQueries) {
+      // The fake client captures the raw selection object (no GraphQL-text
+      // serialization), so the enum literal's tag survives JSON.stringify as
+      // a quoted string rather than the unquoted Name token the real
+      // serializer emits — either way "AscNullsFirst" surfaces as a
+      // substring, so this asserts against the real captured orderBy arg
+      // rather than the serialized wire text.
+      expect(JSON.stringify(query)).toContain('orderBy');
+      expect(JSON.stringify(query)).toContain('AscNullsFirst');
+    }
   });
 });

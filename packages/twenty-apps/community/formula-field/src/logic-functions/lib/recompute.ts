@@ -18,6 +18,7 @@ import {
 } from 'src/engine/evaluator';
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
 import { currentEpochDay } from 'src/logic-functions/lib/date-serial';
+import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
 import {
   buildTargetWriteData,
@@ -666,6 +667,12 @@ export const recomputeAllRecords = async (
         [pluralName]: {
           __args: {
             first: pageSize,
+            // Stable scan order (ADR 0022): the heartbeat's representative
+            // lastValue is "first non-error, non-null outcome" of this scan.
+            // Unordered pagination made that sample flip between records
+            // run-to-run, defeating the write-avoidance guard and churning
+            // formulaDefinition.updated timeline rows.
+            orderBy: [{ id: graphqlEnum('AscNullsFirst') }],
             ...(after ? { after } : {}),
           },
           edges: { node: { id: true } },
