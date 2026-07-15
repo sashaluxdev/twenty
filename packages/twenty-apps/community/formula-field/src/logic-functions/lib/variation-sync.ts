@@ -21,6 +21,7 @@ import { type FormulaClient } from 'src/logic-functions/lib/types';
 import {
   findVariationConfigByTargetObject,
   updateVariationConfigBookkeeping,
+  updateVariationConfigBookkeepingIfChanged,
 } from 'src/logic-functions/lib/variation-config-repository';
 import { checkRelationFieldHealth } from 'src/logic-functions/lib/variation-config-validation';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
@@ -940,8 +941,7 @@ export const sweepVariationConfig = async (
     relationFieldName,
   );
   if (!relationFieldHealth.ok) {
-    await updateVariationConfigBookkeeping(client, config.id, {
-      lastSyncedAt: new Date().toISOString(),
+    await updateVariationConfigBookkeepingIfChanged(client, config, {
       lastError: relationFieldHealth.error,
       status: 'OFFLINE',
       statusReason: relationFieldHealth.error,
@@ -1045,8 +1045,7 @@ export const sweepVariationConfig = async (
     skippedNestedPrimary > 0
       ? `${skippedNestedPrimary} variation(s) skipped: primary itself is a variation`
       : '';
-  await updateVariationConfigBookkeeping(client, config.id, {
-    lastSyncedAt: new Date().toISOString(),
+  await updateVariationConfigBookkeepingIfChanged(client, config, {
     lastError: firstError,
     // A completed sweep proves the config is operational: clear an OFFLINE
     // status a previous unhealthy sweep may have set (recovery convention).

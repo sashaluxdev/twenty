@@ -140,3 +140,38 @@ export const updateVariationConfigBookkeeping = async (
     }),
   );
 };
+
+// 24h heartbeat: the editor shows lastSyncedAt as "last synced", so it cannot
+// go permanently stale — but bumping it every hourly sweep churned one
+// variationConfig.updated timeline row per config per hour (ADR 0022).
+export const VARIATION_BOOKKEEPING_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
+
+// Write-avoidant bookkeeping (mirrors formula-repository's M3 contract): a
+// no-op sweep performs ZERO config-row writes. Writes only when error/status
+// content changed, or once per heartbeat window to keep lastSyncedAt honest.
+// NaN from an unparsable lastSyncedAt reads as heartbeat-due, not fresh
+// (same Number.isFinite posture as recordEvaluationHeartbeat).
+export const updateVariationConfigBookkeepingIfChanged = async (
+  client: FormulaClient,
+  config: VariationConfigRecord,
+  next: { lastError: string; status: string; statusReason: string },
+): Promise<boolean> => {
+  const changed =
+    (config.lastError ?? '') !== next.lastError ||
+    (config.status ?? '') !== next.status ||
+    (config.statusReason ?? '') !== next.statusReason;
+  const lastSyncedAtMs = Date.parse(config.lastSyncedAt ?? '');
+  const heartbeatDue =
+    !Number.isFinite(lastSyncedAtMs) ||
+    Date.now() - lastSyncedAtMs > VARIATION_BOOKKEEPING_HEARTBEAT_MS;
+  if (!changed && !heartbeatDue) {
+    return false;
+  }
+  await updateVariationConfigBookkeeping(client, config.id, {
+    lastSyncedAt: new Date().toISOString(),
+    lastError: next.lastError,
+    status: next.status,
+    statusReason: next.statusReason,
+  });
+  return true;
+};

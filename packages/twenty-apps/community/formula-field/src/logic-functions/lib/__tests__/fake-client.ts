@@ -51,6 +51,9 @@ export class FakeClient implements FormulaClient {
   public writes: string[] = [];
   // Every query selection object, for asserting the built selections.
   public querySelections: any[] = [];
+  // Every mutation selection object, for asserting write-avoidance (which
+  // mutation ran, how many times) without depending on field-level `writes`.
+  public mutationSelections: any[] = [];
   // Top-level selection key -> error to throw, so a test can simulate a read
   // that fails (e.g. a GraphQL-shaped error) and assert the caller propagates
   // it instead of masking the failure.
@@ -318,6 +321,7 @@ export class FakeClient implements FormulaClient {
 
   async mutation(selection: any): Promise<any> {
     this.mutations += 1;
+    this.mutationSelections.push(selection);
     const key = Object.keys(selection)[0];
     if (this.mutationFailures.has(key)) {
       throw this.mutationFailures.get(key);
