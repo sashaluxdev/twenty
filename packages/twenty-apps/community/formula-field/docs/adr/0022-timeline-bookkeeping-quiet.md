@@ -89,7 +89,7 @@ values. A no-op sweep — nothing changed — performs **zero** writes.
 
 The spec's original plan was to drop `lastSyncedAt` bookkeeping down to "only
 stamped as part of a real content write." That fallback path was taken
-instead: the definition editor renders `lastSyncedAt` as a "last synced"
+instead: the variation config editor renders `lastSyncedAt` as a "last synced"
 freshness signal, so it cannot go silently stale — a config that has been
 healthy and unchanging for days must still show a recent timestamp, not one
 frozen at its last real change. `updateVariationConfigBookkeepingIfChanged`

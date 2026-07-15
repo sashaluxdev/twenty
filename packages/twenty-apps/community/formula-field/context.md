@@ -501,7 +501,7 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   `updateVariationConfigBookkeepingIfChanged` (`variation-config-repository.ts`)
   skips the write when `lastError`/`status`/`statusReason` are unchanged AND
   `lastSyncedAt` is fresher than `VARIATION_BOOKKEEPING_HEARTBEAT_MS` (24h) —
-  a heartbeat, not full elimination, because the definition editor renders
+  a heartbeat, not full elimination, because the variation config editor renders
   `lastSyncedAt` as a "last synced" freshness signal (spec's documented
   fallback path). **F3** (`701a38ae04`): extended the ADR 0020
   `timeline-cleanup.ts` classifier to register `formulaDefinition` and
