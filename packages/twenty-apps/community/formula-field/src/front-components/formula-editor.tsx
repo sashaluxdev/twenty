@@ -87,6 +87,7 @@ const capitalize = (value: string): string =>
 type Definition = {
   id: string;
   name: string;
+  description: string;
   targetObject: string;
   targetField: string;
   targetFieldType: string;
@@ -291,6 +292,7 @@ const FormulaEditor = () => {
           node: {
             id: true,
             name: true,
+            description: true,
             targetObject: true,
             targetField: true,
             targetFieldType: true,
@@ -315,6 +317,7 @@ const FormulaEditor = () => {
       (edge: any) => ({
         id: edge.node.id,
         name: edge.node.name ?? '',
+        description: edge.node.description ?? '',
         targetObject: edge.node.targetObject ?? '',
         targetField: edge.node.targetField ?? '',
         targetFieldType: edge.node.targetFieldType ?? 'NUMBER',
@@ -891,6 +894,18 @@ const FormulaEditor = () => {
             <span style={layout.name}>
               {definition.name || definition.targetField}
             </span>
+            {definition.description ? (
+              // Native title tooltip — the app's only tooltip mechanism
+              // (twenty-sdk/ui is a NO-GO in the front-component sandbox).
+              <MutedText
+                as="span"
+                style={layout.helpGlyph}
+                title={definition.description}
+                aria-label={definition.description}
+              >
+                ?
+              </MutedText>
+            ) : null}
             <span style={layout.value}>{displayValue(definition, value)}</span>
           </div>
           {stale && refreshStateRef.current.inFlight ? (
@@ -1016,6 +1031,22 @@ const layout: Record<string, React.CSSProperties> = {
   header: { display: 'flex', justifyContent: 'flex-start', alignItems: 'center' },
   dragHandle: { marginRight: 8 },
   name: { fontWeight: 600 },
+  // header has no flex:1 on `name`, so this sits inline right after the name;
+  // `value`'s marginLeft: 'auto' still pins it to the row's right edge.
+  helpGlyph: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '14px',
+    height: '14px',
+    borderRadius: '50%',
+    border: '1px solid currentColor',
+    fontSize: '10px',
+    lineHeight: 1,
+    marginLeft: '6px',
+    cursor: 'help',
+    flexShrink: 0,
+  },
   value: {
     fontVariantNumeric: 'tabular-nums',
     fontWeight: 700,
