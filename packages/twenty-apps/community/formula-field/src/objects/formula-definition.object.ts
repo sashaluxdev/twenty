@@ -19,6 +19,7 @@ export const FORMULA_DEFINITION_FIELDS = {
   outputFormat: '89f978e2-b08a-4778-98d6-fbfe52efd162',
   targetFieldSettings: 'b1e7c2a4-9f3d-4c86-8a71-2d5e0f6b4c19',
   expression: 'd7750c25-b265-48aa-92a7-a649855449d7',
+  description: '7c2a1f5e-4b8d-4e2a-9f63-0d81c5b7ae24',
   dependencies: 'a39455b0-c789-441a-8fea-1d6c87277446',
   enabled: '64790652-18a3-47d9-a1ac-8883d0830a7a',
   lastEvaluatedAt: '2ec77311-1738-44f0-8179-ba8f11557282',
@@ -94,6 +95,16 @@ export default defineObject({
       label: 'Expression',
       description: 'Arithmetic formula, e.g. "inputA + inputB * 2".',
       icon: 'IconMathFunction',
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.description,
+      type: FieldType.TEXT,
+      name: 'description',
+      label: 'Description',
+      description:
+        'What this formula does, in human terms. Shown as a hover tooltip ' +
+        'next to the formula in the Formulas tab.',
+      icon: 'IconInfoCircle',
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.dependencies,
