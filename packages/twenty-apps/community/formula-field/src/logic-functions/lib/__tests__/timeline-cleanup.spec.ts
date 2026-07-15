@@ -224,10 +224,13 @@ describe('cleanupFormulaTimelineNoise', () => {
     expect(counts.kept).toBe(1);
     expect(client.get('timelineActivity', 'p1')).toBeDefined();
 
-    // Filter shape: name limited to defined objects, workspaceMemberId IS NULL
-    // (unquoted enum), and a lookback window.
+    // Filter shape: name limited to defined objects PLUS the two definition
+    // objects (always registered when any definition exists), workspaceMemberId
+    // IS NULL (unquoted enum), and a lookback window.
     const filter = timelineQuery(client).timelineActivities.__args.filter;
-    expect(filter.name).toEqual({ in: ['company.updated'] });
+    expect(filter.name).toEqual({
+      in: ['company.updated', 'formulaDefinition.updated', 'variationConfig.updated'],
+    });
     expect(filter.workspaceMemberId).toEqual({ is: { __graphqlEnum: 'NULL' } });
     expect(typeof filter.happensAt.gte).toBe('string');
   });
@@ -531,6 +534,234 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     expect(client.get('timelineActivity', 't1')).toBeUndefined();
     // The variation path never engaged: no parent-record read was issued.
     expect(parentReadCount(client, 'company')).toBe(0);
+  });
+});
+
+describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updatedBy rows', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+  });
+
+  // Case 1: a formulaDefinition.updated row whose diff touches only engine
+  // bookkeeping keys is pure app noise -> deleted.
+  it('deletes a formulaDefinition.updated row whose diff is only engine bookkeeping keys', async () => {
+    seedDefinition(client);
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'formulaDefinition.updated',
+        properties: {
+          diff: {
+            lastValue: { before: 1, after: 2 },
+            lastEvaluatedAt: { before: 'a', after: 'b' },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.deleted).toBe(1);
+    expect(counts.kept).toBe(0);
+    expect(counts.stripped).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeUndefined();
+  });
+
+  // Case 2: a formulaDefinition.updated row with a human-editable key
+  // (`expression`) is NOT deleted; only the app-owned bookkeeping key is
+  // stripped, the human key + its payload survive.
+  it('strips bookkeeping from a formulaDefinition.updated row that also has a human-editable key', async () => {
+    seedDefinition(client);
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'formulaDefinition.updated',
+        properties: {
+          diff: {
+            expression: { before: '1+1', after: '2+2' },
+            lastError: { before: null, after: 'BOOM' },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.stripped).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(counts.kept).toBe(0);
+    const row = client.get('timelineActivity', 't1');
+    expect(row).toBeDefined();
+    expect(row!.properties).toEqual({
+      diff: { expression: { before: '1+1', after: '2+2' } },
+    });
+  });
+
+  // Case 3: a variationConfig.updated heartbeat row (only lastSyncedAt) is pure
+  // app noise -> deleted.
+  it('deletes a variationConfig.updated heartbeat row whose diff is only lastSyncedAt', async () => {
+    seedDefinition(client);
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'variationConfig.updated',
+        properties: { diff: { lastSyncedAt: { before: 'a', after: 'b' } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.deleted).toBe(1);
+    expect(counts.stripped).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeUndefined();
+  });
+
+  // Case 4: a managed target-object row whose only diff key is THIS app's own
+  // updatedBy stamp (source APPLICATION, name 'Formula Field') is app noise from
+  // a redundant recompute write -> deleted.
+  it("deletes a target-object row whose only diff key is this app's own updatedBy stamp", async () => {
+    seedDefinition(client, { targetObject: 'opportunity', targetField: 'revenue' });
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'opportunity.updated',
+        properties: {
+          diff: {
+            updatedBy: {
+              before: { source: 'API', name: 'Supabase' },
+              after: { source: 'APPLICATION', name: 'Formula Field' },
+            },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.deleted).toBe(1);
+    expect(counts.kept).toBe(0);
+    expect(counts.stripped).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeUndefined();
+  });
+
+  // Case 5: an updatedBy-only row from ANOTHER actor (Supabase / API) is not the
+  // app's own stamp -> kept (fail-safe toward keeping).
+  it('keeps a target-object row whose only diff key is a non-app updatedBy stamp', async () => {
+    seedDefinition(client, { targetObject: 'opportunity', targetField: 'revenue' });
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'opportunity.updated',
+        properties: {
+          diff: {
+            updatedBy: {
+              before: { source: 'APPLICATION', name: 'Formula Field' },
+              after: { source: 'API', name: 'Supabase' },
+            },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.kept).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(counts.stripped).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeDefined();
+  });
+
+  // Case 6: a formula target field + the app's own updatedBy stamp — the whole
+  // row is app-owned (no human key), so it is deleted rather than stripped to an
+  // updatedBy-only stub.
+  it("deletes a row whose diff is a formula target field plus this app's own updatedBy stamp", async () => {
+    seedDefinition(client, { targetObject: 'opportunity', targetField: 'revenue' });
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'opportunity.updated',
+        properties: {
+          diff: {
+            revenue: { before: 1, after: 2 },
+            updatedBy: {
+              before: { source: 'API', name: 'Supabase' },
+              after: { source: 'APPLICATION', name: 'Formula Field' },
+            },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.deleted).toBe(1);
+    expect(counts.kept).toBe(0);
+    expect(counts.stripped).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeUndefined();
+  });
+
+  // Case 7: a human key (`stage`) alongside a formula field and the app's own
+  // updatedBy stamp — the formula + app-actor keys are stripped, but the human
+  // key remains, so the surviving diff is non-empty and the row is KEPT.
+  it('strips formula and app updatedBy keys but keeps a human key alongside them', async () => {
+    seedDefinition(client, { targetObject: 'opportunity', targetField: 'revenue' });
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'opportunity.updated',
+        properties: {
+          diff: {
+            stage: { before: 'NEW', after: 'WON' },
+            revenue: { before: 1, after: 2 },
+            updatedBy: {
+              before: { source: 'API', name: 'Supabase' },
+              after: { source: 'APPLICATION', name: 'Formula Field' },
+            },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.stripped).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(counts.kept).toBe(0);
+    const row = client.get('timelineActivity', 't1');
+    expect(row).toBeDefined();
+    expect(row!.properties).toEqual({
+      diff: { stage: { before: 'NEW', after: 'WON' } },
+    });
+  });
+
+  // Case 8: with any definition present, the query fetches the two definition
+  // objects too and selects their parent-pointer columns.
+  it('extends the query filter and selection to the two definition objects', async () => {
+    seedDefinition(client);
+
+    await cleanupFormulaTimelineNoise(client);
+
+    const built = timelineQuery(client);
+    const filter = built.timelineActivities.__args.filter;
+    expect(filter.name.in).toEqual(
+      expect.arrayContaining([
+        'company.updated',
+        'formulaDefinition.updated',
+        'variationConfig.updated',
+      ]),
+    );
+    const node = built.timelineActivities.edges.node;
+    expect(node.targetFormulaDefinitionId).toBe(true);
+    expect(node.targetVariationConfigId).toBe(true);
   });
 });
 

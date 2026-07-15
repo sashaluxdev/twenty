@@ -48,6 +48,31 @@ const DEFAULT_RELATION_FIELD = 'primaryRecord';
 const relationFieldNameOf = (config: VariationConfigRecord): string =>
   config.relationFieldName ?? DEFAULT_RELATION_FIELD;
 
+// The actor name core stamps on this app's writes (application-config.ts
+// displayName). Kept as a local literal: application-config imports
+// twenty-sdk/define, which server lib code must not pull in.
+const APP_ACTOR_NAME = 'Formula Field';
+
+// Definition-object bookkeeping keys — always app-written (isUIEditable: false
+// or engine-owned). A row whose diff touches ONLY these is pure app noise.
+// `order` is deliberately absent: the widget's drag-reorder writes it on the
+// user's behalf, so it stays keep-side (fail-safe).
+const DEFINITION_BOOKKEEPING_KEYS = new Set([
+  'lastValue',
+  'lastValueText',
+  'lastEvaluatedAt',
+  'lastError',
+  'status',
+  'statusReason',
+  'dependencies',
+]);
+const VARIATION_CONFIG_BOOKKEEPING_KEYS = new Set([
+  'lastSyncedAt',
+  'lastError',
+  'status',
+  'statusReason',
+]);
+
 const capitalize = (value: string): string =>
   value.length === 0 ? '' : value.charAt(0).toUpperCase() + value.slice(1);
 
@@ -124,7 +149,10 @@ const objectFromName = (name: unknown): string | null => {
 // its companion FxStatus field). Wizard drafts with an empty target are skipped.
 const loadFormulaManagedByObject = async (
   client: FormulaClient,
-): Promise<Map<string, Set<string>>> => {
+): Promise<{
+  managedByObject: Map<string, Set<string>>;
+  hasAnyDefinition: boolean;
+}> => {
   const response = await withRetry(() =>
     client.query({
       formulaDefinitions: {
@@ -151,7 +179,10 @@ const loadFormulaManagedByObject = async (
     fields.add(companionFieldName(targetField));
     managedByObject.set(targetObject, fields);
   }
-  return managedByObject;
+  // A draft definition (empty targetObject/targetField, skipped above) still
+  // receives engine status/dependency writes, so its presence alone is enough
+  // to warrant registering the definition objects for cleanup.
+  return { managedByObject, hasAnyDefinition: edges.length > 0 };
 };
 
 // Builds object nameSingular -> {variation field names, relation field name} for
@@ -197,7 +228,8 @@ const loadVariationManagedByObject = async (
 const buildManagedModel = async (
   client: FormulaClient,
 ): Promise<Map<string, ObjectManagedModel>> => {
-  const formulaByObject = await loadFormulaManagedByObject(client);
+  const { managedByObject: formulaByObject, hasAnyDefinition } =
+    await loadFormulaManagedByObject(client);
   const variationByObject = await loadVariationManagedByObject(client);
 
   const model = new Map<string, ObjectManagedModel>();
@@ -220,6 +252,23 @@ const buildManagedModel = async (
         relationFieldName,
       });
     }
+  }
+
+  // The definition records themselves churn <object>.updated rows from engine
+  // bookkeeping (ADR 0022). Register them as app-owned key sets so the same
+  // classifier covers them. Only when the app has any definitions/configs at
+  // all — otherwise model stays empty and the cron never queries timeline.
+  if (model.size > 0 || hasAnyDefinition) {
+    model.set('formulaDefinition', {
+      formula: DEFINITION_BOOKKEEPING_KEYS,
+      variation: new Set<string>(),
+      relationFieldName: DEFAULT_RELATION_FIELD,
+    });
+    model.set('variationConfig', {
+      formula: VARIATION_CONFIG_BOOKKEEPING_KEYS,
+      variation: new Set<string>(),
+      relationFieldName: DEFAULT_RELATION_FIELD,
+    });
   }
   return model;
 };
@@ -311,6 +360,12 @@ const stripKeysFromRow = async (
         newDiff[key] = diff[key];
       }
     }
+    // Stripping everything would leave an empty-diff stub row; that IS pure app
+    // noise, so delete it instead (mirrors core, which never creates empty-diff
+    // update rows).
+    if (Object.keys(newDiff).length === 0) {
+      return deleteRow(client, row);
+    }
     await withRetry(() =>
       client.mutation({
         updateTimelineActivity: {
@@ -351,7 +406,25 @@ const processRow = async (
     return 'kept';
   }
 
-  const formulaKeys = new Set(keys.filter((key) => managed.formula.has(key)));
+  // Core re-stamps updatedBy unconditionally on every accepted update, so a
+  // redundant no-op write by this app (recompute race) leaves a diff whose only
+  // key is updatedBy -> app noise. Only OUR actor qualifies; any other actor
+  // (Supabase, another app) stays keep-side.
+  const updatedByEntry = isPlainObject(diff.updatedBy) ? diff.updatedBy : null;
+  const updatedByAfter =
+    updatedByEntry && isPlainObject(updatedByEntry.after)
+      ? updatedByEntry.after
+      : null;
+  const appActorUpdatedBy =
+    updatedByAfter?.source === 'APPLICATION' &&
+    updatedByAfter?.name === APP_ACTOR_NAME;
+
+  const formulaKeys = new Set(
+    keys.filter(
+      (key) =>
+        managed.formula.has(key) || (key === 'updatedBy' && appActorUpdatedBy),
+    ),
+  );
   const variationKeys = new Set(
     keys.filter((key) => managed.variation.has(key)),
   );
