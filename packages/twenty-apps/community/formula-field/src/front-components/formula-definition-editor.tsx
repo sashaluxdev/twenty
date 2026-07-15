@@ -39,6 +39,7 @@ import {
   PrimaryButton,
   SecondaryButton,
   SectionTitle,
+  TextArea,
   TextInput,
   WidgetRoot,
 } from 'src/front-components/lib/ui';
@@ -69,6 +70,7 @@ type Definition = {
   status: string;
   statusReason: string;
   lastEvaluatedAt: string | null;
+  description: string;
   // Parsed once at load time (staleness scoping, ADR 0015) — checking it at
   // render/refresh time would re-parse the expression every 4s poll.
   usesTodayFlag: boolean;
@@ -277,6 +279,69 @@ const FormulaDangerZone = ({
   );
 };
 
+// Description editor: self-contained (own state, seeded once per definition)
+// so the widget's 4s poll — which replaces `definition` wholesale — never
+// clobbers an in-progress edit. Descriptions stay editable after creation,
+// unlike the name field.
+const FormulaDescriptionEditor = ({
+  definitionId,
+  initialDescription,
+}: {
+  definitionId: string;
+  initialDescription: string;
+}) => {
+  const [description, setDescription] = useState(initialDescription);
+  // Suppresses the persist debounce until the user actually types.
+  const descriptionTouched = useRef(false);
+  // Which definition the local draft was seeded from. The parent reuses this
+  // widget instance across record switches (no `key`), so — mirroring load()'s
+  // seededRecordId guard — reseed when the definition changes: adopt the new
+  // record's saved text and clear `touched`. Without this, switching records
+  // would display the previous record's text AND, worse, a pending (un-fired)
+  // debounce could persist the previous record's text onto the new record.
+  const seededDefinitionId = useRef(definitionId);
+  if (seededDefinitionId.current !== definitionId) {
+    seededDefinitionId.current = definitionId;
+    setDescription(initialDescription);
+    descriptionTouched.current = false;
+  }
+
+  useEffect(() => {
+    if (!descriptionTouched.current) return;
+    // Write-avoidance: skip the mutation when the draft matches the loaded
+    // value (e.g. typed then reverted) — don't write an unchanged description.
+    if (description === initialDescription) return;
+    const handle = setTimeout(() => {
+      const client = new CoreApiClient();
+      client
+        .mutation({
+          updateFormulaDefinition: {
+            __args: { id: definitionId, data: { description } },
+            id: true,
+          },
+        })
+        .catch(() => {});
+    }, 800);
+    return () => clearTimeout(handle);
+  }, [description, definitionId, initialDescription]);
+
+  return (
+    <div style={layout.descriptionSection}>
+      <SectionTitle style={layout.descriptionTitle}>Description</SectionTitle>
+      <TextArea
+        style={layout.descriptionInput}
+        value={description}
+        placeholder="What does this formula do?"
+        rows={2}
+        onChange={(event) => {
+          descriptionTouched.current = true;
+          setDescription(event.target.value);
+        }}
+      />
+    </div>
+  );
+};
+
 const FormulaDefinitionEditor = () => {
   const recordId = useRecordId();
   const [definition, setDefinition] = useState<Definition | null>(null);
@@ -332,6 +397,7 @@ const FormulaDefinitionEditor = () => {
             status: true,
             statusReason: true,
             lastEvaluatedAt: true,
+            description: true,
           },
         },
       },
@@ -354,6 +420,7 @@ const FormulaDefinitionEditor = () => {
         status: edge.node.status ?? '',
         statusReason: edge.node.statusReason ?? '',
         lastEvaluatedAt: edge.node.lastEvaluatedAt ?? null,
+        description: edge.node.description ?? '',
         usesTodayFlag: expressionUsesToday(edge.node.expression ?? ''),
       }),
     );
@@ -470,6 +537,7 @@ const FormulaDefinitionEditor = () => {
             outputFormat: definition.outputFormat,
             currencyCode: definition.currencyCode,
             targetFieldSettings: definition.targetFieldSettings,
+            description: definition.description ?? '',
           }}
           onCreated={load}
         />
@@ -589,6 +657,11 @@ const FormulaDefinitionEditor = () => {
         />
       )}
 
+      <FormulaDescriptionEditor
+        definitionId={definition.id}
+        initialDescription={definition.description}
+      />
+
       <FormulaDangerZone
         definitionId={definition.id}
         onDeleted={() => setDeleted(true)}
@@ -642,6 +715,13 @@ const layout: Record<string, React.CSSProperties> = {
     borderTop: `1px solid ${TOKENS.borderLight}`,
   },
   mirrorTitle: { marginBottom: '6px' },
+  descriptionSection: {
+    marginTop: '18px',
+    paddingTop: '12px',
+    borderTop: `1px solid ${TOKENS.borderLight}`,
+  },
+  descriptionTitle: { marginBottom: '6px' },
+  descriptionInput: { width: '100%', boxSizing: 'border-box' },
 };
 
 export const FORMULA_DEFINITION_EDITOR_UNIVERSAL_IDENTIFIER =

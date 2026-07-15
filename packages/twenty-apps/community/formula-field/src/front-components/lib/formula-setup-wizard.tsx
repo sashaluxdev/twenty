@@ -34,6 +34,7 @@ import {
   OkText,
   PrimaryButton,
   StepTitle,
+  TextArea,
   TextInput,
 } from 'src/front-components/lib/ui';
 import { TOKENS } from 'src/front-components/lib/ui-tokens';
@@ -107,6 +108,7 @@ export type WizardDraft = {
   // JSON-serialized { settings, currencyCode } — the persisted format options
   // so the wizard resumes with the exact chosen decimals / format / date style.
   targetFieldSettings: string;
+  description: string;
 };
 
 type FormulaSetupWizardProps = {
@@ -149,6 +151,9 @@ export const FormulaSetupWizard = ({
   const [error, setError] = useState('');
   // Suppresses the label-persist debounce until the user actually types.
   const labelTouched = useRef(false);
+  const [description, setDescription] = useState(draft.description);
+  // Suppresses the description-persist debounce until the user actually types.
+  const descriptionTouched = useRef(false);
 
   // Mirror-mode draft, recovered once from the persisted settings (outputFormat
   // 'mirror' or a mirror block). The source object/field re-resolve against the
@@ -348,6 +353,16 @@ export const FormulaSetupWizard = ({
     }, 800);
     return () => clearTimeout(handle);
   }, [label, persistDraft]);
+
+  // Persist the typed description (debounced) so it survives navigation,
+  // matching the name field's resumability contract.
+  useEffect(() => {
+    if (!descriptionTouched.current) return;
+    const handle = setTimeout(() => {
+      persistDraft({ description });
+    }, 800);
+    return () => clearTimeout(handle);
+  }, [description, persistDraft]);
 
   // Serializes and persists the current format + options onto the draft.
   const persistFormatOptions = useCallback(
@@ -977,6 +992,23 @@ export const FormulaSetupWizard = ({
             ) : null}
           </MutedText>
         ) : null}
+      </div>
+
+      <div style={layout.step}>
+        <StepTitle style={layout.stepTitle}>4 · Description</StepTitle>
+        <TextArea
+          style={layout.filter}
+          value={description}
+          placeholder="What does this formula do?"
+          rows={2}
+          onChange={(event) => {
+            descriptionTouched.current = true;
+            setDescription(event.target.value);
+          }}
+        />
+        <MutedText as="div">
+          Optional — shown as a hover tooltip in the Formulas tab.
+        </MutedText>
       </div>
 
       <div style={layout.actions}>
