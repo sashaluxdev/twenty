@@ -486,9 +486,17 @@ const processRow = async (
 // Soft-deletes (or strips) the app's own automated `<object>.updated` timeline
 // noise. Human-authored rows are never even fetched (the query filters
 // workspaceMemberId IS NULL). Returns per-outcome counts for logging.
+//
+// `options` lets callers override the lookback window and page cap (spec F4)
+// — the one-time retro-purge script needs an unbounded lookback and a higher
+// page cap; the 10-minute cron omits options entirely, so its behavior is
+// unchanged (defaults fall back to LOOKBACK_MS / MAX_PAGES).
 export const cleanupFormulaTimelineNoise = async (
   client: FormulaClient,
+  options: { lookbackMs?: number; maxPages?: number } = {},
 ): Promise<TimelineCleanupCounts> => {
+  const lookbackMs = options.lookbackMs ?? LOOKBACK_MS;
+  const maxPages = options.maxPages ?? MAX_PAGES;
   const counts: TimelineCleanupCounts = {
     scanned: 0,
     deleted: 0,
@@ -519,7 +527,7 @@ export const cleanupFormulaTimelineNoise = async (
     // server rejects against the enum type) — same mechanism loadTrashedFormulas
     // uses for its deletedAt NOT_NULL filter.
     workspaceMemberId: { is: graphqlEnum('NULL') },
-    happensAt: { gte: new Date(Date.now() - LOOKBACK_MS).toISOString() },
+    happensAt: { gte: new Date(Date.now() - lookbackMs).toISOString() },
   };
 
   // Per-record variation verdict cache (keyed `object:recordId`), one lookup
@@ -527,7 +535,7 @@ export const cleanupFormulaTimelineNoise = async (
   const verdictCache = new Map<string, boolean>();
 
   let after: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
+  for (let page = 0; page < maxPages; page += 1) {
     const response = await withRetry(() =>
       client.query({
         timelineActivities: {

@@ -765,6 +765,41 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
   });
 });
 
+describe('cleanupFormulaTimelineNoise — options (spec F4)', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+  });
+
+  // Tolerance for comparing the `happensAt.gte` timestamp against "now minus
+  // the expected lookback" — generous enough to absorb test execution jitter
+  // without weakening the assertion's intent (right window, not exact ms).
+  const TOLERANCE_MS = 5_000;
+
+  it('uses the default ~48h lookback when no options are passed', async () => {
+    seedDefinition(client);
+
+    await cleanupFormulaTimelineNoise(client);
+
+    const filter = timelineQuery(client).timelineActivities.__args.filter;
+    const gteMs = new Date(filter.happensAt.gte).getTime();
+    const expectedMs = Date.now() - 48 * 60 * 60 * 1000;
+    expect(Math.abs(gteMs - expectedMs)).toBeLessThan(TOLERANCE_MS);
+  });
+
+  it('honors options.lookbackMs, overriding the 48h default', async () => {
+    seedDefinition(client);
+
+    await cleanupFormulaTimelineNoise(client, { lookbackMs: 1000 * 60 });
+
+    const filter = timelineQuery(client).timelineActivities.__args.filter;
+    const gteMs = new Date(filter.happensAt.gte).getTime();
+    const expectedMs = Date.now() - 1000 * 60;
+    expect(Math.abs(gteMs - expectedMs)).toBeLessThan(TOLERANCE_MS);
+  });
+});
+
 describe('timeline-cleanup cron (default export handler)', () => {
   it('sweeps app noise via the injected client and returns the outcome counts', async () => {
     const client = new FakeClient();
