@@ -26,7 +26,7 @@ export type TimelineCleanupCounts = {
   deleted: number;
   stripped: number;
   kept: number;
-  // true when the MAX_PAGES cap was hit with more rows remaining — the next cron
+  // true when the maxPages cap was hit with more rows remaining — the next cron
   // run picks up the rest (already-deleted rows drop out of later queries). Never
   // silent: surfaced here so callers can log it.
   truncated: boolean;
@@ -584,7 +584,7 @@ export const cleanupFormulaTimelineNoise = async (
     after = connection.pageInfo.endCursor ?? undefined;
   }
 
-  // Exited via the MAX_PAGES cap with rows still remaining.
+  // Exited via the maxPages cap with rows still remaining.
   counts.truncated = true;
   return counts;
 };

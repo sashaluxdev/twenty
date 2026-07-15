@@ -47,7 +47,13 @@ const run = async () => {
       maxPages: 50,
     });
     console.log(`pass ${pass}:`, counts);
-    if (!counts.truncated) break;
+    // No-progress guard: KEPT rows (genuine human/third-party writes the
+    // classifier correctly leaves alone) can outnumber maxPages * PAGE_SIZE
+    // over a 10-year lookback, so every pass would re-scan the same kept rows,
+    // delete/strip nothing, and still report truncated:true — looping forever.
+    // Soft-delete-only makes that harmless but it never terminates, so also
+    // stop once a pass makes no progress.
+    if (!counts.truncated || counts.deleted + counts.stripped === 0) break;
   }
   console.log('Retro purge complete.');
 };
