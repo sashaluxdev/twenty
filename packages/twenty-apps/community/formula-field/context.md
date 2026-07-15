@@ -700,11 +700,18 @@ Then:
    from the app dir: bump `version` in package.json, then
    `... cli.cjs app:publish --private -r cloud` (server rejects a
    non-incremented version) followed by `... cli.cjs app:install -r cloud`.
-   Currently deployed to cloud: **v0.1.7** (FX Status companion removal +
-   status snackbar, ADR 0021; 2026-07-14 — platform had moved to the 2.21
-   line, npm twenty-sdk@2.21.0 used for build/publish/install, zero
-   collisions). Only deploy to cloud when the user explicitly asks —
-   it targets their real production workspace.
+   Currently deployed to cloud: **v0.1.8** (timeline bookkeeping quiet F1-F4 +
+   description field/tooltip, ADR 0022; 2026-07-15 — platform still on the 2.21
+   line, npm twenty-sdk@2.21.0 scratch build, `plan` preview showed 1 add
+   (description TEXT field) / 18 change (checksums) / 0 destroy — zero
+   collisions; publish+install both clean; description field verified live on
+   21 defs). Post-deploy timeline snapshot (pre-purge): formulaDefinition.updated
+   3,824, variationConfig.updated 180. RETRO PURGE (F4) still PENDING — the
+   `cloud` remote in ~/.twenty/config.json has CLI OAuth tokens but NO `apiKey`,
+   which scripts/retro-purge-timeline.ts requires; needs a workspace API key.
+   Predecessor v0.1.7 (FX Status companion removal + status snackbar, ADR 0021;
+   2026-07-14, twenty-sdk@2.21.0). Only deploy to cloud when the user explicitly
+   asks — it targets their real production workspace.
 6. Possible polish: surface wizard-created VALUE fields in table (index) views
    automatically — new fields are hidden in views by default, and layout
    convergence currently only touches record-page Fields views;
