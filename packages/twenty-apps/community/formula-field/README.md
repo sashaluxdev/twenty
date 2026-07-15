@@ -56,6 +56,13 @@ through a front component on the record page.
 - **Definition lifecycle** — trashing a definition deactivates its
   wizard-created field (data kept, reversible); restore reactivates and
   recomputes; purge keeps the column deactivated forever (ADR 0009).
+- **Description + tooltip** — an optional free-text description ("4 ·
+  Description" wizard step, and a "Field settings" block in the post-create
+  editor — description stays editable after creation, unlike the name). When
+  set, a small "?" glyph appears next to the formula's name in the record-page
+  Formulas tab; hovering it shows the description via the browser's native
+  tooltip (`title` attribute — the app's only tooltip mechanism, ADR 0022). No
+  glyph renders when the description is empty.
 
 ## Formula grammar
 

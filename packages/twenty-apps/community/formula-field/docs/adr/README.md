@@ -27,3 +27,4 @@ is maintainable without re-deriving the reasoning.
 | [0019](0019-relation-mirroring-via-join-column.md) | Variation sync mirrors MANY_TO_ONE relations via join column | Implemented |
 | [0020](0020-timeline-noise-cleanup.md) | Timeline noise cleanup via a 10-minute cron sweep | Implemented |
 | [0021](0021-replace-fx-status-companion-with-snackbar.md) | Replace the FX Status companion field with a status snackbar | Implemented |
+| [0022](0022-timeline-bookkeeping-quiet.md) | Quiet the timeline further — deterministic sampling, write-avoidant bookkeeping, wider cleanup scope | Implemented |

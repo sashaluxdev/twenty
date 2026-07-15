@@ -483,9 +483,65 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   Legacy companions existed pre-deploy — verify the first hourly sweep's
   `companionCleanup` counters purge them.
 
+- **2026-07-15 ARC (Timeline bookkeeping quiet + formula description; ADR
+  0022, ships v0.1.8)**: measured via the Twenty MCP that the ADR 0020 cron
+  still left three noise sources unreached — `formulaDefinition.updated`
+  (3,770 rows, ~1,000-1,800/day), `variationConfig.updated` (177 rows, 24/day
+  per enabled config), and up to 671 app-authored `updatedBy`-only rows on
+  target objects. Three tasks (7 code commits, `666de19407`..`997334bb6f`),
+  spec + plan under `docs/superpowers/specs/` and `docs/superpowers/plans/`
+  (repo root). **F1** (`666de19407`): `recomputeAllRecords`'s target-record
+  scan (`recompute.ts`) had no `orderBy`, so the heartbeat's "first
+  non-error, non-null outcome" `lastValue` sample flipped between records
+  run-to-run and defeated `recordEvaluationHeartbeat`'s existing
+  write-avoidance guard on nearly every sweep; added
+  `orderBy: [{ id: AscNullsFirst }]`, now deterministic. **F2**
+  (`2afff2e139`): `sweepVariationConfig`'s two bookkeeping call sites wrote
+  `lastSyncedAt` unconditionally every sweep; new
+  `updateVariationConfigBookkeepingIfChanged` (`variation-config-repository.ts`)
+  skips the write when `lastError`/`status`/`statusReason` are unchanged AND
+  `lastSyncedAt` is fresher than `VARIATION_BOOKKEEPING_HEARTBEAT_MS` (24h) —
+  a heartbeat, not full elimination, because the definition editor renders
+  `lastSyncedAt` as a "last synced" freshness signal (spec's documented
+  fallback path). **F3** (`701a38ae04`): extended the ADR 0020
+  `timeline-cleanup.ts` classifier to register `formulaDefinition` and
+  `variationConfig` themselves (previously only *target* objects were in
+  scope) with their own bookkeeping key sets, plus a new check for
+  app-authored `updatedBy`-only diffs (`updatedBy.after` = exactly
+  `{source: "APPLICATION", name: "Formula Field"}`; any other actor stays
+  keep-side). One deviation from the design spec, documented in ADR 0022:
+  mixed rows (a bookkeeping key alongside a human key like `expression`) are
+  **stripped**, not kept whole — the shipped code routes them through the
+  same generic strip-mixed-row path every other managed object already used,
+  rather than special-casing this class to skip stripping; outcome for users
+  is identical (human edit survives), only the historical diff differs.
+  Also: `stripKeysFromRow` now **deletes** a row when stripping empties its
+  diff, instead of writing back an empty-diff stub. **F4** (`642c214870`):
+  `cleanupFormulaTimelineNoise` gained an `options?: { lookbackMs?;
+  maxPages? }` param (cron passes none, behavior unchanged); new
+  `scripts/retro-purge-timeline.ts` (`yarn retro-purge <remoteName>`, reads
+  `~/.twenty/config.json`) runs the same classifier with a 10-year lookback
+  and 50-page cap per pass, looping until no truncation — approved
+  2026-07-15, **not yet run** against the cloud workspace (scheduled for
+  after the v0.1.8 deploy is confirmed live; historical rows measured above
+  are still present until then). Same arc, feature work (3 commits,
+  `f78b5e996a`/`3c8b85a362`/`997334bb6f`): new editable TEXT `description`
+  field on FormulaDefinition (new pre-minted universalIdentifier in
+  `FORMULA_DEFINITION_FIELDS`); wizard step "4 · Description" (debounce-
+  persisted like the name field); a "Field settings" block in the post-create
+  editor keeps it editable after creation, unlike the name (skips the update
+  mutation when the draft matches the loaded value); a muted "?" glyph next
+  to the definition name in the record-page Formulas tab, rendered only when
+  `description` is non-empty, using the native `title` attribute (+
+  `aria-label`) as the tooltip — the app's only tooltip mechanism
+  (twenty-sdk/ui is a documented NO-GO in the front-component sandbox).
+  Docs: ADR 0022 + ADR index + README feature list + this entry (docs-only
+  task, no code). **Not yet deployed** — currently still v0.1.7 on cloud
+  (see the version-bump entry below); v0.1.8 packaging/publish/install and
+  the retro purge are separate later steps.
+
 ## What is NOT done (next work)
 
-- Add description field for each formula that shows as a tooltip on the per-widget record view.
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
   proper fix**: `convergeFormulaFieldLayout`'s forced `visible:true` for the
   VALUE field (not the FX Status companion — that stays, it was never
