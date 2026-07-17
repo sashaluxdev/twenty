@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { __clearEnabledFormulasCacheForTests } from 'src/logic-functions/lib/formula-repository';
 import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+
+afterEach(() => __clearEnabledFormulasCacheForTests());
 
 describe('computeSyncableFields', () => {
   it('includes mirrorable and engine-family kinds, excludes the label field, the relation field, and non-writable kinds and settings-less relations', async () => {

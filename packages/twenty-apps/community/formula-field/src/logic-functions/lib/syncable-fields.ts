@@ -1,5 +1,5 @@
 import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
-import { loadAllEnabledFormulas } from 'src/logic-functions/lib/formula-repository';
+import { loadAllEnabledFormulasCached } from 'src/logic-functions/lib/formula-repository';
 import {
   ENGINE_FAMILY_KINDS,
   MIRRORABLE_KINDS,
@@ -47,7 +47,7 @@ export const computeSyncableFields = async (
     return [];
   }
 
-  const formulas = await loadAllEnabledFormulas(client);
+  const formulas = await loadAllEnabledFormulasCached(client);
   const formulaTargetFields = new Set(
     formulas
       .filter((formula) => formula.targetObject === targetObject)

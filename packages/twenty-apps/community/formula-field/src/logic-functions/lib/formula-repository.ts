@@ -1,6 +1,7 @@
 import { compileFormula } from 'src/engine';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import { isMirrorDefinition } from 'src/logic-functions/lib/mirror-kinds';
+import { workspaceCacheKey } from 'src/logic-functions/lib/metadata-objects';
 import {
   type FormulaClient,
   type FormulaDefinitionRecord,
@@ -83,6 +84,67 @@ export const loadEnabledFormulas = async (
 export const loadAllEnabledFormulas = (
   client: FormulaClient,
 ): Promise<FormulaDefinitionRecord[]> => loadEnabledFormulas(client);
+
+// Same posture as metadata-objects.ts's catalog cache: computeSyncableFields
+// re-scans EVERY enabled definition on every widget open and every
+// variation-sync event. 60s staleness for the syncable-field set is the
+// documented, deliberate trade-off there — mirror it, including the in-flight
+// dedup so N cold-cache callers share one paginated fetch.
+const ENABLED_FORMULAS_TTL_MS = 60_000;
+
+type EnabledFormulasCacheEntry = {
+  formulas: FormulaDefinitionRecord[];
+  loadedAt: number;
+};
+const enabledFormulasCacheByWorkspace = new Map<
+  string,
+  EnabledFormulasCacheEntry
+>();
+const enabledFormulasInFlightByWorkspace = new Map<
+  string,
+  Promise<FormulaDefinitionRecord[]>
+>();
+
+export const invalidateEnabledFormulasCache = (): void => {
+  enabledFormulasCacheByWorkspace.delete(workspaceCacheKey());
+};
+
+export const __clearEnabledFormulasCacheForTests = (): void => {
+  enabledFormulasCacheByWorkspace.clear();
+  enabledFormulasInFlightByWorkspace.clear();
+};
+
+export const loadAllEnabledFormulasCached = async (
+  client: FormulaClient,
+): Promise<FormulaDefinitionRecord[]> => {
+  const cacheKey = workspaceCacheKey();
+  const cached = enabledFormulasCacheByWorkspace.get(cacheKey);
+  if (cached && Date.now() - cached.loadedAt < ENABLED_FORMULAS_TTL_MS) {
+    return cached.formulas;
+  }
+
+  const inFlight = enabledFormulasInFlightByWorkspace.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const fetchPromise = (async () => {
+    const formulas = await loadEnabledFormulas(client);
+    // Cache only on success — a rejected pull leaves nothing behind, so the
+    // next caller retries reality instead of a poisoned entry.
+    enabledFormulasCacheByWorkspace.set(cacheKey, {
+      formulas,
+      loadedAt: Date.now(),
+    });
+    return formulas;
+  })();
+  enabledFormulasInFlightByWorkspace.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    enabledFormulasInFlightByWorkspace.delete(cacheKey);
+  }
+};
 
 // Minimal projection of a soft-deleted (trashed) FormulaDefinition — enough to
 // decide field liveness and, for the front hide convergence, which fields to
