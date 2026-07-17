@@ -195,6 +195,11 @@ const OverrideToggle = ({
   </div>
 );
 
+// Cross-mount throttle for the trashed-definition probe. A useRef reset on
+// every tab open (fresh mount), firing the loadTrashedFormulas scan each
+// time; module state survives remounts so the 60s gate actually holds.
+let lastTrashedProbeAt = 0;
+
 const FormulaEditor = () => {
   const recordId = useRecordId();
   const [definitions, setDefinitions] = useState<Definition[]>([]);
@@ -224,11 +229,6 @@ const FormulaEditor = () => {
   // Bumped by refreshStaleTodayFormulas' onStateChange so the memoized
   // `content` below re-evaluates sharedRecordRefreshState.inFlight.
   const [refreshTick, setRefreshTick] = useState(0);
-  // Throttle for the trashed-def hide side-channel in load() (see there). Held
-  // in a ref (same pattern as the old refreshStateRef) so it survives across
-  // polls without re-rendering. Layout convergence is itself 60s-throttled, so
-  // probing the server for trashed defs faster than that is pure waste.
-  const trashedProbeAtRef = useRef(0);
   // Per-definition "already toasted this status" bookkeeping for the status
   // snackbars — a ref (same pattern as the old refreshStateRef) so it survives
   // polls without re-rendering.
@@ -398,8 +398,8 @@ const FormulaEditor = () => {
     // loadTrashedFormulas query on every 4s poll). Wrapped so a withRetry
     // failure (permissions, transient 5xx) can never leak an unhandled
     // rejection — same silent no-op posture as the live convergence loop.
-    if (host && Date.now() - trashedProbeAtRef.current >= 60_000) {
-      trashedProbeAtRef.current = Date.now();
+    if (host && Date.now() - lastTrashedProbeAt >= 60_000) {
+      lastTrashedProbeAt = Date.now();
       void (async () => {
         const trashed = await loadTrashedFormulas(client, host);
         for (const definition of trashed) {
