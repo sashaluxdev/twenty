@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
-import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
+import {
+  recomputeAllRecords,
+  recomputeForRecord,
+} from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
@@ -497,5 +500,37 @@ describe('recomputeForRecord composite dependency selection', () => {
       amountMicros: true,
       currencyCode: true,
     });
+  });
+});
+
+// ADR 0023: the definition-page sweep passes shouldContinue so an unmount can
+// stop the sweep at the next record boundary instead of running it to
+// completion orphaned. Guarded at the top of both the outer page loop and the
+// inner per-edge loop (see recomputeAllRecords).
+describe('recomputeAllRecords shouldContinue (ADR 0023)', () => {
+  it('stops processing records once shouldContinue returns false', async () => {
+    const client = new FakeClient();
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 1, formulaInputB: 1, formulaScore: null },
+      { id: 'o2', formulaInputA: 2, formulaInputB: 2, formulaScore: null },
+      { id: 'o3', formulaInputA: 3, formulaInputB: 3, formulaScore: null },
+    ]);
+
+    // Lets the outer loop's initial check pass, and the first record's inner
+    // check pass, then stops — so exactly one record gets processed.
+    let calls = 0;
+    const shouldContinue = () => {
+      calls += 1;
+      return calls <= 2;
+    };
+
+    const outcomes = await recomputeAllRecords(client, formula(), {
+      shouldContinue,
+    });
+
+    // Fewer writes than the seeded record count: the sweep stopped early
+    // rather than converging every record.
+    expect(client.writes).toHaveLength(1);
+    expect(outcomes).toHaveLength(1);
   });
 });

@@ -19,7 +19,7 @@ import {
 import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import {
   refreshStaleTodayFormulas,
-  type RefreshThrottleState,
+  sharedSweepRefreshState,
 } from 'src/front-components/lib/refresh-stale-formulas';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
@@ -355,16 +355,22 @@ const FormulaDefinitionEditor = () => {
   // Tracks which record's draft we have already seeded, so the 4s refresh below
   // never overwrites the expression the user is actively editing.
   const seededRecordId = useRef<string | null>(null);
-  // Refresh-on-view throttle/in-flight state (ADR 0015) — own ref per widget,
-  // since this widget refreshes only its own definition (no viewed record).
-  const refreshStateRef = useRef<RefreshThrottleState>({
-    lastRefreshAt: 0,
-    inFlight: false,
-  });
+  // Refresh-on-view throttle/in-flight state (ADR 0015) now lives module-global
+  // as sharedSweepRefreshState (ADR 0023), throttling across all mounts of this
+  // widget (previously a per-mount ref reset on every tab open).
   // Bumped by refreshStaleTodayFormulas' onStateChange to re-render and show
   // "Refreshing formula…" — this component isn't memoized, so a plain re-
   // render is enough (unlike formula-editor.tsx's memoized row list).
   const [, setRefreshTick] = useState(0);
+  // Lets the fire-and-forget sweep stop at the next record boundary after
+  // this widget unmounts (ADR 0023) instead of running to completion orphaned.
+  const mountedRef = useRef(true);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   // Target object's field kinds (name -> metadata type), so pre-save validation
   // rejects a string comparison against a field that can't hold a string —
@@ -436,13 +442,19 @@ const FormulaDefinitionEditor = () => {
       // Refresh-on-view (ADR 0015): this widget IS the definition's own page
       // (no viewed record) — the honest recomputeAllRecords refresh fixes
       // every record and advances lastEvaluatedAt, clearing the stale note.
+      // Unlike the record-page widget, this keeps sweepAllRecords: true — it's
+      // the admin surface for exactly one definition (ADR 0023). shouldContinue
+      // lets the sweep stop at the next record boundary if this widget unmounts
+      // mid-sweep instead of running to completion orphaned.
       refreshStaleTodayFormulas({
         // Dynamic client: the refresh recomputes runtime-created value fields
         // that aren't in the static genql type map, unlike this load()'s query.
         client: createDynamicCoreClient(),
         definitions: [current],
         now: Date.now(),
-        state: refreshStateRef.current,
+        state: sharedSweepRefreshState,
+        sweepAllRecords: true,
+        shouldContinue: () => mountedRef.current,
         onStateChange: () => setRefreshTick((tick) => tick + 1),
       }).then((refreshedIds) => {
         if (refreshedIds.length > 0) {
@@ -595,7 +607,7 @@ const FormulaDefinitionEditor = () => {
           {formatRelativePast(definition.lastEvaluatedAt, Date.now())}
         </HintText>
       ) : null}
-      {refreshStateRef.current.inFlight ? (
+      {sharedSweepRefreshState.inFlight ? (
         <MutedText as="div">Refreshing formula…</MutedText>
       ) : null}
 

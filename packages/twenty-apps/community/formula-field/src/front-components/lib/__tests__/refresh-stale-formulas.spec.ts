@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  __resetSharedRefreshStatesForTests,
   type DefinitionLike,
   type RefreshThrottleState,
   refreshStaleTodayFormulas,
+  sharedSweepRefreshState,
 } from 'src/front-components/lib/refresh-stale-formulas';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 
@@ -54,11 +56,14 @@ describe('refreshStaleTodayFormulas', () => {
       definitions: [staleToday, freshToday, staleNonToday, staleDisabled],
       now,
       state: idleState(),
+      sweepAllRecords: true,
       recomputeAllRecordsFn,
     });
 
     expect(recomputeAllRecordsFn).toHaveBeenCalledTimes(1);
-    expect(recomputeAllRecordsFn).toHaveBeenCalledWith(fakeClient, staleToday);
+    expect(recomputeAllRecordsFn).toHaveBeenCalledWith(fakeClient, staleToday, {
+      shouldContinue: undefined,
+    });
     expect(refreshed).toEqual(['stale-today']);
   });
 
@@ -80,6 +85,7 @@ describe('refreshStaleTodayFormulas', () => {
       now,
       state: idleState(),
       recordId: 'rec-1',
+      sweepAllRecords: true,
       recomputeForRecordFn,
       recomputeAllRecordsFn,
     });
@@ -99,6 +105,7 @@ describe('refreshStaleTodayFormulas', () => {
       definitions: [staleToday],
       now,
       state: idleState(),
+      sweepAllRecords: true,
       recomputeForRecordFn: recomputeForRecordFnUnused,
       recomputeAllRecordsFn: recomputeAllRecordsFnAgain,
     });
@@ -117,6 +124,7 @@ describe('refreshStaleTodayFormulas', () => {
       definitions: [def()],
       now,
       state,
+      sweepAllRecords: true,
       recomputeAllRecordsFn,
     });
 
@@ -134,6 +142,7 @@ describe('refreshStaleTodayFormulas', () => {
       definitions: [def()],
       now,
       state,
+      sweepAllRecords: true,
       recomputeAllRecordsFn,
     });
 
@@ -156,6 +165,7 @@ describe('refreshStaleTodayFormulas', () => {
       definitions: [def()],
       now,
       state,
+      sweepAllRecords: true,
       recomputeAllRecordsFn,
       onStateChange,
     });
@@ -186,11 +196,71 @@ describe('refreshStaleTodayFormulas', () => {
       definitions: [defA, defB],
       now,
       state: idleState(),
+      sweepAllRecords: true,
       recomputeAllRecordsFn,
     });
 
     // Not interleaved: def A's call fully completes before def B's starts.
     expect(order).toEqual(['start-a', 'end-a', 'start-b', 'end-b']);
     expect(refreshed).toEqual(['a', 'b']);
+  });
+
+  it('skips the full sweep when sweepAllRecords is false but still fixes the viewed record', async () => {
+    const recomputeForRecordFn = vi.fn().mockResolvedValue(undefined);
+    const recomputeAllRecordsFn = vi.fn().mockResolvedValue([]);
+
+    const refreshed = await refreshStaleTodayFormulas({
+      client: fakeClient,
+      definitions: [def()],
+      now,
+      state: idleState(),
+      recordId: 'rec-1',
+      sweepAllRecords: false,
+      recomputeForRecordFn,
+      recomputeAllRecordsFn,
+    });
+
+    expect(recomputeForRecordFn).toHaveBeenCalledTimes(1);
+    expect(recomputeAllRecordsFn).not.toHaveBeenCalled();
+    expect(refreshed).toEqual(['def-1']);
+  });
+
+  it('threads shouldContinue through to the sweep', async () => {
+    const shouldContinue = () => false;
+    const recomputeAllRecordsFn = vi.fn().mockResolvedValue([]);
+
+    await refreshStaleTodayFormulas({
+      client: fakeClient,
+      definitions: [def()],
+      now,
+      state: idleState(),
+      sweepAllRecords: true,
+      shouldContinue,
+      recomputeAllRecordsFn,
+    });
+
+    expect(recomputeAllRecordsFn).toHaveBeenCalledWith(
+      fakeClient,
+      expect.objectContaining({ id: 'def-1' }),
+      { shouldContinue },
+    );
+  });
+
+  it('throttles across two callers sharing the module-global state', async () => {
+    __resetSharedRefreshStatesForTests();
+    const recomputeAllRecordsFn = vi.fn().mockResolvedValue([]);
+    const base = {
+      client: fakeClient,
+      definitions: [def()],
+      state: sharedSweepRefreshState,
+      sweepAllRecords: true,
+      recomputeAllRecordsFn,
+    };
+
+    await refreshStaleTodayFormulas({ ...base, now });
+    // A second "mount" 1s later — previously a fresh useRef, now shared state.
+    await refreshStaleTodayFormulas({ ...base, now: now + 1_000 });
+
+    expect(recomputeAllRecordsFn).toHaveBeenCalledTimes(1);
   });
 });

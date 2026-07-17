@@ -102,7 +102,7 @@ describe('recomputeAllRecords target-record scan order (ADR 0022)', () => {
 
     // Page size smaller than the row count forces multiple page queries, so
     // the assertion below covers every page, not just the first.
-    await recomputeAllRecords(client, formula, 2);
+    await recomputeAllRecords(client, formula, { pageSize: 2 });
 
     const pageQueries = client.querySelections.filter(
       (selection) => selection.opportunities,

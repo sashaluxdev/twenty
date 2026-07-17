@@ -10,13 +10,17 @@ import {
 
 // Single refresh orchestrator, called by both widgets (record-page
 // formula-editor and the FormulaDefinition's own formula-definition-editor).
-// Replaces the former per-record self-heal block: recomputeAllRecords is the
-// HONEST refresh — it fixes every record of the target object (idempotent,
-// write-avoidant) AND advances the definition's lastEvaluatedAt heartbeat,
-// which is what actually clears the "Formula last evaluated {relative}" stale
-// note. The old per-record recompute alone fixed only the viewed record's
-// value and never touched the heartbeat, so the note persisted until the
-// (possibly-dead) hourly sweep ran.
+// recomputeAllRecords is the HONEST refresh — it fixes every record of the
+// target object (idempotent, write-avoidant) AND advances the definition's
+// lastEvaluatedAt heartbeat, which is what actually clears the "Formula last
+// evaluated {relative}" stale note. But running that whole-object sweep as a
+// side effect of merely viewing one record was itself a defect (ADR 0023):
+// the record-page widget now passes sweepAllRecords: false and recomputes
+// only the viewed record; the definition page keeps the full sweep (it's the
+// admin surface for exactly one definition) and is what actually advances the
+// heartbeat. Elsewhere, staleness surfaces as the passive note until the
+// definition page is visited or the hourly cron sweep (ADR 0012/0020) runs —
+// that is honest too, since the sweep genuinely is stale in that window.
 export type DefinitionLike = FormulaDefinitionRecord & {
   enabled: boolean;
   lastEvaluatedAt: string | null;
@@ -31,6 +35,26 @@ export type RefreshThrottleState = {
   inFlight: boolean;
 };
 
+// Module-global throttle states. The per-mount useRef versions reset on every
+// tab open (Twenty unmounts inactive tabs), which defeated the 60s throttle —
+// every open re-triggered refresh work (ADR 0023). One state per surface:
+// record-page editors (per-record recompute) and the definition page (full
+// sweep) throttle independently, but each throttles across ALL of its mounts.
+export const sharedRecordRefreshState: RefreshThrottleState = {
+  lastRefreshAt: 0,
+  inFlight: false,
+};
+export const sharedSweepRefreshState: RefreshThrottleState = {
+  lastRefreshAt: 0,
+  inFlight: false,
+};
+export const __resetSharedRefreshStatesForTests = (): void => {
+  sharedRecordRefreshState.lastRefreshAt = 0;
+  sharedRecordRefreshState.inFlight = false;
+  sharedSweepRefreshState.lastRefreshAt = 0;
+  sharedSweepRefreshState.inFlight = false;
+};
+
 export type RefreshStaleOptions = {
   client: FormulaClient;
   definitions: ReadonlyArray<DefinitionLike>;
@@ -41,6 +65,15 @@ export type RefreshStaleOptions = {
   // The viewed record, when called from the record-page widget — recomputed
   // first so the value the user is looking at corrects before the full sweep.
   recordId?: string;
+  // Whether to run the full recomputeAllRecords sweep after the per-record
+  // fix. The record-page widget passes false: a whole-object sweep triggered
+  // by merely viewing a record was the browser-side query-flood source
+  // (ADR 0023). The definition page passes true — it is the admin surface for
+  // exactly one definition, and the sweep is what advances lastEvaluatedAt.
+  sweepAllRecords: boolean;
+  // Polled between records by recomputeAllRecords; lets the initiating widget
+  // stop a sweep on unmount instead of orphaning it.
+  shouldContinue?: () => boolean;
   recomputeForRecordFn?: typeof recomputeForRecord;
   recomputeAllRecordsFn?: typeof recomputeAllRecords;
   // Lets the widget re-render to show/hide the "Refreshing formula…" note.
@@ -71,6 +104,8 @@ export const refreshStaleTodayFormulas = async ({
   now,
   state,
   recordId,
+  sweepAllRecords,
+  shouldContinue,
   recomputeForRecordFn = recomputeForRecord,
   recomputeAllRecordsFn = recomputeAllRecords,
   onStateChange,
@@ -103,7 +138,9 @@ export const refreshStaleTodayFormulas = async ({
             targetRecordId: recordId,
           });
         }
-        await recomputeAllRecordsFn(client, definition);
+        if (sweepAllRecords) {
+          await recomputeAllRecordsFn(client, definition, { shouldContinue });
+        }
         refreshedIds.push(definition.id);
       } catch {
         // Swallowed per-definition — see the function-level comment above.

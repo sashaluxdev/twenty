@@ -22,7 +22,7 @@ import { cacheHostObject, getCachedHostObject } from 'src/front-components/lib/h
 import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import {
   refreshStaleTodayFormulas,
-  type RefreshThrottleState,
+  sharedRecordRefreshState,
 } from 'src/front-components/lib/refresh-stale-formulas';
 import {
   computeDropWrite,
@@ -218,24 +218,20 @@ const FormulaEditor = () => {
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The record id never changes for a mounted widget — resolve its object once.
   const resolvedHost = useRef<string | null>(null);
-  // Refresh-on-view throttle/in-flight state (ADR 0015), held in a ref so it
-  // survives across polls without itself triggering a re-render — see
-  // refreshTick below for how the widget re-renders when it changes.
-  const refreshStateRef = useRef<RefreshThrottleState>({
-    lastRefreshAt: 0,
-    inFlight: false,
-  });
+  // Refresh-on-view throttle/in-flight state (ADR 0015) now lives module-global
+  // as sharedRecordRefreshState (ADR 0023) — see refreshTick below for how the
+  // widget re-renders when it changes.
   // Bumped by refreshStaleTodayFormulas' onStateChange so the memoized
-  // `content` below re-evaluates refreshStateRef.current.inFlight.
+  // `content` below re-evaluates sharedRecordRefreshState.inFlight.
   const [refreshTick, setRefreshTick] = useState(0);
   // Throttle for the trashed-def hide side-channel in load() (see there). Held
-  // in a ref (same pattern as refreshStateRef) so it survives across polls
-  // without re-rendering. Layout convergence is itself 60s-throttled, so
+  // in a ref (same pattern as the old refreshStateRef) so it survives across
+  // polls without re-rendering. Layout convergence is itself 60s-throttled, so
   // probing the server for trashed defs faster than that is pure waste.
   const trashedProbeAtRef = useRef(0);
   // Per-definition "already toasted this status" bookkeeping for the status
-  // snackbars — a ref (same pattern as refreshStateRef) so it survives polls
-  // without re-rendering.
+  // snackbars — a ref (same pattern as the old refreshStateRef) so it survives
+  // polls without re-rendering.
   const statusToastsRef = useRef(new Map<string, string>());
   // Drag-to-reorder (ADR 0014, pointer events): pointerdown only records a
   // pending gesture (id + start coordinates) in pendingDragRef — it does NOT
@@ -515,18 +511,22 @@ const FormulaEditor = () => {
 
       // Refresh-on-view (ADR 0015): a stale TODAY() formula on this record
       // means the sweep/worker isn't converging it — recompute it here in the
-      // front runtime. The orchestrator recomputes the viewed record first,
-      // then runs the honest full recomputeAllRecords (write-avoidant), which
-      // also advances lastEvaluatedAt and clears the stale note. Throttled/
-      // in-flight-guarded internally so a persistently-stale record doesn't
-      // re-trigger on every 4s poll; onStateChange bumps refreshTick so the
-      // row can show "Refreshing formula…" while it runs.
+      // front runtime. Record-page widget recomputes ONLY the viewed record
+      // (sweepAllRecords: false) — the full recomputeAllRecords sweep as a
+      // side effect of merely viewing a record was a browser-side query-flood
+      // source (ADR 0023); the stale note may persist until the definition
+      // page is visited or the hourly cron sweep runs. Throttled/in-flight-
+      // guarded via the module-global sharedRecordRefreshState so a
+      // persistently-stale record doesn't re-trigger on every 4s poll or every
+      // tab reopen; onStateChange bumps refreshTick so the row can show
+      // "Refreshing formula…" while it runs.
       refreshStaleTodayFormulas({
         client,
         definitions: defs,
         now: Date.now(),
-        state: refreshStateRef.current,
+        state: sharedRecordRefreshState,
         recordId,
+        sweepAllRecords: false,
         onStateChange: () => setRefreshTick((tick) => tick + 1),
       }).then((refreshedIds) => {
         if (refreshedIds.length > 0) {
@@ -917,7 +917,7 @@ const FormulaEditor = () => {
             ) : null}
             <span style={layout.value}>{displayValue(definition, value)}</span>
           </div>
-          {stale && refreshStateRef.current.inFlight ? (
+          {stale && sharedRecordRefreshState.inFlight ? (
             // A refresh is actively running for this (stale) definition —
             // supersedes the passive note below for as long as it's in flight.
             <MutedText as="div" style={layout.staleNote}>
@@ -1010,7 +1010,7 @@ const FormulaEditor = () => {
     toggleOverride,
     hostFieldKinds,
     // Not read directly — bumped by refreshStaleTodayFormulas' onStateChange
-    // so this memo re-reads refreshStateRef.current.inFlight.
+    // so this memo re-reads sharedRecordRefreshState.inFlight.
     refreshTick,
   ]);
 

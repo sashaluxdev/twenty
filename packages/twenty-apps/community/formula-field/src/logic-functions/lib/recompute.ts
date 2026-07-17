@@ -639,14 +639,31 @@ export const recomputeForRecord = async ({
   return { ...base, value: result, changed: true };
 };
 
+export type RecomputeAllRecordsOptions = {
+  // Page size for the cursor-paginated record scan. NOT in the original ADR
+  // 0023 plan — folded in here because this positional param already existed
+  // and is exercised by pagination.spec.ts; production callers rely on the
+  // default.
+  pageSize?: number;
+  // Polled between records; return false to stop the sweep early (e.g. the
+  // initiating widget unmounted). Already-processed records keep their
+  // writes — the sweep is idempotent, the cron sweep finishes the rest.
+  shouldContinue?: () => boolean;
+};
+
 // Recomputes a formula across ALL records of its target object (paginated).
 // Used by the cron sweep and by cross-object recompute, where a change to a
-// referenced record affects the formula on every target record.
+// referenced record affects the formula on every target record. Also used by
+// refreshStaleTodayFormulas' definition-page sweep, which passes
+// shouldContinue so the sweep stops at the next record boundary after the
+// initiating widget unmounts (ADR 0023) instead of running to completion
+// orphaned.
 export const recomputeAllRecords = async (
   client: FormulaClient,
   formula: FormulaDefinitionRecord,
-  pageSize = 100,
+  options: RecomputeAllRecordsOptions = {},
 ): Promise<RecomputeOutcome[]> => {
+  const pageSize = options.pageSize ?? 100;
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
   const pluralName = pluralize(targetObject);
@@ -662,6 +679,9 @@ export const recomputeAllRecords = async (
   let after: string | undefined;
 
   for (;;) {
+    if (options.shouldContinue && !options.shouldContinue()) {
+      break;
+    }
     const response = await withRetry(() =>
       client.query({
         [pluralName]: {
@@ -685,6 +705,9 @@ export const recomputeAllRecords = async (
     const edges: Array<{ node?: { id?: string } }> = connection?.edges ?? [];
 
     for (const edge of edges) {
+      if (options.shouldContinue && !options.shouldContinue()) {
+        break;
+      }
       const id = edge?.node?.id;
       if (!id) {
         continue;
