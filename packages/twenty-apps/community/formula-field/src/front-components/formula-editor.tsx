@@ -18,6 +18,7 @@ import {
   FormulaFieldInput,
   useObjectFields,
 } from 'src/front-components/lib/formula-field-input';
+import { cacheHostObject, getCachedHostObject } from 'src/front-components/lib/host-resolution-cache';
 import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import {
   refreshStaleTodayFormulas,
@@ -336,6 +337,10 @@ const FormulaEditor = () => {
     // Resolve which object's record page hosts this widget: probe the record
     // id against each distinct target object (the context has no object name).
     if (!resolvedHost.current && recordId) {
+      resolvedHost.current = getCachedHostObject(recordId);
+    }
+
+    if (!resolvedHost.current && recordId) {
       const candidates = Array.from(
         new Set(allDefs.map((definition) => definition.targetObject)),
       ).filter(Boolean);
@@ -352,7 +357,11 @@ const FormulaEditor = () => {
             .catch(() => null),
         ),
       );
-      resolvedHost.current = probes.find(Boolean) ?? null;
+      const resolvedCandidate = probes.find(Boolean) ?? null;
+      resolvedHost.current = resolvedCandidate;
+      if (resolvedCandidate) {
+        cacheHostObject(recordId, resolvedCandidate);
+      }
     }
     const host = resolvedHost.current;
 

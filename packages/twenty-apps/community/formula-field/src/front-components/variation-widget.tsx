@@ -4,6 +4,7 @@ import { defineFrontComponent } from 'twenty-sdk/define';
 import { enqueueSnackbar, navigate, useRecordId } from 'twenty-sdk/front-component';
 
 import { VARIATION_WIDGET_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
+import { cacheHostObject, getCachedHostObject } from 'src/front-components/lib/host-resolution-cache';
 import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import {
   BannerWarning,
@@ -109,6 +110,10 @@ const VariationWidget = () => {
       const configs = await loadAllEnabledVariationConfigs(client);
 
       if (!resolvedHost.current && recordId) {
+        resolvedHost.current = getCachedHostObject(recordId);
+      }
+
+      if (!resolvedHost.current && recordId) {
         const candidates = Array.from(
           new Set(configs.map((config) => config.targetObject).filter(Boolean)),
         ) as string[];
@@ -134,6 +139,7 @@ const VariationWidget = () => {
         );
         if (resolved) {
           resolvedHost.current = resolved.value;
+          cacheHostObject(recordId, resolved.value);
         } else {
           const rejection = probes.find(
             (probe): probe is PromiseRejectedResult => probe.status === 'rejected',
