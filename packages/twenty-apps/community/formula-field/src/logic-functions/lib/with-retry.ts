@@ -25,9 +25,14 @@ const isRetryable = (error: unknown): boolean => {
 
   if (Array.isArray(candidate?.errors)) {
     for (const graphqlError of candidate.errors) {
-      const code =
-        graphqlError?.extensions?.code ?? graphqlError?.extensions?.subCode;
+      // The platform wraps throttle errors as code BAD_USER_INPUT with the
+      // real signal in subCode — check BOTH, not code-with-subCode-fallback
+      // (code is always set, so `code ?? subCode` never reached subCode).
+      const { code, subCode } = graphqlError?.extensions ?? {};
       if (code && RETRYABLE_CODES.has(code)) {
+        return true;
+      }
+      if (subCode && RETRYABLE_CODES.has(subCode)) {
         return true;
       }
     }
