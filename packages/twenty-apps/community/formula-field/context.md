@@ -540,6 +540,84 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   (see the version-bump entry below); v0.1.8 packaging/publish/install and
   the retro purge are separate later steps.
 
+- **2026-07-17 ARC (Widget load-time cleanup, ADR 0023, ships v0.1.9)**: the
+  2026-07-17 diagnosis (`docs/plans/2026-07-17-widget-load-perf.md`) found
+  the record-page widget taking 5-7s to open in cloud even after the 2026-07-14
+  fast-load work, driven by per-mount rebuild cost compounding with cloud RTT
+  (local was ~1s). Six tasks, six commits (`b8205c1031`..`eb02a3242e`).
+  **Task 1** (`b8205c1031`): `with-retry.ts` only matched a top-level
+  `LIMIT_REACHED` code, but the platform nests it under `BAD_USER_INPUT`'s
+  `subCode` — retries were silently skipped on rate-limited writes; now checks
+  `subCode` too. **Task 2** (`650bd148e1`): `formula-repository.ts` gained a
+  60s workspace-keyed cache for the enabled-formula scan (`syncable-fields.ts`'s
+  callers were re-querying the full enabled-definition list on every widget
+  mount). **Task 3** (`570b427985`): `resolveWidgetRole` (`variation-widget-data.ts`)
+  dropped a redundant config re-query from its critical path — the caller
+  already had the config, so `variation-widget.tsx` now passes it through
+  instead of the hook re-fetching it. **Task 4** (`d0e4d24ba4`): new
+  `lib/host-resolution-cache.ts` caches host-object resolution across widget
+  remounts (both `formula-editor.tsx` and `variation-widget.tsx` wire it in) —
+  tab close/reopen no longer re-resolves the host object from scratch.
+  **Task 5** (`0c7d335950`, ADR 0023): the ADR 0015 "honest refresh" ran
+  `recomputeAllRecords` as a sequential, unabortable, fire-and-forget sweep of
+  the whole object on every stale-and-visible mount; because Twenty unmounts
+  inactive record-page tabs, the caller-held `useRef` throttle reset on every
+  tab open and the "60s" throttle fired per open, producing a continuous
+  multi-req/s query flood. Fix: throttle/in-flight state moved to
+  module-global (`sharedRecordRefreshState` / `sharedSweepRefreshState` in
+  `refresh-stale-formulas.ts`), surviving remounts; the record-page editor now
+  recomputes ONLY the viewed record (`recompute.ts` gained a
+  `sweepAllRecords: false` mode); the definition page keeps its full sweep
+  (one definition, admin surface, advances `lastEvaluatedAt`) but now passes
+  `shouldContinue` so an unmount stops it at the next record boundary instead
+  of running to completion in the background. **Deviates from ADR 0015** —
+  flagged in ADR 0023 for user review; record pages no longer self-heal
+  staleness for other records, only the hourly cron sweep (ADR 0012/0020) and
+  a definition-page visit do. **Task 6** (`eb02a3242e`): the trashed-definition
+  probe throttle in `formula-editor.tsx` had the same per-mount-reset bug as
+  Task 5 — moved to module scope so it survives tab remounts too. Platform-side
+  items identified during diagnosis (bundle caching on the local dev remote,
+  worker process reuse, SDK-archive unzip cost) are NOT addressed by this arc —
+  they are upstream/environment issues outside the app's control, noted here
+  for future reference. Full unit + lint suite green (918 tests) before
+  version bump. Reinstalled to the local `dev` remote and live-verified on a
+  Companies record with variations (Stripe). Variations tab renders (pass).
+  Idle `/graphql` traffic: over a ~136s idle window with the tab open, 18
+  requests total, clustered in bursts roughly 30-40s apart (not a continuous
+  flood) — consistent with `POLL_INTERVAL_MS` (pass). Tab-switch reopen
+  (Timeline → Variations, repeated 3x): **the host-probe queries (per-
+  candidate-object `{ id }` lookups, e.g. `opportunity(filter:{id:eq:...})`,
+  `company(filter:{id:eq:...})`) RE-FIRE on every single reopen** — the
+  module-global host-resolution cache (Task 4) and, by the same mechanism,
+  the module-global throttle state (Tasks 5-6) do **not** survive a tab-
+  driven unmount/remount in the live app, contradicting ADR 0023's "surviving
+  remounts" claim. Root cause found by reading the platform renderer: each
+  front-component mount gets a brand-new Web Worker
+  (`FrontComponentWorkerEffect.tsx`'s `useEffect` calls `createRemoteWorker()`
+  on mount and `worker.terminate()` on unmount — see
+  `packages/twenty-front-component-renderer/src/remote/components/FrontComponentWorkerEffect.tsx`
+  lines 74 and 145), which reloads the component's JS bundle into a fresh
+  module graph every time. A `useRef` and a module-level
+  `Map`/state variable are therefore equally unable to survive a tab close/
+  reopen — moving state from the former to the latter (the fix pattern used
+  by Tasks 4-6) provides no persistence benefit for this specific problem;
+  it only helps within a single mount's re-invocations (observed: a second
+  `load()` call shortly after initial mount, before any tab switch, does
+  skip the probe using the component's own live ref) or in fresh unit tests
+  (Node/vitest process persists, masking the issue). Consequence is bounded,
+  not a regression to pre-arc severity: Task 5's *structural* change
+  (`sweepAllRecords: false` on the record-page path) does not depend on
+  throttle persistence and still holds — no full-object sweep queries were
+  observed on any reopen, only the small host-probe/data-load set (~4-10
+  requests) each time, versus the old continuous multi-req/s flood. So the
+  "no recompute burst" half of check (c) passes; the "no host-probe re-fire"
+  half fails. NOT yet deployed to cloud — that is a human step (SDK version
+  must match the hosted platform line). **Follow-up needed**: either persist
+  the resolution/throttle state somewhere that outlives the worker (e.g. a
+  host-side mechanism, or accept re-probing on tab reopen as a bounded cost
+  now that sweeps are capped) — flagging for a Task 8 rather than fixing here
+  (Task 7 is finalize-only).
+
 ## What is NOT done (next work)
 
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
