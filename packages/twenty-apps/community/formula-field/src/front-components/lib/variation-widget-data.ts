@@ -8,10 +8,7 @@ import {
 import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
 import { pluralize } from 'src/logic-functions/lib/recompute';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
-import {
-  findVariationConfigByTargetObject,
-  loadAllVariationConfigs,
-} from 'src/logic-functions/lib/variation-config-repository';
+import { loadAllVariationConfigs } from 'src/logic-functions/lib/variation-config-repository';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import {
   fetchPrimaryRecordInclTrashed,
@@ -98,8 +95,10 @@ export const resolveWidgetRole = async (
   client: FormulaClient,
   objectName: string,
   recordId: string,
+  // The caller's load() already scanned all enabled configs — re-querying the
+  // same config here was a redundant sequential leg on the first-paint path.
+  config: VariationConfigRecord | null,
 ): Promise<WidgetRole> => {
-  const config = await findVariationConfigByTargetObject(client, objectName);
   if (!config || config.enabled !== true) {
     return { kind: 'hidden' };
   }

@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 import { overrideKey } from 'src/logic-functions/lib/override-repository';
+import { type FormulaClient } from 'src/logic-functions/lib/types';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import {
   buildVariationLabelData,
@@ -82,28 +83,39 @@ describe('variation-widget-data', () => {
   });
 
   describe('resolveWidgetRole', () => {
+    it('returns hidden without querying when no config is passed', async () => {
+      const query = vi.fn();
+      const noopClient = { query, mutation: vi.fn() } as unknown as FormulaClient;
+
+      const role = await resolveWidgetRole(noopClient, 'company', 'rec-1', null);
+
+      expect(role).toEqual({ kind: 'hidden' });
+      expect(query).not.toHaveBeenCalled();
+    });
+
     it('is hidden when the object has no variation config', async () => {
       client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
 
-      const role = await resolveWidgetRole(client, 'company', 'p1');
+      const role = await resolveWidgetRole(client, 'company', 'p1', null);
 
       expect(role).toEqual({ kind: 'hidden' });
     });
 
     it('is hidden when the config is disabled', async () => {
-      seedConfig(client, { enabled: false });
       client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
 
-      const role = await resolveWidgetRole(client, 'company', 'p1');
+      const role = await resolveWidgetRole(client, 'company', 'p1', {
+        ...CONFIG,
+        enabled: false,
+      });
 
       expect(role).toEqual({ kind: 'hidden' });
     });
 
     it('is a primary when the record has a null pointer', async () => {
-      seedConfig(client);
       client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
 
-      const role = await resolveWidgetRole(client, 'company', 'p1');
+      const role = await resolveWidgetRole(client, 'company', 'p1', CONFIG);
 
       expect(role.kind).toBe('primary');
       if (role.kind === 'primary') {
@@ -112,13 +124,12 @@ describe('variation-widget-data', () => {
     });
 
     it('is a live variation with a derived primary label', async () => {
-      seedConfig(client);
       client.seed('company', [
         { id: 'p1', name: 'Acme', primaryRecordId: null },
         { id: 'v1', name: 'Acme (variation)', primaryRecordId: 'p1' },
       ]);
 
-      const role = await resolveWidgetRole(client, 'company', 'v1');
+      const role = await resolveWidgetRole(client, 'company', 'v1', CONFIG);
 
       expect(role).toMatchObject({
         kind: 'variation',
@@ -129,13 +140,12 @@ describe('variation-widget-data', () => {
     });
 
     it('is a frozen variation (still labelled) when the primary is trashed', async () => {
-      seedConfig(client);
       client.seed('company', [
         { id: 'p1', name: 'Acme', primaryRecordId: null, deletedAt: '2026-01-01T00:00:00.000Z' },
         { id: 'v1', name: 'Acme (variation)', primaryRecordId: 'p1' },
       ]);
 
-      const role = await resolveWidgetRole(client, 'company', 'v1');
+      const role = await resolveWidgetRole(client, 'company', 'v1', CONFIG);
 
       expect(role).toMatchObject({
         kind: 'variation',
@@ -146,12 +156,11 @@ describe('variation-widget-data', () => {
     });
 
     it('is a frozen variation with a null label when the primary is destroyed', async () => {
-      seedConfig(client);
       client.seed('company', [
         { id: 'v1', name: 'Acme (variation)', primaryRecordId: 'gone' },
       ]);
 
-      const role = await resolveWidgetRole(client, 'company', 'v1');
+      const role = await resolveWidgetRole(client, 'company', 'v1', CONFIG);
 
       expect(role).toMatchObject({
         kind: 'variation',
@@ -208,20 +217,20 @@ describe('variation-widget-data', () => {
     };
 
     it('propagates a read error instead of silently returning hidden', async () => {
-      seedConfig(client);
       client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
-      client.failQueriesFor('variationConfigs', NON_RETRYABLE_ERROR);
+      // The config is passed in now (no variationConfigs query), so the only
+      // read left inside resolveWidgetRole is the fresh pointer read.
+      client.failQueriesFor('company', NON_RETRYABLE_ERROR);
 
-      await expect(resolveWidgetRole(client, 'company', 'p1')).rejects.toBe(
-        NON_RETRYABLE_ERROR,
-      );
+      await expect(
+        resolveWidgetRole(client, 'company', 'p1', CONFIG),
+      ).rejects.toBe(NON_RETRYABLE_ERROR);
     });
 
     it('resolves normally when the config and reads succeed', async () => {
-      seedConfig(client);
       client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
 
-      const role = await resolveWidgetRole(client, 'company', 'p1');
+      const role = await resolveWidgetRole(client, 'company', 'p1', CONFIG);
 
       expect(role.kind).toBe('primary');
     });

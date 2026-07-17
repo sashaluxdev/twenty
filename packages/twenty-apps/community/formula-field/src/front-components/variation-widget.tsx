@@ -104,8 +104,11 @@ const VariationWidget = () => {
     const client = createDynamicCoreClient();
 
     try {
+      // One enabled-config scan serves both host resolution (first pass) and
+      // the role decision below — resolveWidgetRole no longer re-queries it.
+      const configs = await loadAllEnabledVariationConfigs(client);
+
       if (!resolvedHost.current && recordId) {
-        const configs = await loadAllEnabledVariationConfigs(client);
         const candidates = Array.from(
           new Set(configs.map((config) => config.targetObject).filter(Boolean)),
         ) as string[];
@@ -156,7 +159,9 @@ const VariationWidget = () => {
         return;
       }
 
-      const nextRole = await resolveWidgetRole(client, host, recordId);
+      const hostConfig =
+        configs.find((config) => config.targetObject === host) ?? null;
+      const nextRole = await resolveWidgetRole(client, host, recordId, hostConfig);
       setRole(nextRole);
       setVariations(
         nextRole.kind === 'primary'
