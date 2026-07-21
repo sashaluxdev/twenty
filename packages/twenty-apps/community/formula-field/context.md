@@ -733,13 +733,34 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   diverged-fields panel loaded correctly ("Variation of Stripe / All fields
   follow the primary. Edit any field on this record to diverge it."); test
   variation destroyed afterward (`destroyCompany` mutation) to keep demo data
-  clean, matching the 2026-07-07 precedent. **Cloud deploy of v0.1.10 is NOT
-  done** — human step per the SDK-version-match procedure (scratch-dir npm
-  twenty-sdk pinned to the hosted platform line); after it happens, re-run
-  the curl measurements from the 2026-07-21 evidence doc to quantify the
-  real-world improvement. Commits: ADR 0024 + version bump + this context
-  entry land together as one commit on top of the four Task 1–4 perf commits
-  already on `main`.
+  clean, matching the 2026-07-07 precedent. Commits: ADR 0024 + version bump
+  + this context entry land together as one commit on top of the four Task
+  1–4 perf commits already on `main`; a final-review fix wave commit
+  (994efb2641: IDB isolation-assumption comment, non-blocking miss-path
+  write, finite-savedAt fresh guard + test, ADR schema-versioning note)
+  closed the arc — final opus review READY TO MERGE, 930 tests.
+  **CLOUD DEPLOY DONE 2026-07-21** (user explicitly authorized same day):
+  main pushed to origin (9f4db76449..994efb2641), then per the
+  SDK-version-match procedure — npm twenty-sdk@2.21.0 scratch build (2.22.0
+  has been on npm since 07-17 but the morning's v0.1.9 deploy verified the
+  platform still on the 2.21 line; 2.21.0 built + planned cleanly, bundle
+  313,084 B) — `plan -r cloud` preview: 0 add / 3 change / 0 destroy
+  (variation-widget builtComponentChecksum → 010d322c…, plus the two
+  navigationMenuItems un-foldered AGAIN: folderUniversalIdentifier
+  16b32777-0dee-450b-835f-38c66be617bd → null — the user had re-foldered
+  Formulas/Variations after the morning v0.1.9 deploy un-foldered them; the
+  manifest doesn't declare the folder, so EVERY deploy will keep undoing it
+  — declare the folder in the manifest or accept re-foldering by hand).
+  publish + install clean, post-install plan "No changes". Post-deploy
+  spot-measure (read-only, CLI OAuth token kept off-console): authed
+  `formulaDefinitions(first:3)` 347/286/3061 ms — the ~300ms server floor
+  (+ the documented outlier pattern) is unchanged, as expected
+  (platform-side). Bundle-leg timing not directly re-curled: the
+  frontComponent UUID isn't listable via core GraphQL (`frontComponents`
+  not a Query field) and metadata introspection with stored credentials was
+  deliberately not pursued; expected ~2.0s → ~1.05–1.1s from the 47% byte
+  cut over the same S3 path — measure exactly from a logged-in browser
+  DevTools waterfall when convenient.
 
 ## What is NOT done (next work)
 
