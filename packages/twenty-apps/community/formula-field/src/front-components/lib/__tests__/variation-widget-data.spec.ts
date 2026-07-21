@@ -7,6 +7,7 @@ import { overrideKey } from 'src/logic-functions/lib/override-repository';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
 import {
+  buildPointerFieldByCandidate,
   buildVariationLabelData,
   loadDivergedFields,
   loadVariationList,
@@ -237,6 +238,67 @@ describe('variation-widget-data', () => {
 
       expect(role.kind).toBe('primary');
     });
+  });
+
+  describe('buildPointerFieldByCandidate', () => {
+    it('should map each targetObject to its relation pointer field, defaulting to primaryRecordId', () => {
+      const map = buildPointerFieldByCandidate([
+        { ...CONFIG, id: 'c1', targetObject: 'listing', relationFieldName: 'parentListing' },
+        { ...CONFIG, id: 'c2', targetObject: 'activity', relationFieldName: null },
+      ]);
+      expect(map.get('listing')).toBe('parentListingId');
+      expect(map.get('activity')).toBe('primaryRecordId');
+    });
+
+    it('should let the FIRST config win when two configs share a targetObject', () => {
+      const map = buildPointerFieldByCandidate([
+        { ...CONFIG, id: 'c1', targetObject: 'listing', relationFieldName: 'first' },
+        { ...CONFIG, id: 'c2', targetObject: 'listing', relationFieldName: 'second' },
+      ]);
+      expect(map.get('listing')).toBe('firstId');
+    });
+  });
+
+  describe('resolveWidgetRole with prefetched pointer', () => {
+    it('should return primary WITHOUT issuing a pointer query when prefetched pointer is null', async () => {
+      // Fail any 'company' query outright — proves resolveWidgetRole never
+      // falls back to its own pointer read when the caller already prefetched
+      // one (even a null one).
+      client.failQueriesFor('company', new Error('should not be queried'));
+
+      const role = await resolveWidgetRole(client, 'company', 'p1', CONFIG, {
+        primaryRecordId: null,
+      });
+
+      expect(role.kind).toBe('primary');
+    });
+
+    it('should take the variation path from a prefetched non-null pointer', async () => {
+      // Reuses the "is a live variation..." fixture minus the 'v1' seed: with
+      // a prefetched pointer, resolveWidgetRole never queries the variation
+      // record itself (only fetchPrimaryRecordInclTrashed's read of 'p1'). If
+      // it regressed to re-querying 'v1' for its pointer, that read would come
+      // back empty and wrongly resolve to 'primary' instead of 'variation'.
+      client.seed('company', [{ id: 'p1', name: 'Acme', primaryRecordId: null }]);
+
+      const role = await resolveWidgetRole(client, 'company', 'v1', CONFIG, {
+        primaryRecordId: 'p1',
+      });
+
+      expect(role).toMatchObject({
+        kind: 'variation',
+        primaryRecordId: 'p1',
+        frozen: false,
+        primaryLabel: 'Acme',
+      });
+    });
+
+    // "should still query the pointer when no prefetched pointer is given" is
+    // deliberately NOT added here as an empty test: the existing
+    // `resolveWidgetRole` tests above (e.g. "is a primary when the record has
+    // a null pointer", "is a live variation with a derived primary label")
+    // already call resolveWidgetRole with only 4 args, so the 5th argument is
+    // `undefined` and the query-driven branch is exactly what they exercise.
   });
 
   describe('loadVariationList', () => {

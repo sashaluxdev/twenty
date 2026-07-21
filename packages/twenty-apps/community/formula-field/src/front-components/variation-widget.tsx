@@ -22,6 +22,7 @@ import {
 } from 'src/front-components/lib/ui';
 import { TOKENS } from 'src/front-components/lib/ui-tokens';
 import {
+  buildPointerFieldByCandidate,
   buildVariationLabelData,
   loadDivergedFields,
   loadVariationList,
@@ -123,7 +124,9 @@ const VariationWidget = () => {
         resolvedHost.current = getCachedHostObject(recordId);
       }
 
+      let probedPointer: { primaryRecordId: string | null } | undefined;
       if (!resolvedHost.current && recordId) {
+        const pointerFieldByCandidate = buildPointerFieldByCandidate(configs);
         const candidates = Array.from(
           new Set(configs.map((config) => config.targetObject).filter(Boolean)),
         ) as string[];
@@ -131,25 +134,45 @@ const VariationWidget = () => {
         // only matters when NO candidate resolves: if any resolves we proceed
         // with it and ignore the others; if none resolves but a probe threw,
         // that is a read failure to surface — not a silent "record isn't here".
+        // Each probe also selects ITS OWN config's pointer field (ADR 0024) so
+        // the role decision below needs no second read of the same record.
         const probes = await Promise.allSettled(
-          candidates.map((candidate) =>
-            client
+          candidates.map((candidate) => {
+            const pointerField =
+              pointerFieldByCandidate.get(candidate) ?? 'primaryRecordId';
+            return client
               .query({
                 [candidate]: {
                   __args: { filter: { id: { eq: recordId } } },
                   id: true,
+                  [pointerField]: true,
                 },
               })
-              .then((response: any) => (response?.[candidate] ? candidate : null)),
-          ),
+              .then((response: any) => {
+                const record = response?.[candidate];
+                return record
+                  ? {
+                      candidate,
+                      primaryRecordId:
+                        (record[pointerField] as string | null | undefined) ??
+                        null,
+                    }
+                  : null;
+              });
+          }),
         );
         const resolved = probes.find(
-          (probe): probe is PromiseFulfilledResult<string> =>
-            probe.status === 'fulfilled' && probe.value !== null,
+          (
+            probe,
+          ): probe is PromiseFulfilledResult<{
+            candidate: string;
+            primaryRecordId: string | null;
+          }> => probe.status === 'fulfilled' && probe.value !== null,
         );
         if (resolved) {
-          resolvedHost.current = resolved.value;
-          cacheHostObject(recordId, resolved.value);
+          resolvedHost.current = resolved.value.candidate;
+          probedPointer = { primaryRecordId: resolved.value.primaryRecordId };
+          cacheHostObject(recordId, resolved.value.candidate);
         } else {
           const rejection = probes.find(
             (probe): probe is PromiseRejectedResult => probe.status === 'rejected',
@@ -177,7 +200,7 @@ const VariationWidget = () => {
 
       const hostConfig =
         configs.find((config) => config.targetObject === host) ?? null;
-      const nextRole = await resolveWidgetRole(client, host, recordId, hostConfig);
+      const nextRole = await resolveWidgetRole(client, host, recordId, hostConfig, probedPointer);
       setRole(nextRole);
       setVariations(
         nextRole.kind === 'primary'

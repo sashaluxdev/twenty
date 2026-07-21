@@ -37,6 +37,25 @@ const DEFAULT_RELATION_FIELD = 'primaryRecord';
 const relationFieldOf = (config: VariationConfigRecord): string =>
   config.relationFieldName ?? DEFAULT_RELATION_FIELD;
 
+// ADR 0024: each host-resolution probe also reads that candidate's role
+// pointer, so resolveWidgetRole can skip its own pointer query on the cold
+// first-paint path (one fewer ~300ms cloud leg). First config per targetObject
+// wins — the SAME rule the widget uses to pick hostConfig, so the probed field
+// always belongs to the config the role decision receives.
+export const buildPointerFieldByCandidate = (
+  configs: VariationConfigRecord[],
+): Map<string, string> => {
+  const pointerFieldByCandidate = new Map<string, string>();
+  for (const config of configs) {
+    const candidate = config.targetObject;
+    if (!candidate || pointerFieldByCandidate.has(candidate)) {
+      continue;
+    }
+    pointerFieldByCandidate.set(candidate, `${relationFieldOf(config)}Id`);
+  }
+  return pointerFieldByCandidate;
+};
+
 export type LabelFieldInfo = { name: string; kind: string };
 
 // The object's label-identifier field (name + kind), resolved from the shared
@@ -108,6 +127,10 @@ export const resolveWidgetRole = async (
   // The caller's load() already scanned all enabled configs — re-querying the
   // same config here was a redundant sequential leg on the first-paint path.
   config: VariationConfigRecord | null,
+  // When the caller's probe already read this record's pointer (same mount,
+  // moments ago — a FRESH read, not a cached prop, so the echo-race rule
+  // below is satisfied), it hands the value in and the query is skipped.
+  prefetchedPointer?: { primaryRecordId: string | null },
 ): Promise<WidgetRole> => {
   if (!config || config.enabled !== true) {
     return { kind: 'hidden' };
@@ -116,23 +139,28 @@ export const resolveWidgetRole = async (
   const relationFieldName = relationFieldOf(config);
   const pointerField = `${relationFieldName}Id`;
 
-  // Fresh one-field pointer read: a cached pointer prop is exactly the value an
-  // echo-race could make stale, so re-read it before deciding the role.
-  const pointerResponse = await withRetry(() =>
-    client.query({
-      [objectName]: {
-        __args: { filter: { id: { eq: recordId } } },
-        id: true,
-        [pointerField]: true,
-      },
-    }),
-  );
-  const record = pointerResponse?.[objectName] as
-    | Record<string, unknown>
-    | null
-    | undefined;
-  const primaryRecordId =
-    (record?.[pointerField] as string | null | undefined) ?? null;
+  let primaryRecordId: string | null;
+  if (prefetchedPointer !== undefined) {
+    primaryRecordId = prefetchedPointer.primaryRecordId;
+  } else {
+    // Fresh one-field pointer read: a cached pointer prop is exactly the value
+    // an echo-race could make stale, so re-read it before deciding the role.
+    const pointerResponse = await withRetry(() =>
+      client.query({
+        [objectName]: {
+          __args: { filter: { id: { eq: recordId } } },
+          id: true,
+          [pointerField]: true,
+        },
+      }),
+    );
+    const record = pointerResponse?.[objectName] as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    primaryRecordId =
+      (record?.[pointerField] as string | null | undefined) ?? null;
+  }
 
   if (!primaryRecordId) {
     return { kind: 'primary', config };
