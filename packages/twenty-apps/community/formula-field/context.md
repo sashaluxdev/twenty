@@ -618,6 +618,40 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   now that sweeps are capped) — flagging for a Task 8 rather than fixing here
   (Task 7 is finalize-only).
 
+- **2026-07-21 ARC (cloud re-diagnosis: v0.1.9 did NOT fix the 5–7s cloud
+  tab-open; v0.1.10 PLANNED, not implemented)**: user confirmed post-deploy
+  that cloud open is still slow. LIVE-MEASURED on the hosted instance (curl,
+  read-only, CLI OAuth token; browser waterfall impossible — Microsoft-SSO-only
+  and the user is on WSL with no GUI): **every request pays a ~300ms floor**
+  (origin eu-central-1, client near Tokyo; outliers 0.75–0.8s) and the 588KB
+  widget bundle is **~2s per mount and uncacheable by construction** (fresh
+  presigned S3 URL per call, `private, no-store`, `?checksum` unused as a cache
+  key). Code trace: first open = 8 sequential legs, remount = 6 — v0.1.9's
+  caches are worker-local and the platform recreates the worker every mount, so
+  they never help first paint. Evidence:
+  `docs/plans/2026-07-21-cloud-widget-load-evidence.md` +
+  `2026-07-21-widget-chain-trace.md`. Corrections to prior beliefs: H1
+  FindOneFrontComponent is Apollo **cache-first** (not cache-and-network); the
+  app-side chain is 5 sequential legs (not 8–12 queries). Discovery findings
+  (design inputs, session 706bff9b): `AppPath` from `twenty-shared/types`
+  drags full zod+locales = 54% of the bundle (one-line fix); metadata catalog
+  is prefetchable at t0; probes can carry the role pointer; the worker CAN use
+  IndexedDB (origin-scoped, survives mounts) but the platform offers no
+  storage API; execution context has NO object name (platform thread-through
+  candidate at `FrontComponentWidgetRenderer.tsx:39`, discards
+  `targetObjectNameSingular`). **PLAN READY (execute with
+  subagent-driven-development): `docs/plans/2026-07-21-v0110-cloud-load-fix.md`**
+  — 5 tasks: AppPath un-barrel (588→~300KB), t0 metadata prefetch,
+  probe-carried pointer, IndexedDB config cache (feature-detected), ADR 0024 +
+  v0.1.10 finalize + local live-verify. Predicted: first open ~5–6.5s→~3s,
+  remount ~4s→~2–2.5s; the rest is platform-owned. **Upstream track**: filed-
+  ready issue draft (bundle caching) at
+  `docs/upstream/2026-07-21-front-component-bundle-caching-issue-draft.md` —
+  NOT yet filed, needs user approval; secondary upstream candidates (worker
+  gating on sdk-client fetch, sdk-archive unzip per request, react-dom
+  externalization, execution-context object name) listed in its filing notes /
+  the evidence doc. Cloud deploy of v0.1.10 remains a human step.
+
 ## What is NOT done (next work)
 
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
