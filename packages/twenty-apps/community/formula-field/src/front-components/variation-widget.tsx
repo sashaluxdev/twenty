@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppPath } from 'twenty-shared/types';
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { enqueueSnackbar, navigate, useRecordId } from 'twenty-sdk/front-component';
+// AppPath comes from the SDK re-export, NOT twenty-shared/types: that barrel's
+// module init drags full zod (incl. 48 locales) + class-validator into the
+// bundle — 54% of the widget's 588KB (measured 2026-07-21, see the v0.1.10
+// evidence doc). Same enum, no baggage.
+import { AppPath, enqueueSnackbar, navigate, useRecordId } from 'twenty-sdk/front-component';
 
 import { VARIATION_WIDGET_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
 import { cacheHostObject, getCachedHostObject } from 'src/front-components/lib/host-resolution-cache';
