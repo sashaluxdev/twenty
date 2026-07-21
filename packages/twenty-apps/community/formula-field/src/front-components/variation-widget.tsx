@@ -8,6 +8,7 @@ import { AppPath, enqueueSnackbar, navigate, useRecordId } from 'twenty-sdk/fron
 
 import { VARIATION_WIDGET_UNIVERSAL_IDENTIFIER } from 'src/front-components/lib/front-component-ids';
 import { cacheHostObject, getCachedHostObject } from 'src/front-components/lib/host-resolution-cache';
+import { loadEnabledConfigsCached } from 'src/front-components/lib/idb-cache';
 import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import {
   BannerWarning,
@@ -40,7 +41,6 @@ import {
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { selectionEntryForMirrorKind } from 'src/logic-functions/lib/mirror-kinds';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
-import { loadAllEnabledVariationConfigs } from 'src/logic-functions/lib/variation-config-repository';
 
 // Record-page "Variations" tab (object-agnostic — ensureVariationTabOnObject
 // attaches it to any object with an enabled VariationConfig, design 2026-07-07).
@@ -118,7 +118,7 @@ const VariationWidget = () => {
 
       // One enabled-config scan serves both host resolution (first pass) and
       // the role decision below — resolveWidgetRole no longer re-queries it.
-      const configs = await loadAllEnabledVariationConfigs(client);
+      const configs = await loadEnabledConfigsCached(client);
 
       if (!resolvedHost.current && recordId) {
         resolvedHost.current = getCachedHostObject(recordId);
