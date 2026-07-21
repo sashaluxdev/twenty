@@ -652,6 +652,95 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   externalization, execution-context object name) listed in its filing notes /
   the evidence doc. Cloud deploy of v0.1.10 remains a human step.
 
+- **2026-07-21 ARC (v0.1.10 cloud cold-open critical path executed, ADR 0024,
+  ships v0.1.10; cloud deploy NOT done)**: executed the 5-task plan from the
+  same-day re-diagnosis entry above
+  (`docs/plans/2026-07-21-v0110-cloud-load-fix.md`) via
+  subagent-driven-development. **Task 1**: `AppPath` re-sourced from
+  `twenty-sdk/front-component` instead of the `twenty-shared/types` barrel
+  (whose module init drags full zod + 48 locales + class-validator) —
+  behavior byte-identical, bundle 587,950 → 311,477 bytes (47% smaller).
+  **Task 2**: `prefetchMetadataCatalog()` fires fire-and-forget at the top of
+  `load()`'s try block, so the object-independent metadata catalog (60s TTL +
+  in-flight dedup) warms concurrently with the config scan instead of paying
+  a sequential leg after host resolution. **Task 3**: host-resolution probes
+  now also select their candidate's role-pointer field
+  (`buildPointerFieldByCandidate`, first config per targetObject wins,
+  mirroring the widget's own hostConfig tie-break), and `resolveWidgetRole`
+  takes an optional 5th `prefetchedPointer` arg — provided skips its own
+  pointer query, `undefined` queries as before (cached-host path and every
+  poll tick after the first still pass `undefined`). Accepted risk: a
+  candidate whose configured relation field no longer exists now REJECTS its
+  probe where the id-only probe used to succeed silently; if the true host's
+  probe is the broken one, or if a record resolves to no candidate while any
+  candidate's probe rejected, the widget now surfaces a read error where
+  v0.1.9 stayed quiet — task review confirmed this scope is wider than "only
+  the true host," and the plan accepts it (a broken config is arguably better
+  surfaced than silently ignored). **Task 4**: `lib/idb-cache.ts` adds an
+  IndexedDB stale-while-revalidate cache (5min TTL, key
+  `configs:${workspaceCacheKey()}`) for the enabled-config scan, feature-
+  detected (`typeof indexedDB === 'undefined'` degrades every helper to
+  null/no-op, matching v0.1.9 exactly). This deliberately does NOT repeat ADR
+  0023's mistaken "survives remounts" claim about module-global state — the
+  2026-07-17 arc's own live verify found the platform tears down the widget's
+  Web Worker (and its whole module graph) on every unmount, so nothing kept
+  in a worker-global variable outlives a tab reopen; IndexedDB is reached for
+  specifically because it lives outside that module graph, in origin-scoped
+  on-disk storage. Accepted staleness: a just-toggled config can paint one
+  stale frame for up to one poll tick (4s) after a remount within the 5min
+  TTL. **Task 5** (this entry): ADR 0024 written
+  (`docs/adr/0024-widget-cold-open-critical-path.md`) covering all four
+  decisions, the explicit non-decisions (platform bundle Cache-Control,
+  react-dom externalization, execution-context object name — all upstream,
+  `docs/upstream/`), and both accepted risks in full. Version bumped to
+  0.1.10.
+  **Verify (all local, `dev` remote, live Playwright against
+  `localhost:3001`)**: full suite 929 tests green (57 files); `dev:typecheck`
+  clean; `dev:build` succeeded, bundle 312,879 bytes (well under the ~330KB
+  budget). Published + installed to `dev`. Live checks on the Stripe company
+  record's Variations tab: **(a) PASS** — tab opens, renders the variation
+  list + Create button. **(b) PASS** — network log showed the metadata-
+  catalog pull (`/metadata` objects query) and the `variationConfigs` config
+  scan as adjacent requests in the same second, immediately after the bundle
+  fetch; the two host probes (`opportunity`/`company`, filtered by this
+  record id) each selected `id` + `primaryRecordId` in ONE query — no
+  separate third pointer-read query; the A5 batch (`formulaOverrides` /
+  `companies` variation-records / `formulaDefinitions`) followed as before.
+  **(c) PASS, with a caveat** — before reopening, the `formula-field-widget-
+  cache` IndexedDB database (queried directly via `indexedDB.databases()`
+  from the page, same origin as the worker) already held a fresh
+  `configs:global` entry with the exact two enabled configs from the scan;
+  on reopen (tab-switch away and back, forcing the worker to tear down and
+  recreate — new blob URL, bundle refetched), the config-scan network call
+  DID fire (the expected background revalidate) but its duration/timing
+  window overlapped the two host-probe requests rather than gating them —
+  consistent with the cache-hit path resolving synchronously from disk
+  without awaiting the network. Local dev's ~10ms RTT (vs. cloud's ~300ms
+  floor, per the same-day evidence doc) makes sub-100ms blocking-vs-non-
+  blocking ordering hard to prove from the browser network panel alone; the
+  mechanism is verified, the cloud-scale time saved is not directly
+  measurable from this rig. **(d) PASS** — zero console errors across every
+  open/reopen/create/navigate step (one pre-existing React Router future-
+  flag warning throughout, unrelated). **(e) PASS, inferred from (c)'s
+  network/storage evidence rather than a direct worker-context console.log**
+  — `idbSet`/`idbGet` in `idb-cache.ts` only ever touch `indexedDB` after
+  checking `typeof indexedDB !== 'undefined'`; the mere existence and correct
+  content of the `formula-field-widget-cache` database (readable from the
+  page because IndexedDB is origin-scoped, not worker-scoped) is direct proof
+  the worker's `indexedDB` global is a real, functional `object` — Task 4's
+  win is NOT inert on this platform. **(f) PASS** — created a new variation
+  ("Stripe (variation 4)") from the widget, opened it, and confirmed the
+  diverged-fields panel loaded correctly ("Variation of Stripe / All fields
+  follow the primary. Edit any field on this record to diverge it."); test
+  variation destroyed afterward (`destroyCompany` mutation) to keep demo data
+  clean, matching the 2026-07-07 precedent. **Cloud deploy of v0.1.10 is NOT
+  done** — human step per the SDK-version-match procedure (scratch-dir npm
+  twenty-sdk pinned to the hosted platform line); after it happens, re-run
+  the curl measurements from the 2026-07-21 evidence doc to quantify the
+  real-world improvement. Commits: ADR 0024 + version bump + this context
+  entry land together as one commit on top of the four Task 1–4 perf commits
+  already on `main`.
+
 ## What is NOT done (next work)
 
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
