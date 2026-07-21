@@ -25,6 +25,7 @@ import {
   buildVariationLabelData,
   loadDivergedFields,
   loadVariationList,
+  prefetchMetadataCatalog,
   resolveHiddenReason,
   resolveLabelField,
   resolveWidgetRole,
@@ -108,6 +109,12 @@ const VariationWidget = () => {
     const client = createDynamicCoreClient();
 
     try {
+      // Fire the metadata catalog fetch at t0 (ADR 0024): its 60s TTL cache +
+      // in-flight dedup let this run concurrently with the config scan below,
+      // so resolveLabelField/computeSyncableFields land on an already-warm
+      // cache instead of paying the pull as a later sequential leg.
+      prefetchMetadataCatalog();
+
       // One enabled-config scan serves both host resolution (first pass) and
       // the role decision below — resolveWidgetRole no longer re-queries it.
       const configs = await loadAllEnabledVariationConfigs(client);

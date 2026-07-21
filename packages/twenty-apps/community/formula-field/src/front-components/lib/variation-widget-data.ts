@@ -22,6 +22,16 @@ import { withRetry } from 'src/logic-functions/lib/with-retry';
 // (Tasks 3-4) is a thin shell over these. Nothing here holds React state or
 // touches the DOM, so the whole surface is unit-tested against FakeClient.
 
+// ADR 0024: the metadata catalog is object-independent and its loader dedupes
+// in-flight callers, so the widget fires it at t0 — concurrent with the config
+// scan — instead of paying it as a sequential leg after host resolution
+// (~300ms on cloud). Fire-and-forget: the real consumers (resolveLabelField,
+// computeSyncableFields) still await their own call and surface any failure;
+// this reference just must not become an unhandled rejection.
+export const prefetchMetadataCatalog = (): void => {
+  void loadAllObjectsWithFields().catch(() => {});
+};
+
 const DEFAULT_RELATION_FIELD = 'primaryRecord';
 
 const relationFieldOf = (config: VariationConfigRecord): string =>

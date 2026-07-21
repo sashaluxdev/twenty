@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+import { __setFakeObjectsWithFieldsForTests } from 'src/logic-functions/lib/metadata-objects';
 import { overrideKey } from 'src/logic-functions/lib/override-repository';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
@@ -9,6 +10,7 @@ import {
   loadDivergedFields,
   loadVariationList,
   nextVariationLabel,
+  prefetchMetadataCatalog,
   resolveHiddenReason,
   resolveWidgetRole,
   resyncDivergedField,
@@ -456,5 +458,24 @@ describe('variation-widget-data', () => {
       expect(client.get('formulaOverride', 'o1')!.active).toBe(true);
       expect(client.mutations).toBe(0);
     });
+  });
+});
+
+describe('prefetchMetadataCatalog', () => {
+  it('should kick loadAllObjectsWithFields without awaiting it', () => {
+    // The fake-objects seam makes loadAllObjectsWithFields resolve instantly
+    // and observably: seed it, call prefetch, and confirm no throw + void return.
+    __setFakeObjectsWithFieldsForTests([]);
+    expect(prefetchMetadataCatalog()).toBeUndefined();
+    __setFakeObjectsWithFieldsForTests(null);
+  });
+
+  it('should swallow a rejecting catalog fetch instead of surfacing an unhandled rejection', async () => {
+    // With no fake seam and no transport, the underlying fetch will reject in
+    // the test environment — prefetch must absorb that.
+    __setFakeObjectsWithFieldsForTests(null);
+    expect(() => prefetchMetadataCatalog()).not.toThrow();
+    // Drain microtasks so an unhandled rejection would fail the test run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 });
