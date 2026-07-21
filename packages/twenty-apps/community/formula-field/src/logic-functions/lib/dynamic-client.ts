@@ -19,7 +19,7 @@ import { type FormulaClient } from 'src/logic-functions/lib/types';
 // logic functions, host token bridge in front components).
 
 // The transport is typed private but is a plain runtime method.
-type RawGraphqlTransport = {
+export type RawGraphqlTransport = {
   executeGraphqlRequestWithOptionalRefresh: (args: {
     operation: { query: string; variables?: Record<string, unknown> };
   }) => Promise<{
@@ -193,9 +193,15 @@ const loadFieldKinds = async (
 };
 
 // Drop-in FormulaClient. Reuses CoreApiClient purely as an authenticated
-// transport to POST /graphql.
-export const createDynamicCoreClient = (): FormulaClient => {
-  const transport = new CoreApiClient() as unknown as RawGraphqlTransport;
+// transport to POST /graphql. An explicit transport can be injected (F4 retro
+// purge / offline tooling): the generated CoreApiClient only exists once
+// `dev`/`app:install` has run for the active remote, so a local script against
+// a token-authed remote supplies its own raw /graphql transport instead.
+export const createDynamicCoreClient = (
+  transportOverride?: RawGraphqlTransport,
+): FormulaClient => {
+  const transport =
+    transportOverride ?? (new CoreApiClient() as unknown as RawGraphqlTransport);
   return {
     query: (selection: Record<string, unknown>) =>
       execute(transport, 'query', selection),
