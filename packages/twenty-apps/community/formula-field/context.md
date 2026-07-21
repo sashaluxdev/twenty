@@ -778,7 +778,17 @@ Then:
    from the app dir: bump `version` in package.json, then
    `... cli.cjs app:publish --private -r cloud` (server rejects a
    non-incremented version) followed by `... cli.cjs app:install -r cloud`.
-   Currently deployed to cloud: **v0.1.8** (timeline bookkeeping quiet F1-F4 +
+   Currently deployed to cloud: **v0.1.9** (widget load-time arc, ADR 0023;
+   2026-07-21 — platform still on the 2.21 line, npm twenty-sdk@2.21.0 scratch
+   build, `plan` preview 0 add / 22 change (16 logicFunction + 4 frontComponent
+   checksums, 2 navigationMenuItem moved to top-level: folderUniversalIdentifier
+   → null — if Formulas/Variations nav items were foldered on cloud, the deploy
+   un-foldered them) / 0 destroy; publish+install clean; post-install plan "No
+   changes". Local dev remote also on v0.1.9 (installed 2026-07-17, live-verified
+   2026-07-21: tab open near-instant, 4 GraphQL reads in 15s idle vs old ~5/s
+   flood, remounts lighter than first open, no sweep bursts. Note: enabled-scans
+   still fire once per mount — fresh worker per mount can't share the 60s cache;
+   bounded reads, by design). Predecessor v0.1.8 (timeline bookkeeping quiet F1-F4 +
    description field/tooltip, ADR 0022; 2026-07-15 — platform still on the 2.21
    line, npm twenty-sdk@2.21.0 scratch build, `plan` preview showed 1 add
    (description TEXT field) / 18 change (checksums) / 0 destroy — zero
