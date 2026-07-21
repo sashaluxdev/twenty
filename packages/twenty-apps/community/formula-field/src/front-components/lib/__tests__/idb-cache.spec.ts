@@ -82,4 +82,20 @@ describe('loadEnabledConfigsCached with a seeded store', () => {
       config('fresh'),
     ]);
   });
+
+  it('should await the network when the stored entry has a poisoned future-dated savedAt', async () => {
+    const store = new Map<string, { value: unknown; savedAt: number }>();
+    store.set(`configs:${workspaceCacheKey()}`, {
+      value: [config('poisoned')],
+      savedAt: Date.now() + 60 * 60 * 1000, // future-dated: negative age
+    });
+    setIdbStoreForTests(store);
+    vi.spyOn(configRepository, 'loadAllEnabledVariationConfigs').mockResolvedValue([
+      config('fresh'),
+    ]);
+
+    await expect(loadEnabledConfigsCached(fakeClient)).resolves.toEqual([
+      config('fresh'),
+    ]);
+  });
 });

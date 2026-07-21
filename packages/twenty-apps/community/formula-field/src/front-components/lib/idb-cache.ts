@@ -93,6 +93,16 @@ export const idbSet = async <T>(key: string, value: T): Promise<void> => {
   });
 };
 
+// workspaceCacheKey() returns the constant 'global' in this worker (no
+// process.env here) — that was a safe simplification for the in-memory
+// metadata cache, which dies with the process and only ever serves one
+// workspace at a time. IndexedDB is different: it's origin-scoped and
+// PERSISTENT, so the real isolation boundary for this entry is the browser
+// origin, not the process. The 'global' fallback is only safe under Twenty's
+// origin-per-workspace deployment model (cloud workspaces are subdomain-
+// scoped; local dev serves one workspace per origin). A single-origin,
+// multi-workspace deployment would need a real workspace discriminator in
+// this key (or a per-workspace DB name) before this cache could be trusted.
 const configsCacheKey = (): string => `configs:${workspaceCacheKey()}`;
 
 // Stale-while-revalidate: a fresh disk hit paints immediately and refreshes in
@@ -105,13 +115,25 @@ export const loadEnabledConfigsCached = async (
 ): Promise<VariationConfigRecord[]> => {
   const key = configsCacheKey();
   const hit = await idbGet<VariationConfigRecord[]>(key);
-  if (hit && Date.now() - hit.savedAt < CONFIGS_TTL_MS) {
+  // Guard against a poisoned/corrupted savedAt (e.g. future-dated): only a
+  // finite number with 0 <= age < TTL counts as fresh, so a bad value falls
+  // through to the network instead of being served as fresh indefinitely.
+  const age = hit ? Date.now() - hit.savedAt : NaN;
+  const isFresh =
+    typeof hit?.savedAt === 'number' &&
+    Number.isFinite(hit.savedAt) &&
+    age >= 0 &&
+    age < CONFIGS_TTL_MS;
+  if (hit && isFresh) {
     void loadAllEnabledVariationConfigs(client)
       .then((fresh) => idbSet(key, fresh))
       .catch(() => {});
     return hit.value;
   }
   const fresh = await loadAllEnabledVariationConfigs(client);
-  await idbSet(key, fresh);
+  // Don't make the already-slowest path (cold miss/stale) also wait on the
+  // disk write completing — return the configs as soon as the network
+  // resolves and let the write finish in the background.
+  void idbSet(key, fresh);
   return fresh;
 };

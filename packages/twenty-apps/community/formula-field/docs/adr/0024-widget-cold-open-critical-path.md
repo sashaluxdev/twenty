@@ -141,6 +141,15 @@ the next background revalidate or the next 4s poll tick — at most one poll
 tick of visible staleness. This matches the app's existing TTL posture
 elsewhere (the 60s metadata/formula-scan caches carry the same kind of lag).
 
+**Accepted risk — Task 4 schema is unversioned.** The stored entry's shape
+(`{ value: VariationConfigRecord[]; savedAt: number }`) carries no schema
+version, and the database itself is pinned at `indexedDB.open(DB_NAME, 1)`.
+A future breaking change to `VariationConfigRecord`'s stored shape would need
+to bump the DB name (or the `configs:` key prefix) or add a `schemaVersion`
+field to the stored entry — otherwise an old on-disk entry from a prior
+release deserializes straight into the new code for up to the 5-minute TTL
+before self-healing on revalidate.
+
 **Accepted risk — Task 3 dangling `relationFieldName`, full blast radius.**
 Before this change, a stale/misconfigured `relationFieldName` was invisible
 at probe time (the probe only selected `id`). Now each probe also selects its
