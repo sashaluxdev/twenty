@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+import * as metadataObjectsModule from 'src/logic-functions/lib/metadata-objects';
 import { __setFakeObjectsWithFieldsForTests } from 'src/logic-functions/lib/metadata-objects';
 import { overrideKey } from 'src/logic-functions/lib/override-repository';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
@@ -463,11 +464,17 @@ describe('variation-widget-data', () => {
 
 describe('prefetchMetadataCatalog', () => {
   it('should kick loadAllObjectsWithFields without awaiting it', () => {
+    // Spy on the real export so the test observes the kick itself, not just
+    // prefetchMetadataCatalog's return type (any void function would pass a
+    // return-value-only assertion regardless of whether it calls anything).
+    const spy = vi.spyOn(metadataObjectsModule, 'loadAllObjectsWithFields');
     // The fake-objects seam makes loadAllObjectsWithFields resolve instantly
     // and observably: seed it, call prefetch, and confirm no throw + void return.
     __setFakeObjectsWithFieldsForTests([]);
     expect(prefetchMetadataCatalog()).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);
     __setFakeObjectsWithFieldsForTests(null);
+    spy.mockRestore();
   });
 
   it('should swallow a rejecting catalog fetch instead of surfacing an unhandled rejection', async () => {
