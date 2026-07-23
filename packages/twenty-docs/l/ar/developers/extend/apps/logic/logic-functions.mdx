@@ -51,8 +51,7 @@ export default defineLogicFunction({
 ```
 
 أنواع المشغّلات المتاحة:
-* **httpRoute**: يعرِض وظيفتك على مسار وطريقة HTTP **تحت نقطة النهاية `/s/`**:
-> مثال: `path: '/post-card/create'` يمكن استدعاؤه عبر `https://your-twenty-server.com/s/post-card/create`
+* **httpRoute**: يعرِض وظيفتك على مسار وطريقة HTTP. في شيفرة التطبيق، أضف البادئة `/s/` إلى مسار التوجيه عند استخدام `RestApiClient`؛ يستخدم عنوان URL المنشور قاعدة `TWENTY_FUNCTIONS_URL` المُحدَّدة (أو `\<server-url>/s` إذا لم تُحدَّد).
 
 <Note>
 لاستدعاء دالة منطقية يتم تشغيلها بواسطة مسار من مكون واجهة (بدون واجهة رسومية)، راجع قسم [استدعاء دالة منطقية](/l/ar/developers/extend/apps/layout/front-components#calling-a-logic-function).
@@ -60,7 +59,7 @@ export default defineLogicFunction({
 * **cron**: يشغّل وظيفتك على جدول باستخدام تعبير CRON.
 * **databaseEvent**: يعمل على أحداث دورة حياة كائنات مساحة العمل. عندما تكون عملية الحدث هي `updated`، يمكن تحديد الحقول المحددة المراد الاستماع إليها في مصفوفة `updatedFields`. إذا تُركت غير معرّفة أو فارغة، فسيؤدي أي تحديث إلى تشغيل الدالة.
 > مثال: `person.updated`، `*.created`، `company.*`
-* **serverRoute**: يوفّر مسار HTTP واحدًا بنطاق التسجيل. تعمل دالة **resolver** (المُعلَنة باستخدام `serverRouteTriggerSettings`) في مساحة عمل المالك وتُرجِع مساحة العمل المستهدفة ودالة المنطق المستهدفة التي يجب التوجيه إليها؛ ثم يُشغِّل النظام الأساسي تلك الدالة **المستهدفة** ويُرجِع استجابتها. راجع [مشغّل مسار الخادم](#server-route-trigger).
+* **serverRoute**: يوفّر مسار HTTP واحدًا بنطاق التسجيل. تعمل دالة **resolver** (المُعلَنة باستخدام `serverRouteTriggerSettings`) في مساحة عمل المالك وتُرجِع مساحة العمل المستهدفة ودالة المنطق المستهدفة التي يجب التوجيه إليها؛ يؤكّد النظام الأساسي تلقّي الطلب برمز `202` ويُشغِّل تلك الدالة **المستهدفة** في طابور العامل (worker queue). راجع [مشغّل مسار الخادم](#server-route-trigger).
 
 <Note>
 يمكنك أيضًا تنفيذ دالة يدويًا باستخدام CLI:
@@ -290,7 +289,7 @@ POST https://your-twenty-server.com/webhooks/server/:resolverLogicFunctionUniver
 يُظهِر مثال الـ resolver أعلاه بالفعل تدفّق GitHub HMAC-SHA256 — عدِّل اسم الرأس وترميز الملخّص وسلسلة الحمولة الموقّعة بحسب المزوّد الذي تدمجه.
 
 <Note>
-يعمل الهدف **بشكل متزامن** وتصبح القيمة التي يعيدها هي استجابة HTTP، لذا يرى المتّصلون رمز الحالة الخاص بك ويمكنهم إعادة المحاولة عند رموز غير 2xx. اجعل كلا المعالِجَيْن سريعين — بعض المزوّدين (مثل Slack) تنتهي مهلة طلباتهم خلال بضع ثوانٍ. نظرًا لأن الـ resolver يمكن الوصول إليه كنقطة نهاية عامة، قم بحمايته من خلال تحديد المعدّل (rate limiting) على الحافة لديك.
+يستجيب المسار بـ `202 { queued: true }` مباشرة بعد أن تُرجِع دالة resolver نتيجتها وتعمل الدالة المستهدفة على طابور العامل (worker queue) — المتصل لا يطّلع أبدًا على زمن استجابة الدالة المستهدفة أو نتيجتها أو حالات الفشل الخاصة بها (تُسجَّل هذه في سجلات التنفيذ). هذا يمنع عمليات إعادة الإرسال من جهة المرسِل من تضخيم تباطؤ المعالجة، وهو ما تريده عند استيعاب خطافات الويب. بالنسبة لنقاط النهاية التي يجب على المتصل قراءة محتوى الاستجابة لها (مثل challenge handshakes وSlack commands)، استخدِم مسارًا من نوع `httpRouteTriggerSettings` بدلاً من ذلك. احرص على أن تكون دالة resolver سريعة — بعض المزوّدين (مثل Slack) تنتهي مهلة طلباتهم خلال بضع ثوانٍ. نظرًا لأن الـ resolver يمكن الوصول إليه كنقطة نهاية عامة، قم بحمايته من خلال تحديد المعدّل (rate limiting) على الحافة لديك.
 </Note>
 
 #### حمولة مُحفِّز حدث قاعدة البيانات
@@ -411,6 +410,10 @@ const handler = async (event: PersonDestroyedEvent) => {
 
 يمكن للدالة اختيار أحدهما، أو الآخر، أو كليهما. توجد جنبًا إلى جنب مع `cronTriggerSettings` و`databaseEventTriggerSettings` و`httpRouteTriggerSettings` — النمط نفسه، والشكل نفسه.
 
+<Note>
+**العلاقة بإجراء Code الخاص بسير العمل.** يُعَد إجراء **Code** المضمَّن في منشئ سير العمل دالة منطقية بحد ذاته — حيث ينشئ Twenty واحدًا لكل خطوة Code ويعرض محرره مضمّنًا. تُستخدَم `workflowActionTriggerSettings` لتحويل هذا الكود المضمَّن لمرة واحدة إلى إجراء **قابل لإعادة الاستخدام**: عرِّف الدالة مرة واحدة في تطبيقك وستصبح قابلة للاختيار في أي سير عمل، بدلاً من نسخها ولصقها في كل خطوة Code. راجع [إجراء Code](/l/ar/user-guide/workflows/capabilities/workflow-actions#code) في دليل المستخدم لعرض منظور المستخدم النهائي.
+</Note>
+
 ```ts src/logic-functions/enrich-company.logic-function.ts
 import { defineLogicFunction } from 'twenty-sdk/define';
 import { CoreApiClient } from 'twenty-client-sdk/core';
@@ -495,6 +498,77 @@ export default defineLogicFunction({
   },
 });
 ```
+
+##### مثال كامل لإجراء سير عمل
+
+تقبل `workflowActionTriggerSettings` أربعة حقول:
+
+| الحقل          | الغرض                                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `label`        | الاسم المعروض للإجراء في منتقّي الخطوات في منشئ سير العمل. الإعداد الافتراضي هو `name` الخاص بالدالة.                                                     |
+| `icon`         | أيقونة تُعرَض بجانب الإجراء (اسم من `tabler-icons`، مثلًا `IconBuilding`).                                                                                |
+| `inputSchema`  | مخطط الإدخال الغني الخاص بـ Twenty — ما يعرضه المُنشئ كحقول قابلة للضبط (مع منتقّي المتغيرات). اختياري؛ يستنتج من المعالج عند حذفه.                       |
+| `outputSchema` | يصرِّح بالشكل الذي يعيده المعالج، بحيث **يمكن للخطوات اللاحقة أن تطابق حقول المخرجات الخاصة به**. اختياري؛ من دونه يتم كشف المخرَج كقيمة واحدة غير شفافة. |
+
+تجميع ذلك معًا — دالّة معروضة كإجراء سير عمل، مع مخرَج مُعلَن بحيث يمكن للخطوات اللاحقة الرجوع إلى `taskId`:
+
+```ts src/logic-functions/enrich-company.logic-function.ts
+import { defineLogicFunction } from 'twenty-sdk/define';
+import { jsonSchemaToInputSchema, type InputJsonSchema } from 'twenty-sdk/logic-function';
+import { CoreApiClient } from 'twenty-client-sdk/core';
+
+const inputSchema: InputJsonSchema = {
+  type: 'object',
+  properties: {
+    companyName: { type: 'string', label: 'Company name' },
+    domain: { type: 'string', label: 'Domain' },
+  },
+  required: ['companyName'],
+};
+
+const handler = async (params: { companyName: string; domain?: string }) => {
+  const client = new CoreApiClient();
+
+  const result = await client.mutation({
+    createTask: {
+      __args: {
+        data: {
+          title: `Enrich data for ${params.companyName}`,
+          body: `Domain: ${params.domain ?? 'unknown'}`,
+        },
+      },
+      id: true,
+    },
+  });
+
+  // The keys returned here should match the `outputSchema` properties below.
+  return { taskId: result.createTask.id, enriched: true };
+};
+
+export default defineLogicFunction({
+  universalIdentifier: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+  name: 'enrich-company',
+  description: 'Enrich a company record with external data',
+  timeoutSeconds: 10,
+  handler,
+  workflowActionTriggerSettings: {
+    label: 'Enrich Company',
+    icon: 'IconBuilding',
+    inputSchema: jsonSchemaToInputSchema(inputSchema),
+    outputSchema: [
+      {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          enriched: { type: 'boolean' },
+        },
+      },
+    ],
+  },
+});
+```
+
+بمجرد تثبيت التطبيق، سيظهر **Enrich Company** في منتقّي الإجراءات في منشئ سير العمل. يعرض المُنشئ `companyName` و`domain` كحقول إدخال (كلٌّ منهما قادر على سحب القيم من الخطوات السابقة)، ويمكن للخطوات اللاحقة الرجوع إلى مخرجات الخطوة `taskId` و`enriched`.
 
 <Note>
 **اكتب `description` جيدًا.** يعتمد وكلاء الذكاء الاصطناعي على حقل `description` الخاص بالدالة لتحديد وقت استخدام الأداة. كن محددًا بشأن ما تفعله الأداة ومتى ينبغي استدعاؤها.

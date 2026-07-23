@@ -30,6 +30,15 @@ export class ServerRouteTriggerRestApiExceptionFilter implements ExceptionFilter
           response,
           404,
         );
+      case ServerRouteTriggerExceptionCode.LOGIC_FUNCTION_DISABLED:
+        return this.httpExceptionHandlerService.handleError(
+          exception as CustomException,
+          response,
+          403,
+          undefined,
+          undefined,
+          { shouldBeCapturedBySentry: false },
+        );
       case ServerRouteTriggerExceptionCode.RATE_LIMIT_EXCEEDED:
         return this.httpExceptionHandlerService.handleError(
           exception as CustomException,
@@ -59,6 +68,15 @@ export class ServerRouteTriggerRestApiExceptionFilter implements ExceptionFilter
           exception as CustomException,
           response,
           502,
+          undefined,
+          undefined,
+          { shouldBeCapturedBySentry: false },
+        );
+      case ServerRouteTriggerExceptionCode.RESOLVER_REQUIRES_AUTHENTICATION:
+        return this.httpExceptionHandlerService.handleError(
+          exception as CustomException,
+          response,
+          403,
           undefined,
           undefined,
           { shouldBeCapturedBySentry: false },

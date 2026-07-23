@@ -5,6 +5,7 @@ import {
   DEFAULT_API_KEY_NAME,
   DEFAULT_API_URL_NAME,
   DEFAULT_APP_ACCESS_TOKEN_NAME,
+  DEFAULT_FUNCTIONS_URL_NAME,
 } from 'twenty-shared/application';
 import { FeatureFlagKey } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
@@ -20,6 +21,8 @@ import {
 import { buildApplicationLogEnvelopes } from 'src/engine/core-modules/event-logs/producers/application-log/build-application-log-envelopes';
 import { parseApplicationLogLines } from 'src/engine/core-modules/event-logs/producers/application-log/parse-application-log-lines';
 import { ApplicationRegistrationVariableEntity } from 'src/engine/core-modules/application/application-registration-variable/application-registration-variable.entity';
+import { ApplicationStopService } from 'src/engine/core-modules/application/application-stop.service';
+import { ApplicationService } from 'src/engine/core-modules/application/application.service';
 import type { FlatApplicationVariable } from 'src/engine/metadata-modules/flat-application-variable/types/flat-application-variable.type';
 import { FlatApplication } from 'src/engine/core-modules/application/types/flat-application.type';
 import { EventLogEmitterService } from 'src/engine/core-modules/event-logs/emit/event-log-emitter.service';
@@ -28,6 +31,7 @@ import { ApplicationTokenService } from 'src/engine/core-modules/auth/token/serv
 import { NO_BILLING_SUBSCRIPTION } from 'src/engine/core-modules/billing/constants/no-billing-subscription.constant';
 import { BillingUsageService } from 'src/engine/core-modules/billing/services/billing-usage.service';
 import { BillingService } from 'src/engine/core-modules/billing/services/billing.service';
+import { WorkspaceDomainsService } from 'src/engine/core-modules/domain/workspace-domains/services/workspace-domains.service';
 import { FeatureFlagService } from 'src/engine/core-modules/feature-flag/services/feature-flag.service';
 import { LogicFunctionDriverFactory } from 'src/engine/core-modules/logic-function/logic-function-drivers/logic-function-driver.factory';
 import { buildEnvVar } from 'src/engine/core-modules/logic-function/logic-function-executor/utils/build-env-var';
@@ -49,6 +53,7 @@ import { FlatLogicFunction } from 'src/engine/metadata-modules/logic-function/ty
 import { SubscriptionChannel } from 'src/engine/subscriptions/enums/subscription-channel.enum';
 import { SubscriptionService } from 'src/engine/subscriptions/subscription.service';
 import { EventLogLiveService } from 'src/engine/core-modules/event-logs/live/event-log-live.service';
+import { WorkspaceEntity } from 'src/engine/core-modules/workspace/workspace.entity';
 import { WorkspaceCacheService } from 'src/engine/workspace-cache/services/workspace-cache.service';
 import { WorkspaceEventEmitter } from 'src/engine/workspace-event-emitter/workspace-event-emitter';
 import { cleanServerUrl } from 'src/utils/clean-server-url';
@@ -86,6 +91,11 @@ export class LogicFunctionExecutorService {
     private readonly billingService: BillingService,
     private readonly billingUsageService: BillingUsageService,
     private readonly featureFlagService: FeatureFlagService,
+    private readonly workspaceDomainsService: WorkspaceDomainsService,
+    private readonly applicationService: ApplicationService,
+    private readonly applicationStopService: ApplicationStopService,
+    @InjectRepository(WorkspaceEntity)
+    private readonly workspaceRepository: Repository<WorkspaceEntity>,
     @InjectRepository(ApplicationRegistrationVariableEntity)
     private readonly applicationRegistrationVariableRepository: Repository<ApplicationRegistrationVariableEntity>,
   ) {}
@@ -105,13 +115,17 @@ export class LogicFunctionExecutorService {
     userWorkspaceId?: string;
     executionMode?: LogicFunctionExecutionMode;
   }): Promise<LogicFunctionExecuteResult> {
-    await this.throttleExecution(workspaceId);
-
     const { flatApplication, flatLogicFunction, flatApplicationVariables } =
       await this.getFlatEntitiesOrThrow({
         workspaceId,
         logicFunctionId,
       });
+
+    // Checked before the shared workspace throttle so a flood from a stopped
+    // application cannot exhaust the token bucket of the other applications.
+    await this.assertApplicationNotStopped(flatApplication);
+
+    await this.throttleExecution(workspaceId);
 
     const envVariables = await this.getExecutionEnvVariables({
       workspaceId,
@@ -225,6 +239,32 @@ export class LogicFunctionExecutorService {
     return driver.transpile(params);
   }
 
+  // Emergency kill switch checked on every execution: an application can be
+  // stopped for one workspace (application.stoppedAt) or server-wide for all
+  // workspaces (applicationRegistration.stoppedAt) when it degrades production.
+  private async assertApplicationNotStopped(
+    flatApplication: FlatApplication,
+  ): Promise<void> {
+    if (isDefined(flatApplication.stoppedAt)) {
+      throw new LogicFunctionException(
+        `Application ${flatApplication.id} is stopped in workspace ${flatApplication.workspaceId}`,
+        LogicFunctionExceptionCode.LOGIC_FUNCTION_DISABLED,
+      );
+    }
+
+    if (
+      isDefined(flatApplication.applicationRegistrationId) &&
+      (await this.applicationStopService.isApplicationRegistrationStopped(
+        flatApplication.applicationRegistrationId,
+      ))
+    ) {
+      throw new LogicFunctionException(
+        `Application registration ${flatApplication.applicationRegistrationId} is stopped server-wide`,
+        LogicFunctionExceptionCode.LOGIC_FUNCTION_DISABLED,
+      );
+    }
+  }
+
   private async throttleExecution(workspaceId: string) {
     try {
       await this.throttlerService.tokenBucketThrottleOrThrow(
@@ -321,6 +361,10 @@ export class LogicFunctionExecutorService {
       });
 
     const baseUrl = cleanServerUrl(this.twentyConfigService.get('SERVER_URL'));
+    const functionsBaseUrl = await this.buildFunctionsBaseUrl({
+      workspaceId,
+      flatApplication,
+    });
 
     const serverVariables = await this.buildServerVariableEnvMap(
       flatApplication.applicationRegistrationId,
@@ -334,10 +378,39 @@ export class LogicFunctionExecutorService {
       [DEFAULT_API_URL_NAME]: baseUrl ?? '',
       [DEFAULT_APP_ACCESS_TOKEN_NAME]: applicationAccessToken.token,
       [DEFAULT_API_KEY_NAME]: applicationAccessToken.token,
+      [DEFAULT_FUNCTIONS_URL_NAME]: functionsBaseUrl ?? '',
       APPLICATION_ID: flatApplication.id,
       ...serverVariables,
       ...workspaceVariables,
     };
+  }
+
+  private async buildFunctionsBaseUrl({
+    workspaceId,
+    flatApplication,
+  }: {
+    workspaceId: string;
+    flatApplication: FlatApplication;
+  }): Promise<string | undefined> {
+    const workspace = await this.workspaceRepository.findOne({
+      where: { id: workspaceId },
+      select: { subdomain: true },
+    });
+
+    if (!isDefined(workspace)) {
+      return undefined;
+    }
+
+    const primaryPublicDomain =
+      await this.applicationService.findPrimaryPublicDomainName({
+        applicationId: flatApplication.id,
+        workspaceId,
+      });
+
+    return this.workspaceDomainsService.buildPublicFunctionBaseUrl({
+      workspace,
+      primaryPublicDomain,
+    });
   }
 
   private async buildServerVariableEnvMap(

@@ -31,9 +31,21 @@ export const parseAndFormatGmailMessage = (
     attachments,
     deliveredTo,
     labelIds,
+    messageHeaders,
   } = parseGmailMessage(message);
 
-  if (!isDefined(from) || !isDefined(headerMessageId) || !isDefined(threadId)) {
+  const isDraft = (labelIds ?? []).includes('DRAFT');
+
+  // Gmail may omit the Message-ID header on drafts; synthesize a stable id from
+  // the message id so drafts aren't dropped.
+  const resolvedHeaderMessageId =
+    headerMessageId ?? (isDraft ? `draft-${id}` : undefined);
+
+  if (
+    !isDefined(from) ||
+    !isDefined(resolvedHeaderMessageId) ||
+    !isDefined(threadId)
+  ) {
     return null;
   }
 
@@ -58,13 +70,13 @@ export const parseAndFormatGmailMessage = (
     (participant) => participant.role !== MessageParticipantRole.FROM,
   );
 
-  if (!hasRecipientParticipant) {
+  if (!hasRecipientParticipant && !isDraft) {
     return null;
   }
 
   return {
     externalId: id,
-    headerMessageId,
+    headerMessageId: resolvedHeaderMessageId,
     subject: subject || '',
     messageThreadExternalId: threadId,
     receivedAt: new Date(parseInt(internalDate)),
@@ -74,5 +86,7 @@ export const parseAndFormatGmailMessage = (
     attachments,
     messageFolderExternalIds: labelIds,
     labelIds,
+    isDraft,
+    messageHeaders,
   };
 };
