@@ -33,6 +33,7 @@ import {
   selectionEntryForFieldKind,
 } from 'src/logic-functions/lib/value-io';
 import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
+import { pluralize } from 'src/logic-functions/lib/plural';
 import {
   type FormulaClient,
   type FormulaDefinitionRecord,
@@ -43,26 +44,10 @@ import { isRetryable, withRetry } from 'src/logic-functions/lib/with-retry';
 const capitalize = (value: string): string =>
   value.charAt(0).toUpperCase() + value.slice(1);
 
-// English pluralizer for the plural GraphQL query field (opportunity ->
-// opportunities, company -> companies, person -> people). Twenty's standard
-// objects follow these rules; a custom object with an irregular plural would
-// need its plural passed explicitly (documented limitation).
-const IRREGULAR_PLURALS: Record<string, string> = {
-  person: 'people',
-};
-
-export const pluralize = (singular: string): string => {
-  if (IRREGULAR_PLURALS[singular]) {
-    return IRREGULAR_PLURALS[singular];
-  }
-  if (/[^aeiou]y$/.test(singular)) {
-    return `${singular.slice(0, -1)}ies`;
-  }
-  if (/(s|x|z|ch|sh)$/.test(singular)) {
-    return `${singular}es`;
-  }
-  return `${singular}s`;
-};
+// pluralize lives in its own module so batch-write.ts can consume it without a
+// module-scope import cycle with recompute.ts. Re-exported here to keep every
+// existing `import { pluralize } from '...recompute'` working unchanged.
+export { pluralize } from 'src/logic-functions/lib/plural';
 
 const crossKey = (object: string, recordId: string): string =>
   `${object}:${recordId}`;

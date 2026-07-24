@@ -354,6 +354,33 @@ export class FakeClient implements FormulaClient {
       return { updateFormulaDefinition: { id } };
     }
 
+    // update<ObjectsPlural>({ filter: { id: { in: [...] } }, data })
+    if (key.startsWith('update')) {
+      const pluralGuess = lowerFirst(key.slice('update'.length));
+      const singularForPlural = this.objectKeys().find(
+        (obj) => pluralize(obj) === pluralGuess,
+      );
+      const filter = node?.__args?.filter;
+      if (singularForPlural && filter !== undefined) {
+        const ids = (filter?.id?.in ?? []) as string[];
+        const data = node.__args.data as Record<string, unknown>;
+        this.assertSelectedFieldsAlive(singularForPlural, Object.keys(data));
+        const updated: Array<{ id: string }> = [];
+        for (const id of ids) {
+          const record = this.store.get(singularForPlural)?.get(id);
+          if (!record) continue;
+          for (const [field, value] of Object.entries(data)) {
+            record[field] = value as unknown;
+            this.writes.push(
+              `${singularForPlural}:${id}:${field}=${JSON.stringify(value)}`,
+            );
+          }
+          updated.push({ id });
+        }
+        return { [key]: updated };
+      }
+    }
+
     // update<Object>
     if (key.startsWith('update')) {
       const object = key.slice('update'.length);
