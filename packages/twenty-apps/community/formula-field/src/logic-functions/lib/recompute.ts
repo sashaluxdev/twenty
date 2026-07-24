@@ -74,7 +74,7 @@ const expressionUsesTodayOf = (formula: FormulaDefinitionRecord): boolean => {
 };
 
 // Builds the genql field selection for a set of root field names.
-const fieldSelection = (fields: string[]): Record<string, boolean> => {
+export const fieldSelection = (fields: string[]): Record<string, boolean> => {
   const selection: Record<string, boolean> = { id: true };
   for (const field of fields) {
     selection[field] = true;
@@ -106,7 +106,7 @@ const fetchRecord = async (
 
 // Field name -> FieldMetadataType for an object, via the client's optional
 // metadata-backed resolver. Empty map (scalar selections) when unavailable.
-const resolveFieldKinds = async (
+export const resolveFieldKinds = async (
   client: FormulaClient,
   objectName: string,
 ): Promise<Map<string, string>> =>
@@ -116,7 +116,7 @@ const resolveFieldKinds = async (
 // (CURRENCY). Without these the server SILENTLY returns null for a scalar
 // selection on a composite field (no error!), so formulas with currency
 // inputs null-propagated to nothing on activation.
-const dependencySelectionOverrides = (
+export const dependencySelectionOverrides = (
   fields: string[] | Set<string>,
   fieldKinds: Map<string, string>,
 ): Record<string, unknown> => {
