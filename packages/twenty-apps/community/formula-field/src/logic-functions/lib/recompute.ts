@@ -12,6 +12,11 @@ import {
   selectionEntryForMirrorKind,
 } from 'src/logic-functions/lib/mirror-kinds';
 import {
+  buildScanSelection,
+  scanNodeSelection,
+  type ScanSelection,
+} from 'src/logic-functions/lib/scan-selection';
+import {
   evaluate,
   type RawVariableResolver,
   type VariableResolver,
@@ -676,39 +681,78 @@ export const recomputeAllRecords = async (
     targetField,
   );
 
+  // Page nodes carry the dependency + target fields so recomputeForRecord's
+  // prefetch check skips its per-record read. Null -> id-only scan.
+  let scanSelection: ScanSelection | null = null;
+  try {
+    scanSelection = await buildScanSelection(client, formula);
+  } catch {
+    // Building the selection needs a metadata read. Before the prefetch that
+    // read happened per record and a failure became one error outcome; hoisted
+    // here it would abort the pass and every remaining formula in the sweep.
+    // Degrade to the id-only scan, which restores that per-record isolation.
+    scanSelection = null;
+  }
+
+  const queryPage = async (
+    cursor: string | undefined,
+  ): Promise<Record<string, unknown> | null> => {
+    const pageArgs = {
+      first: pageSize,
+      // Stable scan order (ADR 0022): the heartbeat's representative lastValue
+      // is "first non-error, non-null outcome" of this scan. Unordered
+      // pagination made that sample flip between records run-to-run, defeating
+      // the write-avoidance guard and churning formulaDefinition.updated rows.
+      orderBy: [{ id: graphqlEnum('AscNullsFirst') }],
+      ...(cursor ? { after: cursor } : {}),
+    };
+    const build = (nodeSelection: Record<string, unknown>) => ({
+      [pluralName]: {
+        __args: pageArgs,
+        edges: { node: nodeSelection },
+        pageInfo: { hasNextPage: true, endCursor: true },
+      },
+    });
+
+    const widened = scanSelection;
+    if (widened !== null) {
+      try {
+        return await withRetry(() =>
+          client.query(build(scanNodeSelection(widened))),
+        );
+      } catch {
+        // A field the live schema dropped would abort the entire pass here and
+        // take every remaining formula in the sweep with it. Degrade to the
+        // id-only scan and let per-record fetches surface the error one record
+        // at a time (the isolation the widened selection would otherwise cost).
+        scanSelection = null;
+      }
+    }
+    return withRetry(() => client.query(build({ id: true })));
+  };
+
   let after: string | undefined;
 
   for (;;) {
     if (options.shouldContinue && !options.shouldContinue()) {
       break;
     }
-    const response = await withRetry(() =>
-      client.query({
-        [pluralName]: {
-          __args: {
-            first: pageSize,
-            // Stable scan order (ADR 0022): the heartbeat's representative
-            // lastValue is "first non-error, non-null outcome" of this scan.
-            // Unordered pagination made that sample flip between records
-            // run-to-run, defeating the write-avoidance guard and churning
-            // formulaDefinition.updated timeline rows.
-            orderBy: [{ id: graphqlEnum('AscNullsFirst') }],
-            ...(after ? { after } : {}),
-          },
-          edges: { node: { id: true } },
-          pageInfo: { hasNextPage: true, endCursor: true },
-        },
-      }),
-    );
+    const response = await queryPage(after);
 
-    const connection = response?.[pluralName];
-    const edges: Array<{ node?: { id?: string } }> = connection?.edges ?? [];
+    const connection = response?.[pluralName] as
+      | {
+          edges?: Array<{ node?: Record<string, unknown> }>;
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+        }
+      | undefined;
+    const edges = connection?.edges ?? [];
 
     for (const edge of edges) {
       if (options.shouldContinue && !options.shouldContinue()) {
         break;
       }
-      const id = edge?.node?.id;
+      const node = edge?.node;
+      const id = typeof node?.id === 'string' ? node.id : undefined;
       if (!id) {
         continue;
       }
@@ -718,6 +762,9 @@ export const recomputeAllRecords = async (
             client,
             formula,
             targetRecordId: id,
+            // Only a widened page yields a usable prefetch. After a fallback,
+            // nodes are id-only and the per-record fetch must run.
+            prefetchedRecord: scanSelection !== null ? node : undefined,
             overriddenRecordIds,
           }),
         );
