@@ -76,6 +76,10 @@ const handler = async (): Promise<Record<string, unknown>> => {
 
     const outcomes = await recomputeAllRecords(client, formula, {
       deadlineAt: startedAt + SWEEP_BUDGET_MS,
+      // Only the sweep participates in the scan-cursor protocol: resume from a
+      // stored cursor here, and clear it on completion. Event-driven callers
+      // must full-scan (default false), so this flag is scoped to the sweep.
+      resumeFromStoredCursor: true,
     });
     evaluated += outcomes.length;
     written += outcomes.filter((outcome) => outcome.changed).length;

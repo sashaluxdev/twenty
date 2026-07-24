@@ -71,10 +71,12 @@ describe('budget-bounded resumable scan', () => {
     const client = new FakeClient();
     seed(client, 6);
 
+    // Resume is opt-in: the sweep passes resumeFromStoredCursor, so this test
+    // does too. The resume assertions below are unchanged.
     const outcomes = await recomputeAllRecords(
       client,
       { ...RESUME_FORMULA, scanCursor: 'opp-004' },
-      { pageSize: 10 },
+      { resumeFromStoredCursor: true, pageSize: 10 },
     );
 
     expect(outcomes.map((outcome) => outcome.targetRecordId)).toEqual([
@@ -88,13 +90,102 @@ describe('budget-bounded resumable scan', () => {
     seed(client, 3);
     client.seed('formulaDefinition', [{ ...RESUME_FORMULA, scanCursor: 'opp-001' }]);
 
+    // Resume is opt-in: the cursor is cleared only on a pass that opted in.
+    await recomputeAllRecords(
+      client,
+      { ...RESUME_FORMULA, scanCursor: 'opp-001' },
+      { resumeFromStoredCursor: true, pageSize: 10 },
+    );
+
+    expect(client.get('formulaDefinition', 'formula-1')?.scanCursor).toBe('');
+  });
+
+  it('scans from the first record when resume is NOT opted in, even with a stored cursor', async () => {
+    // The Critical regression (final-review Fix 1): event-driven callers pass a
+    // formula that carries scanCursor but must NOT resume. Without the flag the
+    // scan must cover opp-001..opp-006, not just the tail past opp-004.
+    const client = new FakeClient();
+    seed(client, 6);
+
+    const outcomes = await recomputeAllRecords(
+      client,
+      { ...RESUME_FORMULA, scanCursor: 'opp-004' },
+      { pageSize: 10 },
+    );
+
+    expect(outcomes.map((outcome) => outcome.targetRecordId)).toEqual([
+      'opp-001',
+      'opp-002',
+      'opp-003',
+      'opp-004',
+      'opp-005',
+      'opp-006',
+    ]);
+  });
+
+  it('does not clear a stored cursor on a non-resumed (event-driven) full pass', async () => {
+    // The cursor protocol is the sweep's alone: an event-driven pass neither
+    // reads nor writes it, so a stored cursor survives untouched.
+    const client = new FakeClient();
+    seed(client, 3);
+    client.seed('formulaDefinition', [{ ...RESUME_FORMULA, scanCursor: 'opp-001' }]);
+
     await recomputeAllRecords(
       client,
       { ...RESUME_FORMULA, scanCursor: 'opp-001' },
       { pageSize: 10 },
     );
 
-    expect(client.get('formulaDefinition', 'formula-1')?.scanCursor).toBe('');
+    expect(client.get('formulaDefinition', 'formula-1')?.scanCursor).toBe('opp-001');
+  });
+
+  it('skips the heartbeat on a resumed pass that completes (Fix 2)', async () => {
+    // A resumed pass is partial by construction — its heartbeat sample is the
+    // tail, not the record-1 sample a full pass produces, so running it would
+    // churn lastValue run-to-run (ADR 0022). Observe: no updateFormulaDefinition
+    // mutation carrying heartbeat fields (lastValue/lastEvaluatedAt) fires.
+    const client = new FakeClient();
+    seed(client, 6);
+    client.seed('formulaDefinition', [{ ...RESUME_FORMULA, scanCursor: 'opp-004' }]);
+
+    await recomputeAllRecords(
+      client,
+      { ...RESUME_FORMULA, scanCursor: 'opp-004' },
+      { resumeFromStoredCursor: true, pageSize: 10 },
+    );
+
+    const heartbeatWrites = client.mutationSelections.filter((selection) => {
+      const data = selection?.updateFormulaDefinition?.__args?.data as
+        | Record<string, unknown>
+        | undefined;
+      return (
+        data !== undefined &&
+        ('lastValue' in data ||
+          'lastValueText' in data ||
+          'lastEvaluatedAt' in data)
+      );
+    });
+    expect(heartbeatWrites).toHaveLength(0);
+    // Contrast: a full (non-resumed) pass DOES write the heartbeat.
+    expect(client.get('formulaDefinition', 'formula-1')?.lastValue ?? null).toBe(
+      null,
+    );
+  });
+
+  it('writes the heartbeat on a full (non-resumed) completing pass', async () => {
+    // The positive contrast to the skip above: a full pass keeps its heartbeat.
+    const client = new FakeClient();
+    seed(client, 6);
+
+    await recomputeAllRecords(client, RESUME_FORMULA, { pageSize: 10 });
+
+    const heartbeatWrites = client.mutationSelections.filter((selection) => {
+      const data = selection?.updateFormulaDefinition?.__args?.data as
+        | Record<string, unknown>
+        | undefined;
+      return data !== undefined && 'lastValue' in data;
+    });
+    expect(heartbeatWrites.length).toBeGreaterThan(0);
   });
 });
 

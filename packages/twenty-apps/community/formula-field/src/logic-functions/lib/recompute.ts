@@ -692,6 +692,11 @@ export type RecomputeAllRecordsOptions = {
   // the first record id. Page boundary, not record boundary: a partially
   // flushed page would store a cursor past records whose writes never landed.
   deadlineAt?: number;
+  // Resume from the definition's stored scanCursor. Only the time-bounded sweep
+  // opts in — event-driven recomputes (a definition edit, a cross-referenced
+  // record change) must ALWAYS scan from the first record, or they would leave
+  // records before a stale sweep cursor computed against the old expression.
+  resumeFromStoredCursor?: boolean;
 };
 
 // Recomputes a formula across ALL records of its target object (paginated).
@@ -783,10 +788,17 @@ export const recomputeAllRecords = async (
     return withRetry(() => client.query(build({ id: true })));
   };
 
-  // Resume from the definition's stored cursor (populated on the sweep's
-  // load-constant path). Undefined here on the trigger-payload path, which is
-  // correct: a genuine definition change restarts from the first record.
-  let after: string | undefined = formula.scanCursor || undefined;
+  // Resume from the definition's stored cursor only when the caller opts in.
+  // The cursor is the sweep's private resume bookkeeping — event-driven callers
+  // pass a formula that also carries scanCursor, and honouring it there would
+  // recompute only the tail, leaving earlier records on the old expression.
+  let after: string | undefined = options.resumeFromStoredCursor
+    ? formula.scanCursor || undefined
+    : undefined;
+  // A resumed pass is partial by construction (it starts past record 1), so its
+  // heartbeat sample is the tail, not the record-1 sample a full pass produces.
+  const resumedFromCursor =
+    options.resumeFromStoredCursor === true && (formula.scanCursor ?? '') !== '';
 
   for (;;) {
     if (options.shouldContinue && !options.shouldContinue()) {
@@ -877,10 +889,10 @@ export const recomputeAllRecords = async (
     }
 
     if (!connection?.pageInfo?.hasNextPage) {
-      // Completed pass: clear the resume point. Write-avoidant — only write
-      // when a cursor was actually stored, or every full pass re-fires the
-      // definition trigger (bookkeeping-suppressed, but still a needless write).
-      if ((formula.scanCursor ?? '') !== '') {
+      // Completed pass: clear the resume point. Only the sweep participates in
+      // the cursor protocol, and only when a cursor was actually stored, so a
+      // full pass is write-avoidant and event-driven passes never touch it.
+      if (options.resumeFromStoredCursor && (formula.scanCursor ?? '') !== '') {
         await updateScanCursor(client, formula.id, null);
       }
       break;
@@ -890,7 +902,11 @@ export const recomputeAllRecords = async (
 
   // Heartbeat: record a representative value + timestamp on the definition so
   // "last value / last evaluated" is populated (an error takes precedence).
-  if (outcomes.length > 0) {
+  // Skip it on a resumed (partial) pass: its sample is the tail, not the
+  // record-1 sample a full pass produces, and running it would churn lastValue
+  // between partial and full runs (ADR 0022) — the same reason the budget-yield
+  // path above skips it.
+  if (!resumedFromCursor && outcomes.length > 0) {
     const firstError = outcomes.find((o) => o.error)?.error ?? null;
     const sampleValue =
       outcomes.find((o) => !o.error && o.value !== null)?.value ??
