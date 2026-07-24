@@ -68,6 +68,46 @@ describe('buildScanSelection', () => {
     );
 
     expect(scan?.fields).toEqual(['companyName']);
+    // The target field must go through the mirror vocabulary, not the engine
+    // one — this branch's whole job is emitting that entry.
+    expect(scan?.overrides.companyName).toBe(true);
+  });
+
+  it('selects source and target through the mirror vocabulary (not the engine one) for a same-record composite mirror', async () => {
+    // LINKS is where the two vocabularies genuinely diverge:
+    // selectionEntryForFieldKind('LINKS') is `true` (a scalar selection),
+    // while selectionEntryForMirrorKind('LINKS') is a composite sub-selection.
+    // An implementation that wrongly used the engine vocabulary on the mirror
+    // branch would still pass every other test in this file but would hand
+    // the mirror comparison a wrongly-shaped (scalar) value.
+    client.setFieldKinds('opportunity', {
+      amount: 'CURRENCY',
+      score: 'NUMBER',
+      stage: 'SELECT',
+      name: 'TEXT',
+      links: 'LINKS',
+      linksCopy: 'LINKS',
+    });
+    const scan = await buildScanSelection(
+      client,
+      definition({
+        expression: 'links',
+        targetField: 'linksCopy',
+        targetFieldType: 'LINKS',
+      }),
+    );
+
+    expect(scan?.fields).toEqual(['links', 'linksCopy']);
+    expect(scan?.overrides.links).toEqual({
+      primaryLinkLabel: true,
+      primaryLinkUrl: true,
+      secondaryLinks: true,
+    });
+    expect(scan?.overrides.linksCopy).toEqual({
+      primaryLinkLabel: true,
+      primaryLinkUrl: true,
+      secondaryLinks: true,
+    });
   });
 
   it('returns null when the expression does not parse', async () => {
