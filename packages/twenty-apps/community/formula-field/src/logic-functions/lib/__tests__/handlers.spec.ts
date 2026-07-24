@@ -10,6 +10,7 @@ import {
   findOverride,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
+import { loadAllEnabledFormulas } from 'src/logic-functions/lib/formula-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
@@ -1037,5 +1038,36 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
 
     expect(outcomes.some((o) => o.changed)).toBe(true);
     expect(client.get('opportunity', 'o1')!.formulaCrossScore).toBe(205);
+  });
+});
+
+// Task 7 makes the hourly sweep time-bounded; an unstable definition order
+// would then let a time-bounded sweep starve whichever definitions land late.
+describe('loadEnabledFormulas ordering', () => {
+  it('requests a stable id-ordered page so a time-bounded sweep cannot starve a definition', async () => {
+    const client = new FakeClient();
+    client.seed('formulaDefinition', [
+      {
+        id: 'formula-b',
+        enabled: true,
+        targetObject: 'opportunity',
+        targetField: 'b',
+      },
+      {
+        id: 'formula-a',
+        enabled: true,
+        targetObject: 'opportunity',
+        targetField: 'a',
+      },
+    ]);
+
+    await loadAllEnabledFormulas(client);
+
+    const pageQuery = client.querySelections.find(
+      (selection) => selection.formulaDefinitions !== undefined,
+    );
+    expect(pageQuery.formulaDefinitions.__args.orderBy).toEqual([
+      { id: { __graphqlEnum: 'AscNullsFirst' } },
+    ]);
   });
 });

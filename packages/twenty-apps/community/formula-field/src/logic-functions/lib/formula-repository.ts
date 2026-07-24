@@ -52,6 +52,10 @@ export const loadEnabledFormulas = async (
           __args: {
             first: pageSize,
             filter,
+            // Stable order so a time-bounded sweep resumes at a predictable
+            // definition instead of starving whichever ones land late in an
+            // unspecified ordering.
+            orderBy: [{ id: graphqlEnum('AscNullsFirst') }],
             ...(after ? { after } : {}),
           },
           edges: { node: FORMULA_FIELDS },
