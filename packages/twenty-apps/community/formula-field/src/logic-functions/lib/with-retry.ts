@@ -20,7 +20,7 @@ type GraphqlLikeError = {
   message?: string;
 };
 
-const isRetryable = (error: unknown): boolean => {
+export const isRetryable = (error: unknown): boolean => {
   const candidate = error as GraphqlLikeError;
 
   if (Array.isArray(candidate?.errors)) {

@@ -38,7 +38,7 @@ import {
   type FormulaDefinitionRecord,
   type RecomputeOutcome,
 } from 'src/logic-functions/lib/types';
-import { withRetry } from 'src/logic-functions/lib/with-retry';
+import { isRetryable, withRetry } from 'src/logic-functions/lib/with-retry';
 
 const capitalize = (value: string): string =>
   value.charAt(0).toUpperCase() + value.slice(1);
@@ -720,11 +720,20 @@ export const recomputeAllRecords = async (
         return await withRetry(() =>
           client.query(build(scanNodeSelection(widened))),
         );
-      } catch {
-        // A field the live schema dropped would abort the entire pass here and
-        // take every remaining formula in the sweep with it. Degrade to the
-        // id-only scan and let per-record fetches surface the error one record
-        // at a time (the isolation the widened selection would otherwise cost).
+      } catch (error) {
+        // A transient failure (rate limit, 5xx, network blip) is withRetry's
+        // job — it already exhausted its retries before rethrowing here, so
+        // reacting to it would permanently abandon the prefetch for the rest of
+        // the pass AND immediately hammer a refusing endpoint with the id-only
+        // query. Let it propagate exactly as the pre-prefetch id-only path would
+        // have. Only a PERMANENT rejection (a field the live schema dropped,
+        // which would otherwise abort the entire pass and take every remaining
+        // formula in the sweep with it) should degrade to the id-only scan, so
+        // per-record fetches surface the error one record at a time (the
+        // isolation the widened selection would otherwise cost).
+        if (isRetryable(error)) {
+          throw error;
+        }
         scanSelection = null;
       }
     }

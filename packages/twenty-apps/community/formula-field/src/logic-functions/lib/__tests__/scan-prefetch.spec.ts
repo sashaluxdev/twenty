@@ -103,6 +103,50 @@ describe('recomputeAllRecords page prefetch', () => {
     expect(singularReads(client)).toHaveLength(3);
   });
 
+  it('degrades mid-scan: page 1 prefetches correct values, page 2 rejected falls back per-record', async () => {
+    seedOpportunities(client, 4);
+
+    // Page 1 runs widened and prefetches records 1-2 with correct values. Only
+    // AFTER that first page is served do we drop `amount` from the live schema,
+    // so page 2's widened selection is rejected mid-scan. This is the only shape
+    // where a stale prefetch flag could write WRONG values instead of erroring —
+    // the flag must clear so records 3-4 take the id-only per-record path.
+    const originalQuery = client.query.bind(client);
+    let servedPages = 0;
+    client.query = async (selection: Record<string, unknown>) => {
+      const result = await originalQuery(selection);
+      if (selection.opportunities !== undefined) {
+        servedPages += 1;
+        if (servedPages === 1) {
+          client.rejectFieldOnServer('opportunity', 'amount');
+        }
+      }
+      return result;
+    };
+
+    const outcomes = await recomputeAllRecords(client, FORMULA, { pageSize: 2 });
+
+    const byId = new Map(outcomes.map((outcome) => [outcome.targetRecordId, outcome]));
+
+    // Records 1-2: prefetched from the widened page 1, correct computed values,
+    // no error outcomes, and the writes landed.
+    expect(byId.get('opp-001')?.error).toBeNull();
+    expect(byId.get('opp-002')?.error).toBeNull();
+    expect(byId.get('opp-001')?.value).toBe(2);
+    expect(byId.get('opp-002')?.value).toBe(3);
+    expect(client.get('opportunity', 'opp-001')?.score).toBe(2);
+    expect(client.get('opportunity', 'opp-002')?.score).toBe(3);
+
+    // Records 3-4: page 2 was rejected mid-scan, so each falls back to its own
+    // id-only per-record fetch, which surfaces the dropped field one at a time.
+    expect(byId.get('opp-003')?.error).not.toBeNull();
+    expect(byId.get('opp-004')?.error).not.toBeNull();
+
+    // Per-record reads happened ONLY for the fallback page (records 3-4), never
+    // for the prefetched records 1-2.
+    expect(singularReads(client)).toHaveLength(2);
+  });
+
   it('falls back to an id-only scan when the scan-selection metadata read throws', async () => {
     seedOpportunities(client, 3);
     // Building the widened selection needs field kinds. That read used to
