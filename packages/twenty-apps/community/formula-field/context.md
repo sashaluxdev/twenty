@@ -922,13 +922,17 @@ Then:
    from the app dir: bump `version` in package.json, then
    `... cli.cjs app:publish --private -r cloud` (server rejects a
    non-incremented version) followed by `... cli.cjs app:install -r cloud`.
-   Currently deployed to cloud: **v0.1.9** (widget load-time arc, ADR 0023;
-   2026-07-21 — platform still on the 2.21 line, npm twenty-sdk@2.21.0 scratch
-   build, `plan` preview 0 add / 22 change (16 logicFunction + 4 frontComponent
-   checksums, 2 navigationMenuItem moved to top-level: folderUniversalIdentifier
-   → null — if Formulas/Variations nav items were foldered on cloud, the deploy
-   un-foldered them) / 0 destroy; publish+install clean; post-install plan "No
-   changes". Local dev remote also on v0.1.9 (installed 2026-07-17, live-verified
+   Currently deployed to cloud: **v0.1.11** (recompute scan efficiency arc, ADR
+   0025; 2026-07-24 — platform on the 2.23 line (v2.23.2), npm twenty-sdk@2.23.0
+   scratch build, `plan` preview 1 add (scanCursor TEXT field) / 21 change (16
+   logicFunction + 4 frontComponent checksums, 2 navigationMenuItem moved to
+   top-level again: folderUniversalIdentifier → null, the recurring un-foldering
+   gotcha) / 0 destroy; publish+install clean; post-install plan "No changes";
+   all 23 defs read back healthy with scanCursor live via MCP. Predecessors
+   v0.1.10 (widget bundle 47% cut + IDB config cache, ADR 0024; 2026-07-21,
+   twenty-sdk@2.21.0 scratch) and v0.1.9 (widget load-time arc, ADR 0023;
+   2026-07-21, 2.21 line, 0 add / 22 change / 0 destroy; publish+install clean).
+   Local dev remote on v0.1.9 (installed 2026-07-17, live-verified
    2026-07-21: tab open near-instant, 4 GraphQL reads in 15s idle vs old ~5/s
    flood, remounts lighter than first open, no sweep bursts. Note: enabled-scans
    still fire once per mount — fresh worker per mount can't share the 60s cache;

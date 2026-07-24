@@ -1,6 +1,6 @@
 {
   "name": "formula-field",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "license": "MIT",
   "description": "Chimeric formula fields for Twenty: read a value, edit a formula.",
   "engines": {
