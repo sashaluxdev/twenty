@@ -16,12 +16,17 @@ import {
   isCyclicTarget,
 } from 'src/logic-functions/lib/save-validation';
 
+// The function's declared timeoutSeconds is 120; leave headroom for the
+// bookkeeping writes that follow the scans.
+const SWEEP_BUDGET_MS = 100_000;
+
 // The convergence backstop (ADR 0004). Hourly, re-evaluate every enabled formula
 // across all its target records. Event triggers give latency; this sweep gives
 // eventual correctness — it repairs any value staled by a missed event, a deploy
 // window, or a transient error. No-op suppression keeps it cheap: records that
 // are already correct are not rewritten.
 const handler = async (): Promise<Record<string, unknown>> => {
+  const startedAt = Date.now();
   // Dynamic client: wizard-created value fields are not in the genql type map.
   const client = createDynamicCoreClient();
   // Refresh operational statuses first, then load the definitions fresh so
@@ -69,7 +74,9 @@ const handler = async (): Promise<Record<string, unknown>> => {
       continue;
     }
 
-    const outcomes = await recomputeAllRecords(client, formula);
+    const outcomes = await recomputeAllRecords(client, formula, {
+      deadlineAt: startedAt + SWEEP_BUDGET_MS,
+    });
     evaluated += outcomes.length;
     written += outcomes.filter((outcome) => outcome.changed).length;
 

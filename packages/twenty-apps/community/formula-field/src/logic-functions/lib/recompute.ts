@@ -24,7 +24,10 @@ import {
 import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
 import { currentEpochDay } from 'src/logic-functions/lib/date-serial';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
-import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
+import {
+  recordEvaluationHeartbeat,
+  updateScanCursor,
+} from 'src/logic-functions/lib/formula-repository';
 import {
   buildTargetWriteData,
   isIntegerBackedFormat,
@@ -684,6 +687,11 @@ export type RecomputeAllRecordsOptions = {
   // initiating widget unmounted). Already-processed records keep their
   // writes — the sweep is idempotent, the cron sweep finishes the rest.
   shouldContinue?: () => boolean;
+  // Epoch ms. The scan stops at the next PAGE boundary once this passes and
+  // persists its cursor, so the next invocation resumes instead of rewinding to
+  // the first record id. Page boundary, not record boundary: a partially
+  // flushed page would store a cursor past records whose writes never landed.
+  deadlineAt?: number;
 };
 
 // Recomputes a formula across ALL records of its target object (paginated).
@@ -775,7 +783,10 @@ export const recomputeAllRecords = async (
     return withRetry(() => client.query(build({ id: true })));
   };
 
-  let after: string | undefined;
+  // Resume from the definition's stored cursor (populated on the sweep's
+  // load-constant path). Undefined here on the trigger-payload path, which is
+  // correct: a genuine definition change restarts from the first record.
+  let after: string | undefined = formula.scanCursor || undefined;
 
   for (;;) {
     if (options.shouldContinue && !options.shouldContinue()) {
@@ -852,10 +863,29 @@ export const recomputeAllRecords = async (
     }
     outcomes.push(...pageOutcomes);
 
+    const nextCursor = connection?.pageInfo?.endCursor ?? undefined;
+    const outOfBudget =
+      options.deadlineAt !== undefined && Date.now() >= options.deadlineAt;
+
+    if (connection?.pageInfo?.hasNextPage && outOfBudget) {
+      // Budget path: skips the heartbeat below on purpose. A partial pass's
+      // "first non-error, non-null outcome" is a different sample than a full
+      // pass's, and running the heartbeat here would churn lastValue between
+      // partial and full runs (ADR 0022).
+      await updateScanCursor(client, formula.id, nextCursor ?? null);
+      return outcomes;
+    }
+
     if (!connection?.pageInfo?.hasNextPage) {
+      // Completed pass: clear the resume point. Write-avoidant — only write
+      // when a cursor was actually stored, or every full pass re-fires the
+      // definition trigger (bookkeeping-suppressed, but still a needless write).
+      if ((formula.scanCursor ?? '') !== '') {
+        await updateScanCursor(client, formula.id, null);
+      }
       break;
     }
-    after = connection.pageInfo.endCursor ?? undefined;
+    after = nextCursor;
   }
 
   // Heartbeat: record a representative value + timestamp on the definition so
