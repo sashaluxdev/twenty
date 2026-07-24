@@ -178,4 +178,36 @@ describe('recomputeAllRecords page prefetch', () => {
     expect(outcomes).toHaveLength(2);
     expect(outcomes.every((outcome) => outcome.error !== null)).toBe(true);
   });
+
+  it('writes a whole page through batched mutations instead of one per record', async () => {
+    seedOpportunities(client, 5);
+    // All five compute distinct values, so grouping cannot collapse them; the
+    // page still flushes as 5 grouped mutations, not 5 singular ones.
+    await recomputeAllRecords(client, FORMULA, { pageSize: 5 });
+
+    const singularWrites = client.mutationSelections.filter(
+      (selection) => selection.updateOpportunity !== undefined,
+    );
+    expect(singularWrites).toHaveLength(0);
+    expect(client.get('opportunity', 'opp-005')?.score).toBe(6);
+  });
+
+  it('collapses a page of identical values into a single mutation', async () => {
+    client.setFieldKinds('opportunity', { amount: 'NUMBER', score: 'NUMBER' });
+    client.seed(
+      'opportunity',
+      Array.from({ length: 5 }, (_unused, index) => ({
+        id: `flat-${index + 1}`,
+        amount: 10,
+        score: null,
+      })),
+    );
+
+    await recomputeAllRecords(client, FORMULA, { pageSize: 10 });
+
+    const batchWrites = client.mutationSelections.filter(
+      (selection) => selection.updateOpportunities !== undefined,
+    );
+    expect(batchWrites).toHaveLength(1);
+  });
 });

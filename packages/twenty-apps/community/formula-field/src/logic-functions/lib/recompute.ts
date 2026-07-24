@@ -35,14 +35,15 @@ import {
 import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
 import { pluralize } from 'src/logic-functions/lib/plural';
 import {
+  flushBatchedWrites,
+  type PendingWrite,
+} from 'src/logic-functions/lib/batch-write';
+import {
   type FormulaClient,
   type FormulaDefinitionRecord,
   type RecomputeOutcome,
 } from 'src/logic-functions/lib/types';
 import { isRetryable, withRetry } from 'src/logic-functions/lib/with-retry';
-
-const capitalize = (value: string): string =>
-  value.charAt(0).toUpperCase() + value.slice(1);
 
 // pluralize lives in its own module so batch-write.ts can consume it without a
 // module-scope import cycle with recompute.ts. Re-exported here to keep every
@@ -521,18 +522,23 @@ export const computeMirrorValueForRecord = async ({
   };
 };
 
-// Recomputes a single formula for a single target record. Idempotent and
-// write-avoidant: skips the mutation when the value is unchanged (this is the
-// recursion guard — our own write re-fires the trigger and converges here).
-export const recomputeForRecord = async ({
+export type RecomputePlan = {
+  outcome: RecomputeOutcome;
+  write: PendingWrite | null;
+};
+
+// Everything recomputeForRecord does EXCEPT the mutation, so a full-object scan
+// can collect a page's writes and flush them in batches. `outcome.changed` is
+// optimistic when `write` is non-null: the caller downgrades it if the flush
+// reports that record as failed.
+export const planRecomputeForRecord = async ({
   client,
   formula,
   targetRecordId,
   prefetchedRecord,
   overriddenRecordIds,
   crossRecordCache,
-}: RecomputeArgs): Promise<RecomputeOutcome> => {
-  const targetObject = formula.targetObject ?? '';
+}: RecomputeArgs): Promise<RecomputePlan> => {
   const targetField = formula.targetField ?? '';
 
   const base: RecomputeOutcome = {
@@ -545,7 +551,7 @@ export const recomputeForRecord = async ({
 
   // Manual override: this record is pinned by the user — do not recompute it.
   if (overriddenRecordIds?.has(targetRecordId)) {
-    return { ...base, overridden: true };
+    return { outcome: { ...base, overridden: true }, write: null };
   }
 
   // Mirror mode: a bare whole-field ref onto a non-engine target kind performs a
@@ -572,38 +578,26 @@ export const recomputeForRecord = async ({
       crossRecordCache,
     });
     if (mirror.error !== null || mirror.sameRecord === null) {
-      return { ...base, error: mirror.error ?? 'Record not found' };
+      return {
+        outcome: { ...base, error: mirror.error ?? 'Record not found' },
+        write: null,
+      };
     }
 
     const currentRaw = navigatePath(mirror.sameRecord, targetField);
     // No-op suppression / recursion guard: deep JSON equality of the current
     // target value and the source value skips the write.
     if (deepJsonEqual(currentRaw, mirror.rawValue)) {
-      return { ...base, changed: false, rawValue: mirror.rawValue };
-    }
-
-    const mirrorMutationName = `update${capitalize(targetObject)}`;
-    try {
-      await withRetry(() =>
-        client.mutation({
-          [mirrorMutationName]: {
-            __args: {
-              id: targetRecordId,
-              data: { [targetField]: mirror.rawValue },
-            },
-            id: true,
-          },
-        }),
-      );
-    } catch (error) {
       return {
-        ...base,
-        rawValue: mirror.rawValue,
-        error: `Failed to write ${targetField}: ${(error as Error).message}`,
+        outcome: { ...base, changed: false, rawValue: mirror.rawValue },
+        write: null,
       };
     }
 
-    return { ...base, changed: true, rawValue: mirror.rawValue };
+    return {
+      outcome: { ...base, changed: true, rawValue: mirror.rawValue },
+      write: { recordId: targetRecordId, data: { [targetField]: mirror.rawValue } },
+    };
   }
 
   const computed = await computeFormulaValueForRecord({
@@ -614,7 +608,10 @@ export const recomputeForRecord = async ({
     crossRecordCache,
   });
   if (computed.error !== null || computed.sameRecord === null) {
-    return { ...base, error: computed.error ?? 'Record not found' };
+    return {
+      outcome: { ...base, error: computed.error ?? 'Record not found' },
+      write: null,
+    };
   }
   // CURRENCY stores integer micros and integer-backed NUMBER fields store whole
   // numbers — compare and write the rounded value, or a fractional result would
@@ -631,37 +628,50 @@ export const recomputeForRecord = async ({
 
   // No-op suppression / recursion guard: skip the write when nothing changed.
   if (valuesEqual(currentValue, result)) {
-    return { ...base, value: result, changed: false };
+    return { outcome: { ...base, value: result, changed: false }, write: null };
   }
 
-  const mutationName = `update${capitalize(targetObject)}`;
-  try {
-    await withRetry(() =>
-      client.mutation({
-        [mutationName]: {
-          __args: {
-            id: targetRecordId,
-            data: buildTargetWriteData(
-              targetField,
-              formula.targetFieldType,
-              result,
-              currentRaw,
-              formula.currencyCode,
-            ),
-          },
-          id: true,
-        },
-      }),
-    );
-  } catch (error) {
+  return {
+    outcome: { ...base, value: result, changed: true },
+    write: {
+      recordId: targetRecordId,
+      data: buildTargetWriteData(
+        targetField,
+        formula.targetFieldType,
+        result,
+        currentRaw,
+        formula.currencyCode,
+      ),
+    },
+  };
+};
+
+// Recomputes a single formula for a single target record. Idempotent and
+// write-avoidant: skips the mutation when the value is unchanged (this is the
+// recursion guard — our own write re-fires the trigger and converges here).
+// Thin wrapper over planRecomputeForRecord that flushes the single write, so
+// single-record handlers keep the exact "compute then write, error on failure"
+// contract they depend on.
+export const recomputeForRecord = async (
+  args: RecomputeArgs,
+): Promise<RecomputeOutcome> => {
+  const plan = await planRecomputeForRecord(args);
+  if (plan.write === null) {
+    return plan.outcome;
+  }
+  const failures = await flushBatchedWrites(
+    args.client,
+    args.formula.targetObject ?? '',
+    [plan.write],
+  );
+  if (failures.length > 0) {
     return {
-      ...base,
-      value: result,
-      error: `Failed to write ${targetField}: ${(error as Error).message}`,
+      ...plan.outcome,
+      changed: false,
+      error: `Failed to write ${args.formula.targetField ?? ''}: ${failures[0].error}`,
     };
   }
-
-  return { ...base, value: result, changed: true };
+  return plan.outcome;
 };
 
 export type RecomputeAllRecordsOptions = {
@@ -781,6 +791,11 @@ export const recomputeAllRecords = async (
       | undefined;
     const edges = connection?.edges ?? [];
 
+    // Accumulate this page's outcomes (in scan order, ADR 0022) and pending
+    // writes, then flush the writes in grouped batches at the page boundary.
+    const pendingWrites: PendingWrite[] = [];
+    const pageOutcomes: RecomputeOutcome[] = [];
+
     for (const edge of edges) {
       if (options.shouldContinue && !options.shouldContinue()) {
         break;
@@ -791,24 +806,26 @@ export const recomputeAllRecords = async (
         continue;
       }
       try {
-        outcomes.push(
-          await recomputeForRecord({
-            client,
-            formula,
-            targetRecordId: id,
-            // Only a widened page yields a usable prefetch. After a fallback,
-            // nodes are id-only and the per-record fetch must run.
-            prefetchedRecord: scanSelection !== null ? node : undefined,
-            overriddenRecordIds,
-            crossRecordCache,
-          }),
-        );
+        const plan = await planRecomputeForRecord({
+          client,
+          formula,
+          targetRecordId: id,
+          // Only a widened page yields a usable prefetch. After a fallback,
+          // nodes are id-only and the per-record fetch must run.
+          prefetchedRecord: scanSelection !== null ? node : undefined,
+          overriddenRecordIds,
+          crossRecordCache,
+        });
+        pageOutcomes.push(plan.outcome);
+        if (plan.write !== null) {
+          pendingWrites.push(plan.write);
+        }
       } catch (error) {
         // Per-record fault isolation: a thrown error (a RangeError from a
         // pathologically deep value included) becomes this record's outcome and
         // the sweep continues, rather than one poisoned record aborting the whole
         // pass. The heartbeat below still runs with the accumulated outcomes.
-        outcomes.push({
+        pageOutcomes.push({
           formulaId: formula.id,
           targetRecordId: id,
           changed: false,
@@ -817,6 +834,23 @@ export const recomputeAllRecords = async (
         });
       }
     }
+
+    // Flush per page, not per pass: memory stays bounded and a timeout loses at
+    // most one page of writes. Downgrade in place the outcomes of records the
+    // flush reports as failed — preserving scan order rather than rebuilding
+    // the array from groups (which would break the heartbeat's first-sample).
+    const failures = await flushBatchedWrites(client, targetObject, pendingWrites);
+    const failuresByRecordId = new Map(
+      failures.map((failure) => [failure.recordId, failure.error]),
+    );
+    for (const outcome of pageOutcomes) {
+      const failure = failuresByRecordId.get(outcome.targetRecordId);
+      if (failure !== undefined) {
+        outcome.changed = false;
+        outcome.error = `Failed to write ${targetField}: ${failure}`;
+      }
+    }
+    outcomes.push(...pageOutcomes);
 
     if (!connection?.pageInfo?.hasNextPage) {
       break;
