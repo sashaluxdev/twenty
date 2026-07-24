@@ -67,6 +67,18 @@ export const pluralize = (singular: string): string => {
 const crossKey = (object: string, recordId: string): string =>
   `${object}:${recordId}`;
 
+// Cross-record references bake a fixed recordId into the expression, so every
+// target record in a pass resolves the same referenced records. Keyed by
+// object + id + the exact field set, so a cache shared across formulas can
+// never serve a record fetched with a narrower selection.
+export type CrossRecordCache = Map<string, Record<string, unknown> | null>;
+
+const crossCacheKey = (
+  object: string,
+  recordId: string,
+  fields: Iterable<string>,
+): string => `${object}:${recordId}:${Array.from(fields).sort().join(',')}`;
+
 // Safe usesToday() over a possibly-invalid expression, for the heartbeat
 // carve-out (ADR 0015). A formula that fails to parse has no TODAY()
 // dependency to track — evaluation surfaces the parse error elsewhere.
@@ -140,6 +152,7 @@ export const dependencySelectionOverrides = (
 const fetchCrossRecords = async (
   client: FormulaClient,
   dependencies: FormulaDependencies,
+  cache?: CrossRecordCache,
 ): Promise<Map<string, Record<string, unknown> | null>> => {
   const byRecord = new Map<
     string,
@@ -163,6 +176,11 @@ const fetchCrossRecords = async (
   const results = new Map<string, Record<string, unknown> | null>();
 
   for (const { object, recordId, fields } of byRecord.values()) {
+    const cacheKey = crossCacheKey(object, recordId, fields);
+    if (cache?.has(cacheKey)) {
+      results.set(crossKey(object, recordId), cache.get(cacheKey) ?? null);
+      continue;
+    }
     const record = await fetchRecord(
       client,
       object,
@@ -170,6 +188,7 @@ const fetchCrossRecords = async (
       Array.from(fields),
       dependencySelectionOverrides(fields, await resolveFieldKinds(client, object)),
     );
+    cache?.set(cacheKey, record);
     results.set(crossKey(object, recordId), record);
   }
 
@@ -249,6 +268,9 @@ export type RecomputeArgs = {
   // Record ids the user has manually overridden for this formula's field —
   // recompute leaves those records alone (feature #2).
   overriddenRecordIds?: Set<string>;
+  // Shared across one recomputeAllRecords pass so a fixed cross-reference is
+  // fetched once, not once per target record.
+  crossRecordCache?: CrossRecordCache;
 };
 
 // Evaluates a formula for a record WITHOUT writing. Returns the computed value
@@ -267,6 +289,7 @@ export const computeFormulaValueForRecord = async ({
   formula,
   targetRecordId,
   prefetchedRecord,
+  crossRecordCache,
 }: Omit<RecomputeArgs, 'overriddenRecordIds'>): Promise<ComputeResult> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -328,7 +351,7 @@ export const computeFormulaValueForRecord = async ({
 
   let crossRecords: Map<string, Record<string, unknown> | null>;
   try {
-    crossRecords = await fetchCrossRecords(client, dependencies);
+    crossRecords = await fetchCrossRecords(client, dependencies, crossRecordCache);
   } catch (error) {
     return {
       value: null,
@@ -382,6 +405,7 @@ export const computeMirrorValueForRecord = async ({
   formula,
   targetRecordId,
   prefetchedRecord,
+  crossRecordCache,
 }: Omit<RecomputeArgs, 'overriddenRecordIds'>): Promise<ComputeMirrorResult> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -477,22 +501,30 @@ export const computeMirrorValueForRecord = async ({
   // Cross-record mirror: fetch the referenced source record. A missing source
   // record mirrors the engine's silent-null parity — write null, no error.
   let sourceRecord: Record<string, unknown> | null;
-  try {
-    sourceRecord = await fetchRecord(
-      client,
-      sourceObject,
-      bare.ref.recordId,
-      [sourceField],
-      { [sourceField]: selectionEntryForMirrorKind(sourceKind) },
-    );
-  } catch (error) {
-    return {
-      rawValue: null,
-      sameRecord,
-      error: `Failed to load ${sourceObject} ${bare.ref.recordId}: ${
-        (error as Error).message
-      }`,
-    };
+  const sourceCacheKey = crossCacheKey(sourceObject, bare.ref.recordId, [
+    sourceField,
+  ]);
+  if (crossRecordCache?.has(sourceCacheKey)) {
+    sourceRecord = crossRecordCache.get(sourceCacheKey) ?? null;
+  } else {
+    try {
+      sourceRecord = await fetchRecord(
+        client,
+        sourceObject,
+        bare.ref.recordId,
+        [sourceField],
+        { [sourceField]: selectionEntryForMirrorKind(sourceKind) },
+      );
+    } catch (error) {
+      return {
+        rawValue: null,
+        sameRecord,
+        error: `Failed to load ${sourceObject} ${bare.ref.recordId}: ${
+          (error as Error).message
+        }`,
+      };
+    }
+    crossRecordCache?.set(sourceCacheKey, sourceRecord);
   }
   if (sourceRecord === null) {
     return { rawValue: null, sameRecord, error: null };
@@ -513,6 +545,7 @@ export const recomputeForRecord = async ({
   targetRecordId,
   prefetchedRecord,
   overriddenRecordIds,
+  crossRecordCache,
 }: RecomputeArgs): Promise<RecomputeOutcome> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -551,6 +584,7 @@ export const recomputeForRecord = async ({
       formula,
       targetRecordId,
       prefetchedRecord,
+      crossRecordCache,
     });
     if (mirror.error !== null || mirror.sameRecord === null) {
       return { ...base, error: mirror.error ?? 'Record not found' };
@@ -592,6 +626,7 @@ export const recomputeForRecord = async ({
     formula,
     targetRecordId,
     prefetchedRecord,
+    crossRecordCache,
   });
   if (computed.error !== null || computed.sameRecord === null) {
     return { ...base, error: computed.error ?? 'Record not found' };
@@ -680,6 +715,11 @@ export const recomputeAllRecords = async (
     targetObject,
     targetField,
   );
+
+  // One cache per pass: every target record in this sweep resolves the same
+  // fixed cross-references, so a referenced record is fetched once for the
+  // whole pass rather than once per target record.
+  const crossRecordCache: CrossRecordCache = new Map();
 
   // Page nodes carry the dependency + target fields so recomputeForRecord's
   // prefetch check skips its per-record read. Null -> id-only scan.
@@ -775,6 +815,7 @@ export const recomputeAllRecords = async (
             // nodes are id-only and the per-record fetch must run.
             prefetchedRecord: scanSelection !== null ? node : undefined,
             overriddenRecordIds,
+            crossRecordCache,
           }),
         );
       } catch (error) {
