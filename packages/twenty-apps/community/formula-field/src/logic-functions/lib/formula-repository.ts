@@ -28,6 +28,7 @@ const FORMULA_FIELDS = {
   lastEvaluatedAt: true,
   status: true,
   statusReason: true,
+  scanCursor: true,
 } as const;
 
 // Loads all enabled formula definitions (optionally filtered by target object),
@@ -305,6 +306,24 @@ const isMirrorHeartbeat = (formula: FormulaDefinitionRecord): boolean => {
   } catch {
     return false;
   }
+};
+
+// Write-avoidance is handled by the caller (it only calls this when the cursor
+// actually moves) — an unconditional write here would re-fire the definition
+// trigger on every page.
+export const updateScanCursor = async (
+  client: FormulaClient,
+  formulaId: string,
+  cursor: string | null,
+): Promise<void> => {
+  await withRetry(() =>
+    client.mutation({
+      updateFormulaDefinition: {
+        __args: { id: formulaId, data: { scanCursor: cursor ?? '' } },
+        id: true,
+      },
+    }),
+  );
 };
 
 export const recordEvaluationHeartbeat = async (

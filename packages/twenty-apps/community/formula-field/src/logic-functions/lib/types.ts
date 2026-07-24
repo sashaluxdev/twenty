@@ -53,6 +53,9 @@ export type FormulaDefinitionRecord = {
   // this now means "last evaluation", not just "last value change" — see
   // recordEvaluationHeartbeat's carve-out).
   lastEvaluatedAt?: string | null;
+  // Resume point for a budget-bounded full-object recompute (ADR 0025). Empty
+  // string or null means "start from the first record".
+  scanCursor?: string | null;
 };
 
 export type RecomputeOutcome = {

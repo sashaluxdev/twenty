@@ -21,6 +21,7 @@ const BOOKKEEPING_FIELDS = new Set([
   'lastError',
   'status',
   'statusReason',
+  'scanCursor',
 ]);
 
 const isPureBookkeepingUpdate = (

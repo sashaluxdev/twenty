@@ -29,6 +29,7 @@ export const FORMULA_DEFINITION_FIELDS = {
   status: 'e3e1fcbf-c19d-4d24-a7cd-b7b1c7ad3c70',
   statusReason: '0e500f2b-30c2-489a-aee6-0d717e1e0418',
   order: '4f4cabaa-9983-4967-91f7-ef2367aa8b3c',
+  scanCursor: '8f2b6d14-7a35-4c9e-b0d8-3e61f4a72c95',
 } as const;
 
 export default defineObject({
@@ -225,6 +226,17 @@ export default defineObject({
         'What broke: the missing input (OFFLINE) or where in the chain the ' +
         'break is (UPSTREAM). System-managed.',
       icon: 'IconInfoCircle',
+      isUIEditable: false,
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.scanCursor,
+      type: FieldType.TEXT,
+      name: 'scanCursor',
+      label: 'Scan cursor',
+      description:
+        'Resume point for a full-object recompute that ran out of budget. ' +
+        'Empty when the last pass completed. System-managed.',
+      icon: 'IconBookmark',
       isUIEditable: false,
     },
     {
