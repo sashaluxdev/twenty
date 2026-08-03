@@ -75,6 +75,21 @@ describe('validateExpressionCore', () => {
     expect(result.valid).toBe(false);
     if (!result.valid) {
       expect(result.error).toMatch(/^Dependency cycle detected: /);
+      // The pre-refactor validateFormula returned dependencies alongside a
+      // cycle error, and CoreValidationResult's invalid branch was widened to
+      // keep carrying them (Task 2). Pin the payload so a later change can't
+      // silently drop it while leaving the rest of the suite green.
+      expect(result.dependencies).toEqual({
+        sameRecordFields: [],
+        crossRecordRefs: [
+          {
+            object: 'opportunity',
+            recordId: OPPORTUNITY_ID,
+            field: 'score',
+            fieldPath: 'score',
+          },
+        ],
+      });
     }
   });
 });

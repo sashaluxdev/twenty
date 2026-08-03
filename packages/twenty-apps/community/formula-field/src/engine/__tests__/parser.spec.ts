@@ -1025,6 +1025,18 @@ describe('parser concat and string primaries', () => {
   it('parses concat operands inside comparisons — & binds tighter than =', () => {
     const node = parse('IF(a & "-x" = code, 1, 0)');
     expect(node.type).toBe('if');
+    if (node.type === 'if' && node.condition.type === 'comparison') {
+      expect(node.condition.left).toEqual({
+        type: 'concat',
+        parts: [
+          { type: 'field', path: 'a' },
+          { type: 'string', value: '-x' },
+        ],
+      });
+      expect(node.condition.right).toEqual({ type: 'field', path: 'code' });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
+    }
   });
 
   it('still rejects string operands beside ordering operators', () => {
@@ -1099,5 +1111,31 @@ describe('parser hardening (DoS guards)', () => {
     const levels = 110;
     const deep = 'IF(0,'.repeat(levels) + '1' + ',0)'.repeat(levels);
     expect(() => parse(deep)).toThrowError(/max depth/);
+  });
+});
+
+describe('parser concat parse-depth boundary (pinned)', () => {
+  // parseConcat enters once per value context and then delegates straight
+  // into parseExpression, which enters again — so every nested value context
+  // now spends two depth frames instead of one, roughly halving the usable
+  // budget under MAX_PARSE_DEPTH (200). That's intended (Task 3 mirrors
+  // parseExpression's enter()/leave() discipline exactly rather than saving a
+  // frame), so pin both sides of the resulting boundary — measured directly
+  // by binary search, not derived — so a later change to the depth accounting
+  // doesn't silently shift it.
+  it('accepts 99 nested parentheses but rejects 100', () => {
+    const accepted = '('.repeat(99) + '1' + ')'.repeat(99);
+    expect(() => parse(accepted)).not.toThrow();
+
+    const rejected = '('.repeat(100) + '1' + ')'.repeat(100);
+    expect(() => parse(rejected)).toThrowError(/max depth/);
+  });
+
+  it('accepts 65 nested IFs but rejects 66', () => {
+    const accepted = 'IF(1,'.repeat(65) + '1' + ',0)'.repeat(65);
+    expect(() => parse(accepted)).not.toThrow();
+
+    const rejected = 'IF(1,'.repeat(66) + '1' + ',0)'.repeat(66);
+    expect(() => parse(rejected)).toThrowError(/max depth/);
   });
 });
