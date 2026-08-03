@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { type AstNode } from 'src/engine/ast';
+import { type AstNode, type ConcatNode } from 'src/engine/ast';
 import { FormulaError } from 'src/engine/errors';
 import { parse } from 'src/engine/parser';
 
@@ -311,8 +311,12 @@ describe('parser SUM()', () => {
     expect(() => parse('SUM(1, a = 2)')).toThrowError(/only allowed in the condition/);
   });
 
-  it('should reject a bare string literal inside a SUM argument', () => {
-    expect(() => parse('SUM("x")')).toThrowError(/String literals are only allowed/);
+  it('should accept a string literal as a SUM argument (value context)', () => {
+    // Summing text is a runtime type question, not a grammar one.
+    expect(parse('SUM("x")')).toEqual({
+      type: 'sum',
+      args: [{ type: 'string', value: 'x' }],
+    });
   });
 });
 
@@ -587,13 +591,18 @@ describe('parser IFBLANK (ADR 0017)', () => {
     });
   });
 
-  it('should reject a comparison or string literal inside an IFBLANK argument (value context)', () => {
+  it('should reject a comparison inside an IFBLANK argument (value context)', () => {
     expect(() => parse('IFBLANK(a > b, 0)')).toThrowError(
       /only allowed in the condition/,
     );
-    expect(() => parse('IFBLANK("x", 0)')).toThrowError(
-      /String literals are only allowed/,
-    );
+  });
+
+  it('should accept a string literal as an IFBLANK argument (value context)', () => {
+    expect(parse('IFBLANK(name, "unknown")')).toEqual({
+      type: 'ifblank',
+      value: { type: 'field', path: 'name' },
+      fallback: { type: 'string', value: 'unknown' },
+    });
   });
 });
 
@@ -700,13 +709,24 @@ describe('parser IFS sugar (ADR 0018)', () => {
     });
   });
 
-  it('rejects a string literal in a value slot (IFS values are value context)', () => {
-    expect(() => parse('IFS(a > 1, "x", 0)')).toThrowError(
-      /String literals are only allowed/,
-    );
-    expect(() => parse('IFS(a > 1, 2, "x")')).toThrowError(
-      /String literals are only allowed/,
-    );
+  it('accepts a string literal in a value slot and in the trailing default', () => {
+    expect(parse('IFS(a > 1, "x", 0)')).toEqual({
+      type: 'if',
+      condition: {
+        type: 'comparison',
+        operator: '>',
+        left: { type: 'field', path: 'a' },
+        right: { type: 'number', value: 1 },
+      },
+      then: { type: 'string', value: 'x' },
+      else: { type: 'number', value: 0 },
+    });
+
+    const withStringDefault = parse('IFS(a > 1, 2, "x")');
+    expect(withStringDefault.type).toBe('if');
+    if (withStringDefault.type === 'if') {
+      expect(withStringDefault.else).toEqual({ type: 'string', value: 'x' });
+    }
   });
 
   it('rejects a comparison in the trailing default slot (the default is a value, not a condition)', () => {
@@ -821,13 +841,19 @@ describe('parser SWITCH sugar (ADR 0018)', () => {
     });
   });
 
-  it('rejects a string literal in a value slot (SWITCH values are value context)', () => {
-    expect(() => parse('SWITCH(s, "a", "x", 0)')).toThrowError(
-      /String literals are only allowed/,
-    );
-    expect(() => parse('SWITCH(s, "a", 1, "x")')).toThrowError(
-      /String literals are only allowed/,
-    );
+  it('accepts a string literal in a value slot and in the trailing default', () => {
+    const withStringValue = parse('SWITCH(s, "a", "x", 0)');
+    expect(withStringValue.type).toBe('if');
+    if (withStringValue.type === 'if') {
+      expect(withStringValue.then).toEqual({ type: 'string', value: 'x' });
+      expect(withStringValue.else).toEqual({ type: 'number', value: 0 });
+    }
+
+    const withStringDefault = parse('SWITCH(s, "a", 1, "x")');
+    expect(withStringDefault.type).toBe('if');
+    if (withStringDefault.type === 'if') {
+      expect(withStringDefault.else).toEqual({ type: 'string', value: 'x' });
+    }
   });
 
   it('rejects an unterminated SWITCH when the closing parenthesis is missing', () => {
@@ -872,7 +898,7 @@ describe('parser comparison confinement (transient comparisons)', () => {
   });
 });
 
-describe('parser string literals (comparison operands only)', () => {
+describe('parser string literals', () => {
   it('parses a string on the right of an equality inside an IF condition', () => {
     const ast = parse('IF(stage = "QUALIFIED", 1, 0)');
     if (ast.type === 'if' && ast.condition.type === 'comparison') {
@@ -930,84 +956,103 @@ describe('parser string literals (comparison operands only)', () => {
     }
   });
 
-  it('rejects a string used in arithmetic', () => {
-    try {
-      parse('1 + "a"');
-      throw new Error('should have thrown');
-    } catch (error) {
-      expect(error).toBeInstanceOf(FormulaError);
-      expect((error as FormulaError).code).toBe('PARSE_ERROR');
-      expect((error as FormulaError).message).toBe(
-        'String literals are only allowed beside = or != inside an IF condition',
-      );
+  it('accepts a string in arithmetic (typing is the evaluator\'s job)', () => {
+    expect(parse('1 + "a"')).toEqual({
+      type: 'binary',
+      operator: '+',
+      left: { type: 'number', value: 1 },
+      right: { type: 'string', value: 'a' },
+    });
+  });
+
+  it('accepts a string in an IF branch', () => {
+    const ast = parse('IF(c, "a", 0)');
+    expect(ast.type).toBe('if');
+    if (ast.type === 'if') {
+      expect(ast.then).toEqual({ type: 'string', value: 'a' });
     }
   });
 
-  it('rejects a string in an IF branch', () => {
-    try {
-      parse('IF(c, "a", 0)');
-      throw new Error('should have thrown');
-    } catch (error) {
-      expect(error).toBeInstanceOf(FormulaError);
-      expect((error as FormulaError).code).toBe('PARSE_ERROR');
-      expect((error as FormulaError).message).toBe(
-        'String literals are only allowed beside = or != inside an IF condition',
-      );
+  it('accepts a bare string at the top level', () => {
+    expect(parse('"a"')).toEqual({ type: 'string', value: 'a' });
+  });
+
+  it('rejects a top-level comparison with a string operand as a comparison, not a string, error', () => {
+    // The string itself is fine now; the comparison is still condition-only.
+    expect(() => parse('("a") = stage')).toThrowError(
+      /only allowed in the condition/,
+    );
+  });
+
+  it('accepts a bare string condition (truthiness is resolved at evaluation)', () => {
+    const ast = parse('IF("a", 1, 2)');
+    expect(ast.type).toBe('if');
+    if (ast.type === 'if') {
+      expect(ast.condition).toEqual({ type: 'string', value: 'a' });
     }
   });
 
-  it('rejects a bare string at the top level', () => {
-    try {
-      parse('"a"');
-      throw new Error('should have thrown');
-    } catch (error) {
-      expect(error).toBeInstanceOf(FormulaError);
-      expect((error as FormulaError).code).toBe('PARSE_ERROR');
-      expect((error as FormulaError).message).toBe(
-        'String literals are only allowed beside = or != inside an IF condition',
-      );
+  it('accepts a parenthesised string operand inside an IF condition', () => {
+    const ast = parse('IF(("a") = stage, 1, 0)');
+    expect(ast.type).toBe('if');
+    if (ast.type === 'if' && ast.condition.type === 'comparison') {
+      expect(ast.condition.left).toEqual({ type: 'string', value: 'a' });
+      expect(ast.condition.right).toEqual({ type: 'field', path: 'stage' });
+    } else {
+      throw new Error('expected an if node with a comparison condition');
     }
   });
 
-  it('rejects a parenthesised string even beside equality', () => {
-    try {
-      parse('("a") = stage');
-      throw new Error('should have thrown');
-    } catch (error) {
-      expect(error).toBeInstanceOf(FormulaError);
-      expect((error as FormulaError).code).toBe('PARSE_ERROR');
-      expect((error as FormulaError).message).toBe(
-        'String literals are only allowed beside = or != inside an IF condition',
-      );
-    }
+  it('preserves an empty string literal as an empty StringNode', () => {
+    expect(parse('""')).toEqual({ type: 'string', value: '' });
+  });
+});
+
+describe('parser concat and string primaries', () => {
+  it('parses & left-associative at loosest value precedence', () => {
+    const node = parse('a & "INV" & 1 + amount');
+    expect(node.type).toBe('concat');
+    expect((node as ConcatNode).parts).toHaveLength(3);
+    expect((node as ConcatNode).parts[2].type).toBe('binary'); // + binds tighter than &
   });
 
-  it('rejects a bare string condition when no comparison operator follows', () => {
-    try {
-      parse('IF("a", 1, 2)');
-      throw new Error('should have thrown');
-    } catch (error) {
-      expect(error).toBeInstanceOf(FormulaError);
-      expect((error as FormulaError).code).toBe('PARSE_ERROR');
-      expect((error as FormulaError).message).toBe(
-        'String literals are only allowed beside = or != inside an IF condition',
-      );
-      // Deliberate: the error points at the literal's opening quote (index 3),
-      // not at the token after it (the comma at index 6).
-      expect((error as FormulaError).position).toBe(3);
-    }
+  it('allows string literals in any value position', () => {
+    expect(parse('"hello"').type).toBe('string');
+    expect(parse('IF(amount > 5, "Hot", "Cold")').type).toBe('if');
+    expect(parse('IFBLANK(name, "unknown")').type).toBe('ifblank');
   });
 
-  it('rejects a parenthesised string operand inside an IF condition', () => {
-    try {
-      parse('IF(("a") = stage, 1, 0)');
-      throw new Error('should have thrown');
-    } catch (error) {
-      expect(error).toBeInstanceOf(FormulaError);
-      expect((error as FormulaError).code).toBe('PARSE_ERROR');
-      expect((error as FormulaError).message).toBe(
-        'String literals are only allowed beside = or != inside an IF condition',
-      );
+  it('parses concat operands inside comparisons — & binds tighter than =', () => {
+    const node = parse('IF(a & "-x" = code, 1, 0)');
+    expect(node.type).toBe('if');
+  });
+
+  it('still rejects string operands beside ordering operators', () => {
+    expect(() => parse('IF("a" < "b", 1, 0)')).toThrow(
+      'Strings support only = and != comparisons',
+    );
+  });
+
+  it('does not treat && as a boolean operator', () => {
+    // Two concat operators in a row: the second has no left operand, so this
+    // fails on the missing operand rather than being read as a boolean AND.
+    expect(() => parse('a && b')).toThrowError(/Unexpected token "&"/);
+  });
+
+  it('parses a concatenation in every value context', () => {
+    expect(parse('SUM(a & "x", b)').type).toBe('sum');
+    expect(parse('IFBLANK(a & "x", "none")').type).toBe('ifblank');
+    expect(parse('IF(ISBLANK(a & "x"), 1, 0)').type).toBe('if');
+    expect(parse('IFS(a > 1, b & "x", "none")').type).toBe('if');
+    expect(parse('SWITCH(a & "x", "k", 1, 0)').type).toBe('if');
+    expect(parse('(a & "x")').type).toBe('concat');
+  });
+
+  it('lets parentheses regroup a concatenation below an arithmetic operator', () => {
+    const node = parse('(a & "x") + 1');
+    expect(node.type).toBe('binary');
+    if (node.type === 'binary') {
+      expect(node.left.type).toBe('concat');
     }
   });
 });

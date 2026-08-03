@@ -14,6 +14,7 @@ export type TokenType =
   | 'STAR'
   | 'SLASH'
   | 'PERCENT'
+  | 'AMPERSAND'
   | 'LPAREN'
   | 'RPAREN'
   | 'COMMA'
@@ -310,6 +311,10 @@ const SINGLE_CHAR_TOKENS: Record<string, TokenType> = {
   '*': 'STAR',
   '/': 'SLASH',
   '%': 'PERCENT',
+  // Concatenation. Single-char with no lookahead on purpose: there is no '&&'
+  // in the grammar, so a doubled ampersand parses as two concat operators and
+  // fails on the missing operand rather than being mistaken for a boolean AND.
+  '&': 'AMPERSAND',
   '(': 'LPAREN',
   ')': 'RPAREN',
   ',': 'COMMA',

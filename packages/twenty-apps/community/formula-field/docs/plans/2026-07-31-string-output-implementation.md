@@ -342,7 +342,7 @@ export type ConcatNode = {
 7. Tokenizer hardening test `tokenizer.spec.ts:227-232`: remove `'&'` from the must-reject list and add a positive case asserting `1 & 2` tokenizes to `NUMBER AMPERSAND NUMBER EOF`. Update the stale comment in `fuzz.spec.ts:21-23` (the fuzz invariant itself still holds).
 8. Update the grammar comment block (`parser.ts:9-57`) to the new precedence order: parens/primaries, unary, `* / %`, `+ -`, `&`, comparisons (condition slots only).
 
-- [ ] **Step 1: Write the failing tests** — in `parser.spec.ts`, new describe `parser concat and string primaries`:
+- [x] **Step 1: Write the failing tests** — in `parser.spec.ts`, new describe `parser concat and string primaries`:
 
 ```ts
 it('parses & left-associative at loosest value precedence', () => {
@@ -370,11 +370,11 @@ it('still rejects string operands beside ordering operators', () => {
 
 And in `tokenizer.spec.ts` / `dependencies.spec.ts` the cases from constraints 6–7 (dependencies of `a & [company:id:name]` include both refs; `usesToday('TODAY() & ""')` is true).
 
-- [ ] **Step 2: Run and verify failures** — `node /home/sasha_shin/twenty/node_modules/vitest/vitest.mjs run src/engine` — new tests fail with tokenize/parse errors; the two known-breaking existing tests (`tokenizer.spec.ts:227`, old string-rejection parser tests in the `:875` describe) show which legacy assertions to update.
-- [ ] **Step 3: Implement** per constraints 1–8. Legacy parser tests that assert the old rejections (`parser string literals (comparison operands only)` describe) are rewritten to assert the new acceptance.
-- [ ] **Step 4: Engine subset green** — expected: 306 from T1, minus rewritten assertions, plus new ones; report the exact count. **Note:** evaluator tests still pass because a `ConcatNode` reaching the evaluator hits the `default:` exhaustiveness throw — concat *evaluation* is T5; do not add evaluator cases here.
-- [ ] **Step 5: Whole suite + lint + typecheck** — `dependencies.ts` switch totality means `tsc` failing is the signal you missed a switch.
-- [ ] **Step 6: Commit** — `feat(formula-field): & token, concat parse tier, string literals as primaries`
+- [x] **Step 2: Run and verify failures** — `node /home/sasha_shin/twenty/node_modules/vitest/vitest.mjs run src/engine` — new tests fail with tokenize/parse errors; the two known-breaking existing tests (`tokenizer.spec.ts:227`, old string-rejection parser tests in the `:875` describe) show which legacy assertions to update.
+- [x] **Step 3: Implement** per constraints 1–8. Legacy parser tests that assert the old rejections (`parser string literals (comparison operands only)` describe) are rewritten to assert the new acceptance.
+- [x] **Step 4: Engine subset green** — expected: 306 from T1, minus rewritten assertions, plus new ones; report the exact count. **Note:** evaluator tests still pass because a `ConcatNode` reaching the evaluator hits the `default:` exhaustiveness throw — concat *evaluation* is T5; do not add evaluator cases here.
+- [x] **Step 5: Whole suite + lint + typecheck** — `dependencies.ts` switch totality means `tsc` failing is the signal you missed a switch.
+- [x] **Step 6: Commit** — `feat(formula-field): & token, concat parse tier, string literals as primaries`
 
 ---
 
