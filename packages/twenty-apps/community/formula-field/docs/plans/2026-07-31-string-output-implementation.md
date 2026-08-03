@@ -146,7 +146,7 @@ export const MAX_COMPUTED_TEXT_LENGTH = 10_000;
 export const formatNumberAsText: (value: number) => string;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/__tests__/text-format.spec.ts`:
 
@@ -183,12 +183,12 @@ describe('formatNumberAsText', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and verify it fails**
+- [x] **Step 2: Run it and verify it fails**
 
 Run: `node /home/sasha_shin/twenty/node_modules/vitest/vitest.mjs run src/engine/__tests__/text-format.spec.ts`
 Expected: FAIL — cannot resolve `src/engine/text-format`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/text-format.ts`:
 
@@ -213,7 +213,7 @@ export const formatNumberAsText = (value: number): string => {
 };
 ```
 
-- [ ] **Step 4: Add the error code**
+- [x] **Step 4: Add the error code**
 
 In `src/engine/errors.ts`, extend the union (after `'CYCLE_DETECTED'`):
 
@@ -231,12 +231,12 @@ export type FormulaErrorCode =
 
 No switch anywhere is exhaustive over this union (verified), so this is additive-safe.
 
-- [ ] **Step 5: Run the new spec, then the whole engine subset**
+- [x] **Step 5: Run the new spec, then the whole engine subset**
 
 Run: `node /home/sasha_shin/twenty/node_modules/vitest/vitest.mjs run src/engine`
 Expected: 301 + 5 = 306 passed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/engine/text-format.ts src/engine/__tests__/text-format.spec.ts src/engine/errors.ts
