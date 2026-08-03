@@ -1,19 +1,14 @@
 import {
-  type AstNode,
-  bareReferenceOf,
-  collectStringComparisonRefs,
   detectCycle,
-  extractDependenciesFromAst,
   type FormulaDependencies,
   type FormulaTarget,
-  isFormulaError,
-  parse,
 } from 'src/engine';
-import {
-  ENGINE_FAMILY_KINDS,
-  isMirrorTargetKind,
-} from 'src/logic-functions/lib/mirror-kinds';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
+import {
+  toValidationTarget,
+  type ValidatableFormula,
+  validateExpressionCore,
+} from 'src/logic-functions/lib/validation-core';
 
 // Validates a formula at save time (ADR 0005): parse the expression, extract its
 // dependency index, and check that adding it to the existing set of formulas
@@ -33,29 +28,23 @@ export type SaveValidationResult =
       dependencies?: FormulaDependencies;
     };
 
+const toValidatable = (
+  formula: Pick<
+    FormulaDefinitionRecord,
+    'targetObject' | 'targetField' | 'expression'
+  >,
+): ValidatableFormula => ({
+  targetObject: formula.targetObject ?? '',
+  targetField: formula.targetField ?? '',
+  expression: formula.expression ?? '',
+});
+
 const toTarget = (
   formula: Pick<
     FormulaDefinitionRecord,
     'targetObject' | 'targetField' | 'expression'
   >,
-): FormulaTarget | null => {
-  const object = formula.targetObject ?? '';
-  const field = formula.targetField ?? '';
-  const expression = formula.expression ?? '';
-  if (!object || !field) {
-    return null;
-  }
-  try {
-    return {
-      object,
-      field,
-      dependencies: extractDependenciesFromAst(parse(expression)),
-    };
-  } catch {
-    // A sibling formula that itself fails to parse contributes no edges.
-    return null;
-  }
-};
+): FormulaTarget | null => toValidationTarget(toValidatable(formula));
 
 // Target object/field API names must be plain camelCase identifiers — the same
 // shape the wizard's isValidFieldName enforces and the GraphQL serializer
@@ -151,97 +140,25 @@ export const validateFormula = ({
     };
   }
 
-  // 1. Parse + dependency extraction.
-  let ast: AstNode;
-  let dependencies: FormulaDependencies;
-  try {
-    ast = parse(expression);
-    dependencies = extractDependenciesFromAst(ast);
-  } catch (error) {
-    return {
-      valid: false,
-      error: isFormulaError(error)
-        ? `${error.code}: ${error.message}`
-        : String(error),
-    };
+  // Exclude any existing record with the same id (this IS the candidate) so an
+  // update re-evaluates cleanly; the shared core takes the graph pre-filtered.
+  const result = validateExpressionCore({
+    expression,
+    hostObject: object,
+    targetField: field,
+    targetFieldType: targetFieldType ?? undefined,
+    fieldKinds,
+    otherFormulas: existingFormulas
+      .filter((formula) => formula.id !== candidate.id)
+      .map(toValidatable),
+  });
+
+  if (result.valid) {
+    return { valid: true, dependencies: result.dependencies };
   }
-
-  // 1b. String-comparison field-kind check. A string comparison against a
-  //     same-record field whose kind cannot hold a string (anything but SELECT /
-  //     TEXT) is rejected here — between dependency extraction and cycle
-  //     detection. Unknown fields and cross-refs pass (they resolve to null at
-  //     runtime). Skipped entirely when the target object's kinds are absent.
-  const targetObjectFieldKinds = fieldKinds?.(object);
-  if (targetObjectFieldKinds) {
-    for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
-      const rootField = path.split('.')[0];
-      const kind = targetObjectFieldKinds.get(rootField);
-      if (kind !== undefined && kind !== 'SELECT' && kind !== 'TEXT') {
-        return {
-          valid: false,
-          error: `String comparison against "${rootField}" is not supported (field type ${kind}; only SELECT and TEXT fields)`,
-        };
-      }
-    }
-  }
-
-  // 1c. Mirror validation. A non-engine-family target field is in "mirror mode":
-  //     its value is a typed raw passthrough of a single bare whole-field ref,
-  //     not an engine expression. A null/blank target kind defaults to NUMBER
-  //     (engine family, same rule as value-io's targetFieldKind), so it keeps
-  //     today's engine path and skips these checks.
-  if (
-    targetFieldType != null &&
-    targetFieldType !== '' &&
-    !ENGINE_FAMILY_KINDS.has(targetFieldType)
-  ) {
-    // (a) The target kind is not mirrorable at all.
-    if (!isMirrorTargetKind(targetFieldType)) {
-      return {
-        valid: false,
-        error: `Field kind ${targetFieldType} cannot be mirrored`,
-      };
-    }
-    // (b) Mirrorable target, but the expression is not a bare whole-field ref
-    //     (an operator, function, literal, IF, or dotted subpath).
-    const bare = bareReferenceOf(ast);
-    if (bare === null) {
-      return {
-        valid: false,
-        error: `Only a plain field reference can be mirrored onto a ${targetFieldType} field`,
-      };
-    }
-    // (c) Source kind known via the accessor and different from the target kind
-    //     (v1 is strict same-kind). An unknown source kind (accessor gap) passes.
-    const sourceObject = bare.kind === 'same' ? object : bare.ref.object;
-    const sourceField = bare.kind === 'same' ? bare.field : bare.ref.fieldPath;
-    const sourceKind = fieldKinds?.(sourceObject)?.get(sourceField);
-    if (sourceKind !== undefined && sourceKind !== targetFieldType) {
-      return {
-        valid: false,
-        error: `Cannot mirror ${sourceKind} field "${sourceField}" onto a ${targetFieldType} field (kinds must match)`,
-      };
-    }
-  }
-
-  // 2. Cycle detection over the full graph (existing formulas + candidate).
-  //    Exclude any existing record with the same id (this IS the candidate) so
-  //    an update re-evaluates cleanly.
-  const others = existingFormulas
-    .filter((formula) => formula.id !== candidate.id)
-    .map(toTarget)
-    .filter((target): target is FormulaTarget => target !== null);
-
-  const graph: FormulaTarget[] = [...others, { object, field, dependencies }];
-
-  const cycle = detectCycle(graph);
-  if (cycle.hasCycle) {
-    return {
-      valid: false,
-      error: `Dependency cycle detected: ${cycle.cycle.join(' -> ')}`,
-      dependencies,
-    };
-  }
-
-  return { valid: true, dependencies };
+  // Dependencies survive a cycle rejection (parsing succeeded) but not a parse
+  // or kind rejection — keep the key absent rather than undefined in that case.
+  return result.dependencies === undefined
+    ? { valid: false, error: result.error }
+    : { valid: false, error: result.error, dependencies: result.dependencies };
 };

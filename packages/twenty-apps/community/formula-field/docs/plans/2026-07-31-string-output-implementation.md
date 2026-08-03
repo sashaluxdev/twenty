@@ -286,24 +286,24 @@ export const validateExpressionCore = (args: {
 4. The backend-only target-name regex check (`save-validation.ts:141-152`) stays in `save-validation.ts`, before the core call. `validateFormula`'s public signature and `SaveValidationResult` do not change; `validateExpression`'s positional signature does not change (it returns `result.valid ? null : result.error`).
 5. The frontend's divergent cycle message (`Dependency cycle:` without "detected") unifies to the backend wording — update the one assertion in `validate-expression.spec.ts` that pins it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/logic-functions/lib/__tests__/validation-core.spec.ts` with four cases (mirror the fixtures already used in `handlers.spec.ts:280-344`): a valid numeric expression returns `{valid: true}` with dependencies; a string comparison against a NUMBER-kind field returns the exact message `String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)`; a non-bare-ref expression targeting a TEXT field returns the mirror-validation error; a two-formula cycle returns a message starting `Dependency cycle detected:`.
 
-- [ ] **Step 2: Run it and verify it fails** (module not found).
+- [x] **Step 2: Run it and verify it fails** (module not found).
 
-- [ ] **Step 3: Implement the module, rewire both wrappers**
+- [x] **Step 3: Implement the module, rewire both wrappers**
 
 After the move, `save-validation.ts` keeps: name checks → core call → map `CoreValidationResult` into `SaveValidationResult`. `validate-expression.ts` keeps: its definition filtering → core call → `valid ? null : error`. Delete the duplicated blocks from both.
 
-- [ ] **Step 4: Run the full unit suite**
+- [x] **Step 4: Run the full unit suite**
 
 Run: `node /home/sasha_shin/twenty/node_modules/vitest/vitest.mjs run`
 Expected: 962 + T1's 5 + new core specs, with exactly **one** pre-existing assertion updated (the frontend cycle message). Any other diff in behavior is a bug in the move.
 
-- [ ] **Step 5: Lint + typecheck** (`npm run lint`, `npx tsc --noEmit`).
+- [x] **Step 5: Lint + typecheck** (`npm run lint`, `npx tsc --noEmit`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A src/logic-functions/lib src/front-components/lib
