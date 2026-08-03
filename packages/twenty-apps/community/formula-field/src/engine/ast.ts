@@ -1,12 +1,12 @@
 import { type CrossRefValue } from 'src/engine/tokenizer';
 
-// AST for the arithmetic grammar. Deliberately tiny: numbers, variable
+// AST for the arithmetic grammar. Deliberately tiny: numbers, strings, variable
 // references (same-record field or cross-record), unary +/-, binary + - * / %,
-// comparisons (confined to IF conditions by the parser), and IF conditionals.
-// There is still no general call node and no member-access node; the one string
-// node is inert data confined to = / != comparison operands, never a callable.
-// IF is static dispatch over three fixed sub-expressions, not code execution,
-// so the grammar still cannot express running arbitrary code.
+// concatenation, comparisons (confined to IF conditions by the parser), and IF
+// conditionals. There is still no general call node and no member-access node;
+// a string node is inert data, never a callable. IF is static dispatch over
+// three fixed sub-expressions, not code execution, so the grammar still cannot
+// express running arbitrary code.
 
 export type BinaryOperator = '+' | '-' | '*' | '/' | '%';
 export type UnaryOperator = '+' | '-';
@@ -18,9 +18,9 @@ export type NumberNode = {
   value: number;
 };
 
-// A double-quoted string literal. The parser only ever produces one as a direct
-// operand of an = / != comparison inside an IF condition (enforced structurally,
-// see parser.ts), so, like ComparisonNode, it never reaches a numeric value slot.
+// A double-quoted string literal. Legal in any value position now that the
+// engine's value domain includes text; the parser still rejects one beside an
+// ordering operator, where it could only ever be a type error.
 export type StringNode = {
   type: 'string';
   value: string;
@@ -48,6 +48,15 @@ export type BinaryNode = {
   operator: BinaryOperator;
   left: AstNode;
   right: AstNode;
+};
+
+// Text concatenation (`a & "-" & b`), the loosest tier of the value grammar.
+// The parser flattens a left-associative chain into ONE node with 2+ parts, so
+// nesting depth does not grow with chain length; parts are evaluated left to
+// right and each is coerced to text at use.
+export type ConcatNode = {
+  type: 'concat';
+  parts: AstNode[];
 };
 
 // Transient node: the parser only ever produces a comparison as the direct
@@ -150,6 +159,7 @@ export type AstNode =
   | CrossRefNode
   | UnaryNode
   | BinaryNode
+  | ConcatNode
   | ComparisonNode
   | IfNode
   | TodayNode

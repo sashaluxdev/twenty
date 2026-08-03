@@ -18,9 +18,10 @@ const makeRng = (seed: number) => {
   };
 };
 
-// The full byte range the fuzzer draws from — includes every operator, digits,
-// letters, brackets, and a pile of characters the tokenizer must reject
-// (quotes, semicolons, unicode homoglyphs, control chars).
+// The full byte range the fuzzer draws from — includes every operator (`&`
+// among them since it became concatenation), digits, letters, brackets, and a
+// pile of characters the tokenizer must reject (single quotes, semicolons,
+// unicode homoglyphs, control chars).
 const ALPHABET = [
   ...'0123456789',
   ...'+-*/%()[],',
@@ -74,8 +75,9 @@ describe('tokenizer fuzzing', () => {
     const rng = makeRng(0x1234);
     // '=', '<', '>' left this list when comparisons landed; '"' left when string
     // literals landed (a lone '"' now opens a string and dies as "unterminated",
-    // still a FormulaError). A lone '!' is still forbidden (only "!=" is legal).
-    const forbidden = ";{}$`'\\!&|^~#@?";
+    // still a FormulaError); '&' left when concatenation landed. A lone '!' is
+    // still forbidden (only "!=" is legal).
+    const forbidden = ";{}$`'\\!|^~#@?";
 
     for (let iteration = 0; iteration < 2000; iteration += 1) {
       const bad = forbidden[Math.floor(rng() * forbidden.length)];
@@ -93,8 +95,10 @@ describe('tokenizer fuzzing', () => {
     // branches are themselves generated expressions, so both are finite).
     const genNumber = () => String(1 + Math.floor(rng() * 9));
     const COMPARE_OPS = ['>', '<', '>=', '<=', '=', '==', '!='];
-    // String literals are legal ONLY as a direct operand of = / != inside an IF
-    // condition, so quoted operands are produced only here in genCondition.
+    // String literals are legal in any value position now, but the generator
+    // keeps emitting them only as = / != operands in genCondition: every other
+    // slot it fills must evaluate to a finite number for the round-trip
+    // assertion below to hold.
     const STRING_CHARS = [...'abcXYZ 0129._[]'];
     const genString = (): string => {
       const length = Math.floor(rng() * 6);

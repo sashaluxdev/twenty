@@ -182,6 +182,19 @@ describe('dependency extraction', () => {
     expect(deps.sameRecordFields).toEqual(['a', 'x']);
     expect(deps.crossRecordRefs).toEqual([]);
   });
+
+  it('should union every operand of a concatenation', () => {
+    const deps = extractDependencies(`a & "-" & [company:${UUID}:name]`);
+    expect(deps.sameRecordFields).toEqual(['a']);
+    expect(deps.crossRecordRefs).toEqual([
+      {
+        object: 'company',
+        recordId: UUID,
+        field: 'name',
+        fieldPath: 'name',
+      },
+    ]);
+  });
 });
 
 describe('usesToday', () => {
@@ -254,6 +267,11 @@ describe('usesToday', () => {
   it('returns false for a ladder with no TODAY() (ADR 0018)', () => {
     expect(usesToday(parse('IFS(a > 1, 2, 0)'))).toBe(false);
     expect(usesToday(parse('SWITCH(x, 1, 2, 3, 4, 0)'))).toBe(false);
+  });
+
+  it('detects TODAY() inside a concatenation operand', () => {
+    expect(usesToday(parse('TODAY() & ""'))).toBe(true);
+    expect(usesToday(parse('a & "x"'))).toBe(false);
   });
 });
 
@@ -347,6 +365,23 @@ describe('collectStringComparisonRefs', () => {
     const refs = collectStringComparisonRefs(parse('SWITCH(tier, 1, 10, 2, 20, 0)'));
     expect(refs.sameRecordPaths).toEqual([]);
     expect(refs.crossRefs).toEqual([]);
+  });
+
+  it('carries no string-kind constraint for a concat operand', () => {
+    // A concat is not a comparison, and a concat sitting beside a string
+    // literal in a comparison is not a direct field operand either — neither
+    // shape constrains the field kinds its parts read.
+    expect(collectStringComparisonRefs(parse('a & "-x"')).sameRecordPaths).toEqual([]);
+    expect(
+      collectStringComparisonRefs(parse('IF(a & "-" = "x", 1, 0)')).sameRecordPaths,
+    ).toEqual([]);
+  });
+
+  it('still reaches a string comparison nested inside a concat operand', () => {
+    const refs = collectStringComparisonRefs(
+      parse('IF(status = "won", 1, 0) & "-x"'),
+    );
+    expect(refs.sameRecordPaths).toEqual(['status']);
   });
 });
 

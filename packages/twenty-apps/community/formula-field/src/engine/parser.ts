@@ -6,42 +6,43 @@ import {
 import { FormulaError } from 'src/engine/errors';
 import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 
-// Recursive-descent parser implementing standard arithmetic precedence:
+// Recursive-descent parser. Precedence, loosest value tier first:
 //
+//   concat       := expression ('&' expression)*
 //   expression   := term (('+' | '-') term)*
 //   term         := unary (('*' | '/' | '%') unary)*
 //   unary        := ('+' | '-') unary | primary
-//   primary      := NUMBER | FIELD | CROSSREF | if | today | sum | ifblank
-//                 | ifs | switch | '(' expression ')'
-//   if           := IF '(' condition ',' expression ',' expression ')'
+//   primary      := NUMBER | STRING | FIELD | CROSSREF | if | today | sum
+//                 | ifblank | ifs | switch | '(' concat ')'
+//   if           := IF '(' condition ',' concat ',' concat ')'
 //   today        := TODAY '(' ')'
-//   sum          := SUM '(' expression (',' expression)* ')'
-//   ifblank      := IFBLANK '(' expression ',' expression ')'
-//   ifs          := IFS '(' condition ',' expression
-//                       (',' condition ',' expression)* (',' expression)? ')'
-//   switch       := SWITCH '(' operand (',' operand ',' expression)+
-//                       (',' expression)? ')'
-//   condition    := boolFunction | operand (compareOp operand)?
+//   sum          := SUM '(' concat (',' concat)* ')'
+//   ifblank      := IFBLANK '(' concat ',' concat ')'
+//   ifs          := IFS '(' condition ',' concat
+//                       (',' condition ',' concat)* (',' concat)? ')'
+//   switch       := SWITCH '(' concat (',' concat ',' concat)+
+//                       (',' concat)? ')'
+//   condition    := boolFunction | concat (compareOp concat)?
 //   boolFunction := AND '(' condition (',' condition)+ ')'
 //                 | OR  '(' condition (',' condition)+ ')'
 //                 | NOT '(' condition ')'
-//                 | ISBLANK '(' expression ')'
-//   operand      := STRING | expression        // STRING only as a =/!= operand
+//                 | ISBLANK '(' concat ')'
 //   compareOp    := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 //
 // Left-associative binary operators; unary binds tighter than binary but looser
-// than parentheses. Any leftover tokens after a complete expression are an error
-// (rejects trailing garbage like "1 2" or "a)").
+// than parentheses; '&' is looser than every arithmetic operator but tighter
+// than a comparison, so `a & "-" = code` compares the concatenation. Any
+// leftover tokens after a complete expression are an error (rejects trailing
+// garbage like "1 2" or "a)").
 //
 // Comparisons and the AND/OR/NOT/ISBLANK combinators are TRANSIENT: `condition`
 // is reachable ONLY as IF's first argument (and recursively inside a combinator's
-// arguments), so none of them can appear where a numeric value is expected (top
-// level, arithmetic, then/else branches, a comparison operand, or a SUM/IFBLANK
-// argument). That keeps booleans out of the engine's public number|null value
-// domain. Chained comparisons (`a > b > c`) are rejected — comparison is not
-// associative here. A STRING literal is legal ONLY as a direct =/!= operand at
-// the top of an IF condition (`operand := STRING | expression`); everywhere else
-// it is rejected.
+// arguments), so none of them can appear where a value is expected (top level,
+// arithmetic, then/else branches, a comparison operand, or a SUM/IFBLANK
+// argument). That keeps booleans out of the engine's public value domain.
+// Chained comparisons (`a > b > c`) are rejected — comparison is not associative
+// here. A STRING literal is a legal primary anywhere a value is, EXCEPT beside
+// an ordering operator, where it could only ever be a type error.
 // `IF`, `TODAY`, `SUM`, `IFBLANK`, `AND`, `OR`, `NOT`, `ISBLANK`, `IFS` and
 // `SWITCH` are reserved words (case-insensitive): a bare same-record field with
 // one of those names is no longer expressible; dotted paths like `if.x` /
@@ -117,16 +118,6 @@ class Parser {
     );
   }
 
-  // Raised wherever a string literal shows up outside a direct = / != operand —
-  // the mirror of comparisonOutsideConditionError for string placement.
-  private stringOutsideConditionError(token: Token): FormulaError {
-    return new FormulaError(
-      'PARSE_ERROR',
-      'String literals are only allowed beside = or != inside an IF condition',
-      token.position,
-    );
-  }
-
   // Raised when a condition-only combinator (AND/OR/NOT/ISBLANK) appears in a
   // value context — the error users hit most while learning, e.g. AND(a>1, b>2)
   // at the top level or IF(x>1, NOT(y), 0). Mirrors comparisonOutsideConditionError.
@@ -139,7 +130,7 @@ class Parser {
   }
 
   parse(): AstNode {
-    const node = this.parseExpression();
+    const node = this.parseConcat();
 
     const next = this.peek();
     if (next.type !== 'EOF') {
@@ -154,6 +145,30 @@ class Parser {
     }
 
     return node;
+  }
+
+  // The loosest value tier: every value context enters the grammar here, so a
+  // concatenation is expressible wherever a number is. A chain flattens into one
+  // ConcatNode rather than nesting, keeping `a & b & c & ...` at constant AST
+  // depth; a lone operand is returned unchanged so ASTs without '&' are
+  // byte-identical to what the pre-concat grammar produced.
+  private parseConcat(): AstNode {
+    this.enter();
+    const first = this.parseExpression();
+
+    if (this.peek().type !== 'AMPERSAND') {
+      this.leave();
+      return first;
+    }
+
+    const parts: AstNode[] = [first];
+    while (this.peek().type === 'AMPERSAND') {
+      this.advance();
+      parts.push(this.parseExpression());
+    }
+
+    this.leave();
+    return { type: 'concat', parts };
   }
 
   private parseExpression(): AstNode {
@@ -309,18 +324,18 @@ class Parser {
         this.advance();
         return { type: 'crossref', ref: token.crossRef! };
 
-      // A STRING in a value position (parens, arithmetic, IF branch, bare, or a
-      // function argument) always routes here and always rejects: string
-      // literals are legal ONLY when parseCondition consumes them directly as an
-      // = / != operand, so this case makes "direct operand only" structural.
       case 'STRING':
-        throw this.stringOutsideConditionError(token);
+        this.advance();
+        // An empty literal ("") carries stringValue '' — the ?? guards a token
+        // built without one, never a legitimately empty literal.
+        return { type: 'string', value: token.stringValue ?? '' };
 
       case 'LPAREN': {
         this.advance();
-        // Parenthesised sub-expression: recurse through parseExpression, which
-        // increments the parse-depth guard so nested "(((...)))" is bounded.
-        const inner = this.parseExpression();
+        // Parenthesised sub-expression: recurse through parseConcat (parens are
+        // a full value context, so `("a" & b) * 2` parses), which increments the
+        // parse-depth guard so nested "(((...)))" is bounded.
+        const inner = this.parseConcat();
         const closing = this.peek();
         if (closing.type !== 'RPAREN') {
           // Parentheses are a value context, so a comparison here (including a
@@ -373,18 +388,18 @@ class Parser {
   }
 
   private parseIf(): AstNode {
-    // IF arguments nest through parseExpression/parseCondition, but the IF
-    // frame itself must also count against parse depth so a chain of nested
-    // IFs is bounded the same way nested parentheses are.
+    // IF arguments nest through parseConcat/parseCondition, but the IF frame
+    // itself must also count against parse depth so a chain of nested IFs is
+    // bounded the same way nested parentheses are.
     this.enter();
     this.advance(); // the IF identifier
     this.advance(); // the '(' (presence checked by the caller)
 
     const condition = this.parseCondition();
     this.expectIfArgumentComma();
-    const thenBranch = this.parseExpression();
+    const thenBranch = this.parseConcat();
     this.expectIfArgumentComma();
-    const elseBranch = this.parseExpression();
+    const elseBranch = this.parseConcat();
 
     const closing = this.peek();
     if (closing.type !== 'RPAREN') {
@@ -428,10 +443,10 @@ class Parser {
 
   // SUM(expr1, ..., exprN) — a reserved variadic function (ADR 0016). Requires
   // at least one argument (zero args is a PARSE_ERROR). Each argument is a
-  // value-context expression parsed through parseExpression, so a comparison or
-  // string literal inside an argument routes to the same condition-only
-  // rejection it hits anywhere but an IF condition's top level. The SUM frame
-  // counts against MAX_PARSE_DEPTH like IF, so nested SUMs are bounded.
+  // value-context expression parsed through parseConcat, so a comparison inside
+  // an argument routes to the same condition-only rejection it hits anywhere but
+  // an IF condition's top level. The SUM frame counts against MAX_PARSE_DEPTH
+  // like IF, so nested SUMs are bounded.
   private parseSum(): AstNode {
     this.enter();
     this.advance(); // the SUM identifier
@@ -445,10 +460,10 @@ class Parser {
       );
     }
 
-    const args: AstNode[] = [this.parseExpression()];
+    const args: AstNode[] = [this.parseConcat()];
     while (this.peek().type === 'COMMA') {
       this.advance();
-      args.push(this.parseExpression());
+      args.push(this.parseConcat());
     }
 
     const closing = this.peek();
@@ -478,7 +493,7 @@ class Parser {
     this.advance(); // the IFBLANK identifier
     this.advance(); // the '(' (presence checked by the caller)
 
-    const value = this.parseExpression();
+    const value = this.parseConcat();
 
     const comma = this.peek();
     if (comma.type !== 'COMMA') {
@@ -493,7 +508,7 @@ class Parser {
     }
     this.advance();
 
-    const fallback = this.parseExpression();
+    const fallback = this.parseConcat();
 
     const closing = this.peek();
     if (closing.type !== 'RPAREN') {
@@ -554,7 +569,7 @@ class Parser {
   // IFS(cond1, value1, ..., [default]) — reserved value-context sugar (ADR 0018)
   // desugared entirely here into nested IfNodes. Each rung's condition parses via
   // parseCondition (so ADR 0017 AND/OR/NOT/ISBLANK work), each value via
-  // parseExpression. N even -> no default; N odd -> the last arg is the default.
+  // parseConcat. N even -> no default; N odd -> the last arg is the default.
   // One enter() per rung mirrors the desugared nested-IF frames, so a long ladder
   // trips MAX_PARSE_DEPTH exactly as the equivalent hand-written IF chain would.
   private parseIfs(): AstNode {
@@ -577,14 +592,13 @@ class Parser {
 
       if (this.peek().type === 'COMMA') {
         this.advance();
-        const value = this.parseExpression();
+        const value = this.parseConcat();
         this.enter();
         frames += 1;
         rungs.push({ condition, value });
       } else {
         // No comma after this arg: it is the trailing default (a value slot).
         // A comparison/combinator here is a condition in a value slot — reject.
-        // A lone string default already threw inside parseCondition.
         if (this.isConditionOnlyNode(condition)) {
           throw this.comparisonOutsideConditionError(argToken);
         }
@@ -623,9 +637,9 @@ class Parser {
   }
 
   // SWITCH(expr, key1, value1, ..., [default]) — reserved value-context sugar
-  // (ADR 0018) desugared into nested `IF(expr = key, value, ...)` IfNodes. `expr`
-  // and each `key` parse as comparison operands (parseConditionOperand: numeric
-  // expression or string literal), values/default via parseExpression. N even ->
+  // (ADR 0018) desugared into nested `IF(expr = key, value, ...)` IfNodes. Every
+  // slot — `expr`, each `key`, each value, the default — parses via parseConcat,
+  // the same value grammar every other value context uses. N even ->
   // the last arg is the default; N odd -> no default. `expr` is shared by
   // reference across every rung's comparison (pure, so re-evaluation is harmless;
   // dependency extraction dedupes) — see ADR 0018 caveat 1.
@@ -640,7 +654,7 @@ class Parser {
       throw new FormulaError('PARSE_ERROR', pairMessage, this.peek().position);
     }
 
-    const subject = this.parseConditionOperand();
+    const subject = this.parseConcat();
 
     if (this.peek().type !== 'COMMA') {
       throw new FormulaError('PARSE_ERROR', pairMessage, this.peek().position);
@@ -652,12 +666,11 @@ class Parser {
 
     for (;;) {
       this.advance(); // the comma before a key or the trailing default
-      const argToken = this.peek();
-      const key = this.parseConditionOperand();
+      const key = this.parseConcat();
 
       if (this.peek().type === 'COMMA') {
         this.advance();
-        const value = this.parseExpression();
+        const value = this.parseConcat();
         this.enter();
         frames += 1;
         rungs.push({
@@ -666,10 +679,6 @@ class Parser {
         });
       } else {
         // No comma after this arg: it is the trailing default (a value slot).
-        // A bare string literal is illegal as a value, mirroring parsePrimary.
-        if (key.type === 'string') {
-          throw this.stringOutsideConditionError(argToken);
-        }
         defaultNode = key;
         break;
       }
@@ -788,15 +797,15 @@ class Parser {
   }
 
   // ISBLANK(expr) — reserved condition-only function (ADR 0017), exactly 1
-  // VALUE-context argument (parsed through parseExpression), so a comparison or
-  // string literal inside it hits the same condition-only rejection as anywhere
-  // but an IF condition's top level. Blankness is resolved in the evaluator.
+  // VALUE-context argument (parsed through parseConcat), so a comparison inside
+  // it hits the same condition-only rejection as anywhere but an IF condition's
+  // top level. Blankness is resolved in the evaluator.
   private parseIsBlank(): AstNode {
     this.enter();
     this.advance(); // the ISBLANK identifier
     this.advance(); // the '('
 
-    const operand = this.parseExpression();
+    const operand = this.parseConcat();
 
     const closing = this.peek();
     if (closing.type !== 'RPAREN') {
@@ -822,25 +831,10 @@ class Parser {
     return { type: 'isblank', operand };
   }
 
-  // A comparison operand at the top of an IF condition. This is the ONLY place a
-  // string literal is legal: a leading STRING is consumed directly here, so it
-  // never reaches parsePrimary (which always rejects strings). Anything else is
-  // a plain arithmetic expression as before.
-  private parseConditionOperand(): AstNode {
-    const token = this.peek();
-
-    if (token.type === 'STRING') {
-      this.advance();
-      return { type: 'string', value: token.stringValue! };
-    }
-
-    return this.parseExpression();
-  }
-
   // The ONLY place a comparison may appear: the top level of IF's first
-  // argument. Operands are plain arithmetic expressions (or a bare string
-  // literal); a second comparison operator after a complete comparison is a
-  // chained comparison, rejected.
+  // argument. Operands are full value expressions (parseConcat), so a string
+  // literal or a concatenation is a legal operand; a second comparison operator
+  // after a complete comparison is a chained comparison, rejected.
   private parseCondition(): AstNode {
     this.enter();
 
@@ -881,30 +875,24 @@ class Parser {
       }
     }
 
-    // A string operand is exactly one token, so if `left` comes back as a
-    // StringNode this peeked token IS the literal — kept for error positions.
-    const leftToken = this.peek();
-    const left = this.parseConditionOperand();
+    const left = this.parseConcat();
 
     const operatorToken = this.peek();
     const operator = COMPARISON_TOKEN_TO_OPERATOR[operatorToken.type];
 
     if (operator === undefined) {
-      // Numeric condition (Excel truthiness): 0 = false, nonzero = true. A lone
-      // string here is not beside = / != (e.g. IF("a", 1, 2)), so it is
-      // illegal, reported at the literal's opening quote.
-      if (left.type === 'string') {
-        throw this.stringOutsideConditionError(leftToken);
-      }
+      // No operator: the value itself is the condition (Excel truthiness).
       this.leave();
       return left;
     }
 
     this.advance();
-    const right = this.parseConditionOperand();
+    const right = this.parseConcat();
 
-    // Strings compare only for (in)equality: an ordering operator with a string
-    // operand is a type error surfaced at the operator itself.
+    // Strings compare only for (in)equality: an ordering operator with a
+    // syntactic string operand is a type error surfaced at the operator itself.
+    // Only a DIRECT literal is provably text at parse time — a concat result or
+    // a field can be anything, so those are left to the evaluator.
     if (
       operator !== '=' &&
       operator !== '!=' &&
