@@ -94,8 +94,11 @@ export const validateExpressionCore = ({
   // 1b. String-comparison field-kind check. A string comparison against a
   //     same-record field whose kind cannot hold a string (anything but SELECT /
   //     TEXT) is rejected here — between dependency extraction and cycle
-  //     detection. Unknown fields and cross-refs pass (they resolve to null at
-  //     runtime). Skipped entirely when the target object's kinds are absent.
+  //     detection. Unknown fields and cross-refs are EXEMPT: their kinds live on
+  //     another object this check does not read, so a cross-record non-text
+  //     field in a text comparison is left to evaluate — typed equality makes it
+  //     simply false (accepted delta B6, ADR 0026), never an error. Skipped
+  //     entirely when the target object's kinds are absent.
   const targetObjectFieldKinds = fieldKinds?.(hostObject);
   if (targetObjectFieldKinds) {
     for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {

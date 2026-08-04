@@ -603,9 +603,11 @@ describe('evaluator typed value domain', () => {
   it('coerces numeric-shaped text at point of use in arithmetic', () => {
     const values = { zip: '01234' };
     expect(run('zip + 1', values)).toBe(1235);
+    // Unary is a numeric context too, so text coerces before the sign applies.
+    expect(run('-zip', values)).toBe(-1234);
     // Concatenation evaluation lands in the next task; until then it is
     // unhandled by the value switch.
-    expect(() => run('zip & 1', values)).toThrow();
+    expect(() => run('zip & 1', values)).toThrow(FormulaError);
   });
 
   it('treats empty text as non-numeric, not zero', () => {
@@ -625,6 +627,19 @@ describe('evaluator typed value domain', () => {
     // both operands went through the numeric resolver.
     expect(run('IF(a = b, 1, 0)', { a: 'won', b: 'won' })).toBe(1);
     expect(run('IF(a = b, 1, 0)', { a: 'won', b: 'lost' })).toBe(0);
+  });
+
+  it('compares a date-shaped cross-record value against a text literal as FALSE (B6)', () => {
+    // Accepted delta B6 (ADR 0026): a DATE/DATE_TIME cross-record ref resolves
+    // EAGERLY to its serial, so typed `=` against a date-shaped literal is a
+    // number-vs-string mismatch — false, where the old raw channel could match
+    // the string. Repairing it would need kind-aware resolution (the reserved
+    // escape hatch) or coercing equality, which contradicts design-locked B1.
+    const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    const key = `[company:${uuid}:closeDate]`;
+    const serial = Date.UTC(2026, 0, 15) / 86_400_000;
+    expect(run(`IF(${key} = "2026-01-15", 1, 0)`, { [key]: serial })).toBe(0);
+    expect(run(`IF(${key} != "2026-01-15", 1, 0)`, { [key]: serial })).toBe(1);
   });
 
   it('orders text fields by their numeric value at point of use', () => {
@@ -697,8 +712,10 @@ describe('evaluator string comparisons (typed value domain)', () => {
   });
 
   it('throws UNKNOWN_VARIABLE for an unresolvable field in a text comparison', () => {
-    // The single resolver puts a text comparison under the same typo protection
-    // as arithmetic; the old raw channel silently nulled the IF instead.
+    // Accepted delta B7 (ADR 0026), intentional not incidental: the single
+    // resolver puts a text comparison under the same typo protection as
+    // arithmetic, where the old string mode silently null-propagated to a blank
+    // result and hid the typo.
     try {
       run('IF(status = "active", 1, 0)', {});
       throw new Error('should have thrown');
