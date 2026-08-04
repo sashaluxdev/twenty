@@ -743,7 +743,7 @@ export const displayValue = (
   - `grep -n "'TEXT'" src/logic-functions/lib/mirror-kinds.ts` — TEXT appears only via `ENGINE_FAMILY`, not in `MIRRORABLE_KINDS`.
 - [x] Confirm zero diffs under `src/objects/` (`git diff main --stat -- src/objects` empty).
 - [x] Spot-check the flagship expression end-to-end in a unit test (exists from T7 Step 1): `aString & "INV" & 1+TODAY()` against a fake client writes the expected string.
-- [ ] Phase H review workflow (see Execution model): five parallel opus lenses, findings adversarially verified by sonnet skeptics; only confirmed findings come back as fix dispatches. The branch is done when Phase H returns no confirmed findings.
+- [x] Phase H review workflow (see Execution model): five parallel opus lenses, findings adversarially verified by sonnet skeptics; only confirmed findings come back as fix dispatches. The branch is done when Phase H returns no confirmed findings. (Ran 2026-08-04: 6 confirmed, 0 refuted by skeptics; fixed as H1-H7 in `dfe5050e06`/`20e2f3c42d`, re-review clean — see execution ledger.)
 
 Deployment to cloud (npm twenty-sdk on the hosted platform line), the formulahelp `reference.md` refresh (hard truth #1 — "formulas can never output text" — becomes false), and any workspace verification are **not** part of this plan and need explicit user approval.
 
