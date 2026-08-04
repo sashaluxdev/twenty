@@ -50,7 +50,8 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 // TODAY() resolves to the current epoch-day (ADR 0012) via a caller-supplied
 // evaluator option, not an engine-internal clock read. SUM(...) (ADR 0016)
 // totals its non-null arguments. IFBLANK(value, fallback) (ADR 0017) substitutes
-// a fallback for a null value; AND/OR/NOT/ISBLANK (ADR 0017) are condition-only
+// a fallback for a BLANK value — null, or empty/whitespace-only text after ADR
+// 0026 widened it; AND/OR/NOT/ISBLANK (ADR 0017) are condition-only
 // combinators — used in a value context they raise a dedicated error. IFS and
 // SWITCH (ADR 0018) are pure value-context sugar: they desugar during parsing
 // into nested IfNodes (a NullNode else when no default is given), so the AST the

@@ -129,11 +129,12 @@ export type IsBlankNode = {
 
 // IFBLANK(value, fallback) (ADR 0017). Unlike the four combinators above this is
 // an ordinary VALUE node (like SumNode) — legal anywhere a number is, including
-// inside an ISBLANK operand. Returns `value` unless it evaluates to null, else
+// inside an ISBLANK operand. Returns `value` unless it evaluates to BLANK, else
 // `fallback` (which may itself be null); BOTH are always evaluated (SUM
-// precedent — errors always fire). Substitutes on null ALONE, so text that is
-// empty or whitespace-only is returned as-is — deliberately asymmetric with
-// ISBLANK, which observes that text as blank.
+// precedent — errors always fire). ADR 0026 widened "blank" from null alone to
+// null OR empty/whitespace-only text, which removes the old asymmetry: IFBLANK
+// and ISBLANK now judge blankness by the same rule, so IFBLANK(note, "unknown")
+// substitutes for a TEXT field holding only spaces.
 export type IfBlankNode = {
   type: 'ifblank';
   value: AstNode;

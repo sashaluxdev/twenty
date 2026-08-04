@@ -1,5 +1,9 @@
 import { type AstNode } from 'src/engine/ast';
 import { FormulaError } from 'src/engine/errors';
+import {
+  formatNumberAsText,
+  MAX_COMPUTED_TEXT_LENGTH,
+} from 'src/engine/text-format';
 import { type CrossRefValue } from 'src/engine/tokenizer';
 
 // Pure interpreter over the AST. It knows NOTHING about the Twenty API — all
@@ -47,7 +51,14 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 //     — it OBSERVES blankness (null, or text that is empty/whitespace-only) and
 //     returns a boolean, never null, for a successfully evaluated argument.
 //   - IFBLANK(value, fallback) (ADR 0017) is a value node: returns value unless
-//     null, else fallback; both are always evaluated (SUM precedent).
+//     it is BLANK (null, or empty/whitespace-only text — ADR 0026 widened this
+//     from null alone), else fallback; both are always evaluated (SUM
+//     precedent). It now agrees with ISBLANK on what blank means.
+//   - `&` (concat, ADR 0026 delta D2) is the single exception to null
+//     propagation: a null part contributes '' instead of nulling the result, so
+//     an all-null concat is ''. Numbers render via formatNumberAsText (dates
+//     arrive as serials and render as such). The concatenated result is capped
+//     at MAX_COMPUTED_TEXT_LENGTH -> TEXT_TOO_LONG; nothing else is capped.
 
 export type VariableReference =
   | { kind: 'same'; path: string }
@@ -382,13 +393,41 @@ const evaluateNode = (
       return total;
     }
 
-    // ADR 0017: return `value` unless it is null, else `fallback`. BOTH are
-    // always evaluated (SUM precedent — an error in the fallback fires even when
-    // the value is non-null).
+    // ADR 0026 delta D2: `&` is the ONE place null coerces to '' instead of
+    // propagating — a name-plus-optional-suffix template must not blank out the
+    // whole result because one part is empty. Kleene propagation everywhere else
+    // is untouched, so an all-null concat is '' (a determined text), not null.
+    // All parts are ALWAYS evaluated (SUM precedent: an error in any part fires).
+    case 'concat': {
+      let result = '';
+      for (const part of node.parts) {
+        const value = evaluateNode(part, resolve, depth + 1, maxDepth, todayEpochDay);
+        if (value !== null) {
+          result += typeof value === 'number' ? formatNumberAsText(value) : value;
+        }
+        // Checked per part so a runaway chain cannot build an unbounded string
+        // before failing. The cap is a CONCAT-only guard: a long TEXT field
+        // flowing through a one-term formula or an IF branch is never capped,
+        // keeping mirror parity with the source field.
+        if (result.length > MAX_COMPUTED_TEXT_LENGTH) {
+          throw new FormulaError(
+            'TEXT_TOO_LONG',
+            `Computed text exceeds ${MAX_COMPUTED_TEXT_LENGTH} characters`,
+          );
+        }
+      }
+      return result;
+    }
+
+    // ADR 0017, generalized by ADR 0026: substitute the fallback whenever the
+    // value is BLANK — null, or text that is empty/whitespace-only — so IFBLANK
+    // and ISBLANK now agree on what "blank" means. BOTH operands are always
+    // evaluated (SUM precedent — an error in the fallback fires even when the
+    // value is non-blank).
     case 'ifblank': {
       const value = evaluateNode(node.value, resolve, depth + 1, maxDepth, todayEpochDay);
       const fallback = evaluateNode(node.fallback, resolve, depth + 1, maxDepth, todayEpochDay);
-      return value !== null ? value : fallback;
+      return isBlankValue(value) ? fallback : value;
     }
 
     // ADR 0017: AND/OR/NOT/ISBLANK are transient condition nodes handled inside

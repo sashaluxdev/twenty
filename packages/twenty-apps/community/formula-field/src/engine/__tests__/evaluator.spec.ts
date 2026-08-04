@@ -605,9 +605,9 @@ describe('evaluator typed value domain', () => {
     expect(run('zip + 1', values)).toBe(1235);
     // Unary is a numeric context too, so text coerces before the sign applies.
     expect(run('-zip', values)).toBe(-1234);
-    // Concatenation evaluation lands in the next task; until then it is
-    // unhandled by the value switch.
-    expect(() => run('zip & 1', values)).toThrow(FormulaError);
+    // Concat is NOT a numeric context: the text keeps its leading zero and the
+    // number renders, so the two coercion directions stay visibly distinct.
+    expect(run('zip & 1', values)).toBe('012341');
   });
 
   it('treats empty text as non-numeric, not zero', () => {
@@ -653,6 +653,42 @@ describe('evaluator typed value domain', () => {
     expect(run('IF(flag, 1, 0)', { flag: '0' })).toBe(0);
     expect(run('IF(flag, 1, 0)', { flag: '3' })).toBe(1);
     expect(() => run('IF(flag, 1, 0)', { flag: 'yes' })).toThrow(FormulaError);
+  });
+});
+
+describe('evaluator concat (&)', () => {
+  it('concatenates text, numbers, and nulls per the design matrix', () => {
+    const values = { aString: 'ACME-', amount: 42, empty: null, flag: 1 };
+    expect(run('aString & "INV" & amount', values)).toBe('ACME-INV42');
+    expect(run('empty & "x"', values)).toBe('x'); // null -> ''
+    expect(run('empty & empty', values)).toBe(''); // all-null -> ''
+    expect(run('flag & ""', values)).toBe('1'); // boolean via numeric coercion
+    expect(run('1/3 & ""', values)).toBe('0.333333333333333');
+  });
+
+  it('renders date serials in concat (B2)', () => {
+    // Already a serial by the time it reaches the engine (coerceToEngineValue).
+    expect(run('closeDate & ""', { closeDate: 20665 })).toBe('20665');
+  });
+
+  it('raises TEXT_TOO_LONG past 10k chars', () => {
+    const values = { big: 'x'.repeat(9_999) };
+    expect(() => run('big & "ab"', values)).toThrow(FormulaError);
+    try {
+      run('big & "ab"', values);
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('TEXT_TOO_LONG');
+    }
+  });
+
+  it('IF branches may return text; IFBLANK falls back on whitespace-only', () => {
+    const values = { amount: 60000, note: '   ' };
+    expect(run('IF(amount > 50000, "Hot", "Cold")', values)).toBe('Hot');
+    expect(run('IFBLANK(note, "unknown")', values)).toBe('unknown');
+  });
+
+  it('concat result compares as text', () => {
+    expect(run('IF(a & "-x" = code, 1, 0)', { a: 'AC', code: 'AC-x' })).toBe(1);
   });
 });
 

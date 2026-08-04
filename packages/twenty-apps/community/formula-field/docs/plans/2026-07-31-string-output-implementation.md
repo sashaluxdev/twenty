@@ -516,7 +516,7 @@ case 'concat': {
 3. The cap applies only to concat results. A long TEXT field flowing through a one-term formula or IF branch is never truncated or capped (mirror parity).
 4. Cross-check discipline (design doc, Testing section): where a case has a defined OpenFormula/Excel answer (`&` null handling, number rendering, non-coercing `=`), verify the expected value against HyperFormula's or Gnumeric's documented behavior before pinning the assertion — behavior only, clean-room, no GPL code copied. If they disagree with the design doc, the design doc wins; note the divergence in the task report.
 
-- [ ] **Step 1: Write the failing tests** — describe `evaluator concat (&)`:
+- [x] **Step 1: Write the failing tests** — describe `evaluator concat (&)`:
 
 ```ts
 it('concatenates text, numbers, and nulls per the design matrix', () => {
@@ -555,11 +555,11 @@ it('concat result compares as text', () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify failures** (concat hits the `default:` exhaustiveness throw from T4).
-- [ ] **Step 3: Implement** per constraints 1–3.
-- [ ] **Step 4: Engine subset + whole suite green; report counts.**
-- [ ] **Step 5: Lint + typecheck.**
-- [ ] **Step 6: Commit** — `feat(formula-field): concat evaluation, computed-text cap, text-aware IFBLANK`
+- [x] **Step 2: Run and verify failures** (concat hits the `default:` exhaustiveness throw from T4).
+- [x] **Step 3: Implement** per constraints 1–3.
+- [x] **Step 4: Engine subset + whole suite green; report counts.**
+- [x] **Step 5: Lint + typecheck.**
+- [x] **Step 6: Commit** — `feat(formula-field): concat evaluation, computed-text cap, text-aware IFBLANK`
 
 ---
 
