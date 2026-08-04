@@ -113,12 +113,20 @@ by test — see the ledger's 2026-08-03/04 entries for the review trail):
   including `&` and TEXT one-term formulas — existing precedent, since such
   content already evaluated as a serial in arithmetic before this ADR.
   Pinned in `recompute.spec.ts` ("coerces date-shaped content to its serial
-  (documented B2 edge)").
+  (documented B2 edge)"). Eagerness is gated on **validity as well as shape**:
+  date-*shaped* content that is not a real calendar date — a part number
+  (`8801-25-03`), a reference code (`1234-56-78`) — resolves VERBATIM as text
+  instead of throwing, so a deployed TEXT mirror over such a column keeps
+  converging. `coerceToNumber` still throws for it, so numeric contexts are
+  unchanged. Pinned in `coercion.spec.ts` ("should resolve a date-SHAPED
+  non-date verbatim instead of throwing") and `recompute.spec.ts` ("copies
+  date-SHAPED content that is not a real date verbatim").
 - **B3** (accepted, narrow): a field whose raw value arrives as a
   numeric-shaped *string* no longer numerically equals a number literal in
   `=`/`!=`. Arithmetic, ordering, SUM, and truthiness are unchanged
   (point-of-use coercion); write-boundary coercion (`"42"` into a NUMBER
-  target) still succeeds.
+  target) still succeeds. Pinned in `evaluator.spec.ts` ("compares a
+  numeric-shaped text value against a NUMBER literal as FALSE (B3)").
 - **B4** (improvement): `textFieldA = textFieldB` now compares text-to-text
   instead of erroring; a string-vs-number comparison yields `false` rather
   than null-propagating through the old raw-resolver channel.
@@ -172,14 +180,16 @@ Task 4 began — see the implementation plan's "Background" section):
 | F8 | Override storage slot | `overrideValue` (numeric kinds) vs `overrideValueText` (mirror kinds), chosen by re-parsing the expression | `overrideSlotForKind(kind, value)` (`override-repository.ts`) — target-kind-driven: TEXT and raw kinds → `{text: JSON.stringify(value ?? null)}`, numeric kinds → `{numeric: value}` |
 | F9 | Scan-page selection | Mirror vs engine branch in `scan-selection.ts` | TEXT-target definitions take the engine branch; the GraphQL selection for a TEXT dependency/target is the scalar, same as any other engine field |
 | F10 | Prefetch trust | Mirror lane could not trust the event's prefetched `after` for some cases; engine lane always could | TEXT joining the engine lane picks up the engine's prefetch trust — one fewer refetch, verified as a strict improvement in the event-driven test |
-| F11 | Save-validation branch 1c | Duplicated in `save-validation.ts` (backend) and `validate-expression.ts` (frontend) | Collapsed into one `validateExpressionCore` in `src/logic-functions/lib/validation-core.ts`; both wrappers call it, error messages unchanged |
+| F11 | Save-validation branch 1c | Duplicated in `save-validation.ts` (backend) and `validate-expression.ts` (frontend) | Collapsed into one `validateExpressionCore` in `src/logic-functions/lib/validation-core.ts`; both wrappers call it. A TEXT target no longer enters 1c at all (TEXT left `MIRRORABLE_KINDS`), so branch **1d** keeps the one check the deployed-mirror shape still needs — a BARE REF whose source kind is known and is neither TEXT nor SELECT is rejected with 1c's own message, as main rejected it; general expressions onto TEXT stay unrestricted. Messages are otherwise unchanged, save for the editor's cycle error picking up the backend's "detected" wording in the collapse |
 
 ### `overrideValueText`/`lastValueText`: JSON conventions kept for back-compat
 
 Deployed TEXT mirrors already wrote `overrideValueText = JSON.stringify(raw)`
 (decoded via `decodeMirrorOverrideValue`) and `lastValueText =
-mirrorValueText(raw)` (JSON-stringified, 500-char-capped,
-`formula-repository.ts`). Both conventions are **unchanged** by this ADR —
+mirrorValueText(raw)` (JSON-stringified, capped at a 500-character envelope —
+the VALUE is truncated *before* encoding, so the stored text is always
+parseable JSON, `formula-repository.ts`). Both conventions are **unchanged**
+by this ADR —
 `overrideSlotForKind` and the heartbeat's text branch still produce exactly
 that JSON encoding for TEXT and raw kinds alike — so a deployed TEXT-mirror
 override or heartbeat round-trips through the new lane with zero data
@@ -205,16 +215,23 @@ Beyond B1–B5 (design-locked), three further deltas surfaced during Tasks 4–8
 and were adjudicated and accepted rather than repaired — each is a forced
 consequence of a design-locked rule, not an implementation bug:
 
-- **B6.** A cross-record DATE/DATE_TIME reference compared with `=` against a
-  text literal is now silently `false`. This is B2's eager date coercion
-  (the cross-record value resolves to a serial number) combined with B1's
-  typed non-coercing equality (`number = string` is false by construction).
-  A same-record equivalent is rejected at save time by the existing
-  string-comparison validation rule; cross-record refs are deliberately
-  exempt from that check (unchanged by this ADR) because the target field's
-  kind is not known without a fetch. Pinned in `evaluator.spec.ts`
-  ("compares a date-shaped cross-record value against a text literal as
-  FALSE (B6)").
+- **B6.** A DATE/DATE_TIME value — or TEXT/SELECT content that *is* a valid
+  date — compared with `=` against a text literal is now silently `false`.
+  This is B2's eager date coercion (the value resolves to a serial number)
+  combined with B1's typed non-coercing equality (`number = string` is false
+  by construction). **It applies to same-record and cross-record operands
+  alike, and no save-time rule protects either.** The string-comparison rule
+  (validation-core branch 1b) rejects only operands whose *kind* cannot hold
+  a string; it explicitly permits TEXT and SELECT, and it inspects kinds, not
+  content — so `IF(signedOn = "2026-01-15", …)` over a same-record TEXT field
+  holding `2026-01-15` saves cleanly and flips from true to false, exactly as
+  the cross-record case does. Cross-record refs are additionally exempt from
+  1b because the operand's kind is not known without a fetch (unchanged by
+  this ADR). Pinned in `evaluator.spec.ts` ("compares a date-shaped
+  cross-record value against a text literal as FALSE (B6)") and — through the
+  real `coerceToEngineValue` resolver, which is where the flip happens — in
+  `recompute.spec.ts` ("compares date-shaped TEXT content against a text
+  literal as FALSE").
 - **B7.** An unresolvable operand in a text comparison (e.g. a dotted
   composite subpath that does not exist) now throws `UNKNOWN_VARIABLE`,
   where the old string-mode raw resolver null-propagated it to blank. This
@@ -238,6 +255,16 @@ consequence of a design-locked rule, not an implementation bug:
   in `evaluator.ts`): a whitespace-only string also counts as blank. The two
   functions previously disagreed on this point (ADR 0017 called it out as a
   "deliberate asymmetry"); that asymmetry is gone.
+- **TEXT-target save validation widens, except for the bare-ref shape.** With
+  TEXT on the engine lane a TEXT target accepts any engine expression at save
+  time (`code & "-" & 1`), where main accepted only a same-kind bare ref. The
+  one piece of the old rule kept is the bare-ref source-kind check (branch 1d,
+  above): `isActive` alone onto a TEXT field is still rejected with main's
+  message, because that shape *is* the deployed-mirror shape and letting it
+  through would write `"1"`/`"0"` for a BOOLEAN, a raw serial for a DATE, or
+  fail per record with `NON_NUMERIC_VALUE` for a MULTI_SELECT/LINKS. SELECT
+  sources are exempt (they hold text) — the SELECT → TEXT widening is
+  intended. Pinned in `validation-core.spec.ts`.
 - **Invalid-config heartbeat divergence.** A TEXT-target definition whose
   expression fails to parse writes its heartbeat to `lastValueText` (the
   `text`-kind slot, since `targetFieldKind('TEXT') === 'TEXT'` regardless of
@@ -279,6 +306,14 @@ consequence of a design-locked rule, not an implementation bug:
   metadata kind rather than pattern-matching its raw value. Not built;
   noted here so a future edge-case report against B2/B3/B6 has a named
   starting point instead of re-deriving the option from scratch.
+- **Save-time warning for a date-shaped literal against a TEXT/SELECT
+  operand.** The cheapest partial answer to B6: branch 1b already walks every
+  string comparison and knows both the literal and the operand's kind, so it
+  could warn (or reject) when the literal is date-shaped and the operand is
+  TEXT/SELECT — the one case where content, not kind, decides the outcome.
+  Not built: it would reject expressions that are perfectly correct whenever
+  the column holds no date-shaped content, and the honest fix is kind-aware
+  resolution above.
 - **SELECT output.** Deliberately deferred to the next version — see below.
 
 ## Next version: SELECT output
