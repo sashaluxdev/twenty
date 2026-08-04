@@ -477,6 +477,91 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
       lastEvaluatedAt: '2026-07-04T12:00:00.000Z',
     });
   });
+
+  // The carve-out is lane-agnostic: a TEXT-target formula reading TODAY() (e.g.
+  // IF(TODAY() > dueDate, "Overdue", "OK")) goes long stretches without a value
+  // change, so without this its lastEvaluatedAt would read stale forever.
+  it('writes lastEvaluatedAt alone on a no-op TEXT outcome when the flag is set and the stored heartbeat is stale', async () => {
+    const stale = formula({
+      targetFieldType: 'TEXT',
+      lastValueText: '"OK"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      true,
+    );
+
+    expect(mutationSpy).toHaveBeenCalledTimes(1);
+    const [[selection]] = mutationSpy.mock.calls;
+    expect(selection.updateFormulaDefinition.__args.data).toEqual({
+      lastEvaluatedAt: '2026-07-04T12:00:00.000Z',
+    });
+  });
+
+  it('writes nothing on a no-op TEXT outcome when the flag is set but the stored heartbeat is fresh', async () => {
+    const fresh = formula({
+      targetFieldType: 'TEXT',
+      lastValueText: '"OK"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T11:30:00.000Z', // 30min old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      fresh,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      true,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
+  });
+
+  it('preserves M3 write-avoidance on the text lane: no write on a no-op outcome when the flag is false', async () => {
+    const stale = formula({
+      targetFieldType: 'TEXT',
+      lastValueText: '"OK"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      false,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
+  });
+
+  // Mirrors are bare refs, so the flag is never true for a raw outcome — the
+  // guard is uniform, and the zero-write mirror heartbeat is unaffected.
+  it('keeps the raw (mirror) lane write-avoidant on a no-op outcome', async () => {
+    const stale = formula({
+      targetFieldType: 'SELECT',
+      lastValueText: '"ACTIVE"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: { kind: 'raw', value: 'ACTIVE' }, error: null },
+      false,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
+  });
 });
 
 // Guards recompute.ts's dependencySelectionOverrides (the CURRENCY-activation

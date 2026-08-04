@@ -314,6 +314,23 @@ export const updateScanCursor = async (
   );
 };
 
+// ADR 0015 staleness probe, shared by every heartbeat lane: a formula reading
+// TODAY() can go a long time between VALUE changes, so a no-op outcome still has
+// to refresh lastEvaluatedAt once per sweep cadence or "last evaluated" would
+// read stale forever. Scoped to TODAY-using formulas so every other formula
+// keeps finding M3's zero-write guarantee.
+const HEARTBEAT_STALE_MS = 60 * 60 * 1000;
+const heartbeatIsStale = (lastEvaluatedAt: string | null | undefined): boolean => {
+  // NaN from an unparseable timestamp must read as STALE, not fresh — a
+  // `now - NaN > staleMs` comparison is always false, which would stall the
+  // self-heal forever (same Number.isFinite guard as date-serial.ts).
+  const lastEvaluatedAtMs = Date.parse(lastEvaluatedAt ?? '');
+  return (
+    !Number.isFinite(lastEvaluatedAtMs) ||
+    Date.now() - lastEvaluatedAtMs > HEARTBEAT_STALE_MS
+  );
+};
+
 export const recordEvaluationHeartbeat = async (
   client: FormulaClient,
   formula: FormulaDefinitionRecord,
@@ -326,13 +343,20 @@ export const recordEvaluationHeartbeat = async (
   // Non-numeric outcomes — a mirror passthrough or an engine text result — store
   // their diagnostic value in lastValueText (lastValue is NUMBER-typed and stays
   // null). The outcome's own tag decides this; nothing re-parses the expression.
-  // Write-avoidance intact: text unchanged AND error unchanged -> zero writes.
-  // This lane has no ADR 0015 stale carve-out: mirrors never use TODAY(), and a
-  // text formula that does still records on every value change.
+  // Write-avoidance intact: text unchanged AND error unchanged -> zero writes,
+  // save for the ADR 0015 TODAY carve-out, which is lane-agnostic — a TEXT
+  // formula reading TODAY() (IF(TODAY() > dueDate, "Overdue", "OK")) changes
+  // value rarely and would otherwise read stale forever. A mirror is a bare ref,
+  // so the flag is never set on the raw lane and its zero-write path stands.
   if (outcome.value.kind !== 'number') {
     const nextValueText = mirrorValueText(outcome.value.value);
     const textChanged = (formula.lastValueText ?? null) !== nextValueText;
     if (!textChanged && !errorChanged) {
+      if (expressionUsesToday && heartbeatIsStale(formula.lastEvaluatedAt)) {
+        await updateFormulaBookkeeping(client, formula.id, {
+          lastEvaluatedAt: new Date().toISOString(),
+        });
+      }
       return;
     }
     await updateFormulaBookkeeping(client, formula.id, {
@@ -346,20 +370,10 @@ export const recordEvaluationHeartbeat = async (
   const nextValue = outcome.value.value ?? null;
   const valueChanged = (formula.lastValue ?? null) !== nextValue;
   if (!valueChanged && !errorChanged) {
-    if (expressionUsesToday) {
-      const staleMs = 60 * 60 * 1000;
-      // NaN from an unparseable timestamp must read as STALE, not fresh — a
-      // `now - NaN > staleMs` comparison is always false, which would stall
-      // the self-heal forever (same Number.isFinite guard as date-serial.ts).
-      const lastEvaluatedAtMs = Date.parse(formula.lastEvaluatedAt ?? '');
-      const isStale =
-        !Number.isFinite(lastEvaluatedAtMs) ||
-        Date.now() - lastEvaluatedAtMs > staleMs;
-      if (isStale) {
-        await updateFormulaBookkeeping(client, formula.id, {
-          lastEvaluatedAt: new Date().toISOString(),
-        });
-      }
+    if (expressionUsesToday && heartbeatIsStale(formula.lastEvaluatedAt)) {
+      await updateFormulaBookkeeping(client, formula.id, {
+        lastEvaluatedAt: new Date().toISOString(),
+      });
     }
     return;
   }
