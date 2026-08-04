@@ -13,8 +13,9 @@ import {
 
 // v1 allowlist: source kind MUST equal target kind (select->select, links->links,
 // etc.). A single constant so later expansion is a one-line change + tests.
+// TEXT is deliberately ABSENT (ADR 0026): the engine expresses text end-to-end,
+// so a bare-ref TEXT target is a one-term engine formula, not a raw passthrough.
 export const MIRRORABLE_KINDS: ReadonlySet<string> = new Set([
-  'TEXT',
   'SELECT',
   'MULTI_SELECT',
   'BOOLEAN',
@@ -31,9 +32,8 @@ export const MIRRORABLE_KINDS: ReadonlySet<string> = new Set([
 // The engine's value family, DERIVED from value-io's ENGINE_FAMILY (the single
 // source of truth — FM Task 1 rider) so the two can never drift. A bare ref onto
 // one of these keeps today's engine path unchanged — it is NOT mirror mode.
-// TEXT is in BOTH sets during the string-output transition: the engine can now
-// express text, but a bare-ref TEXT target still routes through the mirror lane
-// (isMirrorTargetKind above) until that lane switch lands.
+// The two sets are now disjoint again: TEXT belongs to this one alone, and their
+// UNION (variation sync's syncable allowlist) is unchanged by that move.
 export const ENGINE_FAMILY_KINDS: ReadonlySet<string> = new Set(ENGINE_FAMILY);
 
 export const isMirrorTargetKind = (kind: string): boolean =>

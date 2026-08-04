@@ -191,6 +191,10 @@ describe('TEXT target kind', () => {
     expect(normalizeStoredValue('ACME-INV42', 'TEXT')).toBe('ACME-INV42');
     expect(normalizeStoredValue('', 'TEXT')).toBe('');
     expect(normalizeStoredValue(null, 'TEXT')).toBeNull();
+    // The mirror lane's null-vs-undefined suppression, preserved on the engine
+    // lane: an absent value normalizes to null, so a null result over an empty
+    // column still compares equal and suppresses the write (Task 7).
+    expect(normalizeStoredValue(undefined, 'TEXT')).toBeNull();
   });
 
   it('writes an empty string as an empty string and null as a clear', () => {

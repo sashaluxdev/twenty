@@ -39,19 +39,49 @@ describe('validateExpressionCore', () => {
     });
   });
 
-  it('rejects a non-bare-ref expression onto a TEXT target with the mirror message', () => {
+  // Lane switch (Task 7): TEXT left MIRRORABLE_KINDS, so the mirror block no
+  // longer constrains a TEXT target — a full engine expression validates.
+  it('accepts a concatenation expression onto a TEXT target', () => {
+    const result = validateExpressionCore({
+      expression: 'aString & "INV" & 1+TODAY()',
+      hostObject: 'opportunity',
+      targetField: 'invoiceCode',
+      targetFieldType: 'TEXT',
+      otherFormulas: [],
+    });
+
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts a bare field reference onto a TEXT target (the deployed mirror shape)', () => {
+    const result = validateExpressionCore({
+      expression: 'sourceField',
+      hostObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'TEXT',
+      // A SELECT source onto a TEXT target would have been a kind mismatch under
+      // the mirror rule; on the engine lane there is no same-kind requirement.
+      fieldKinds: () => new Map([['sourceField', 'SELECT']]),
+      otherFormulas: [],
+    });
+
+    expect(result.valid).toBe(true);
+  });
+
+  // The mirror rule stays intact for the raw kinds it still owns.
+  it('rejects a non-bare-ref expression onto a SELECT target with the mirror message', () => {
     const result = validateExpressionCore({
       expression: 'sourceField + 1',
       hostObject: 'opportunity',
       targetField: 'mirrorField',
-      targetFieldType: 'TEXT',
+      targetFieldType: 'SELECT',
       otherFormulas: [],
     });
 
     expect(result).toEqual({
       valid: false,
       error:
-        'Only a plain field reference can be mirrored onto a TEXT field',
+        'Only a plain field reference can be mirrored onto a SELECT field',
     });
   });
 

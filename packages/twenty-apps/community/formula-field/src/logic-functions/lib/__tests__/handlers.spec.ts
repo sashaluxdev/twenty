@@ -1044,6 +1044,198 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
   });
 });
 
+// Lane switch (Task 7): a deployed TEXT mirror is now a one-term engine formula,
+// so it runs the ENGINE override-detection funnel (strict string compare) while
+// keeping the mirror lane's storage conventions — the pin lives in
+// overrideValueText as JSON, exactly as the rows already deployed do.
+describe('handleRecordUpdate — TEXT target on the engine lane', () => {
+  let client: FakeClient;
+
+  const seedTextMirror = (): void => {
+    client.setFieldKinds('company', { source: 'TEXT', mirror: 'TEXT' });
+    client.seed('formulaDefinition', [
+      {
+        id: 'mt',
+        targetObject: 'company',
+        targetField: 'mirror',
+        targetFieldType: 'TEXT',
+        expression: 'source',
+        enabled: true,
+      },
+    ]);
+  };
+
+  beforeEach(() => {
+    client = new FakeClient();
+  });
+
+  it('writes the source value from the event payload without refetching the record', async () => {
+    seedTextMirror();
+    client.seed('company', [{ id: 'c1', source: 'NEW', mirror: 'OLD' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', source: 'NEW', mirror: 'OLD' },
+      updatedFields: ['source'],
+    });
+
+    expect(client.writes).toEqual(['company:c1:mirror="NEW"']);
+    // The mirror lane always refetched (its composite kinds are not
+    // sub-selection-safe in an event payload). A TEXT column is a plain scalar,
+    // so the engine lane trusts `after` — one fewer read per event.
+    expect(
+      client.querySelections.filter((selection) => selection.company !== undefined),
+    ).toHaveLength(0);
+  });
+
+  it('ignores the app echo of its own TEXT write (no spurious pin)', async () => {
+    seedTextMirror();
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'ACTIVE' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: 'ACTIVE' },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+  });
+
+  it('pins the JSON text slot when a HUMAN edits a TEXT target away from the computed value', async () => {
+    seedTextMirror();
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'MANUAL' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: 'MANUAL' },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    const override = client.get('formulaOverride', 'formulaOverride-0');
+    expect(override).toBeDefined();
+    expect(override!.targetField).toBe('mirror');
+    // The deployed convention, unchanged: JSON in the text column, numeric null.
+    expect(override!.overrideValueText).toBe(JSON.stringify('MANUAL'));
+    expect(override!.overrideValue ?? null).toBeNull();
+    expect(client.get('company', 'c1')!.mirror).toBe('MANUAL');
+  });
+
+  it('skips a superseded stale echo on a TEXT target', async () => {
+    seedTextMirror();
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'CONVERGED' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', mirror: 'STALE_ECHO' },
+      updatedFields: ['mirror'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+    expect(client.get('company', 'c1')!.mirror).toBe('CONVERGED');
+  });
+
+  // Finding M5: a pinned TEXT target stores its value in overrideValueText, so
+  // an outcome that read the numeric column would report every pinned record as
+  // empty — and the heartbeat would then blank a real lastValueText.
+  it('reports an ACTIVE TEXT override from the text column, not the numeric one', async () => {
+    seedTextMirror();
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'PINNED' }]);
+    client.seed('formulaOverride', [
+      {
+        id: 'ov-text',
+        name: 'company.mirror#c1',
+        targetObject: 'company',
+        targetField: 'mirror',
+        recordId: 'c1',
+        overrideValue: null,
+        overrideValueText: JSON.stringify('PINNED'),
+        active: true,
+      },
+    ]);
+
+    const outcomes = await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', source: 'ACTIVE', mirror: 'PINNED' },
+      updatedFields: ['source'],
+    });
+
+    const outcome = outcomes.find((entry) => entry.formulaId === 'mt');
+    expect(outcome?.overridden).toBe(true);
+    expect(outcome?.value).toEqual({ kind: 'text', value: 'PINNED' });
+    // The pin still suppresses the recompute: the source says ACTIVE.
+    expect(client.get('company', 'c1')!.mirror).toBe('PINNED');
+    expect(client.writes).toHaveLength(0);
+  });
+
+  it('still reports a numeric target override from the numeric column', async () => {
+    client.seed('formulaDefinition', [
+      {
+        id: 'fn',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        expression: 'formulaInputA + 1',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', formulaInputA: 5, formulaScore: 99 }]);
+    client.seed('formulaOverride', [
+      {
+        id: 'ov-num',
+        name: 'opportunity.formulaScore#o1',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        recordId: 'o1',
+        overrideValue: 99,
+        overrideValueText: null,
+        active: true,
+      },
+    ]);
+
+    const outcomes = await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaScore: 99 },
+      updatedFields: ['formulaInputA'],
+    });
+
+    const outcome = outcomes.find((entry) => entry.formulaId === 'fn');
+    expect(outcome?.value).toEqual({ kind: 'number', value: 99 });
+  });
+
+  it('restores the source value after a TEXT override is toggled off', async () => {
+    seedTextMirror();
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'PINNED' }]);
+    await upsertOverride(client, 'company', 'mirror', 'c1', {
+      text: JSON.stringify('PINNED'),
+    });
+    await deactivateOverride(client, 'company', 'mirror', 'c1');
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', source: 'ACTIVE', mirror: 'PINNED' },
+      updatedFields: ['source'],
+    });
+
+    expect(client.get('company', 'c1')!.mirror).toBe('ACTIVE');
+  });
+});
+
 // Task 7 makes the hourly sweep time-bounded; an unstable definition order
 // would then let a time-bounded sweep starve whichever definitions land late.
 describe('loadEnabledFormulas ordering', () => {

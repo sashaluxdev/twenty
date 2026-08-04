@@ -11,9 +11,14 @@ import {
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
-import { isMirrorDefinition } from 'src/logic-functions/lib/mirror-kinds';
 import {
+  isMirrorDefinition,
+  isMirrorTargetKind,
+} from 'src/logic-functions/lib/mirror-kinds';
+import {
+  decodeMirrorOverrideValue,
   findOverride,
+  type OverrideRecord,
   overrideSlotForKind,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
@@ -31,6 +36,7 @@ import {
   normalizeComputedValue,
   normalizeStoredValue,
   tagEngineValue,
+  type TargetFieldKind,
   targetFieldKind,
 } from 'src/logic-functions/lib/value-io';
 import { type EngineValue } from 'src/engine/evaluator';
@@ -55,6 +61,23 @@ const storedValuesEqual = (a: EngineValue, b: EngineValue): boolean => {
     return Math.abs(a - b) < 1e-9;
   }
   return a === b;
+};
+
+// The value an ACTIVE override pins, read from the column its target kind
+// actually uses. A TEXT target pins the JSON text slot (overrideValueText, the
+// convention deployed TEXT mirrors already store) and leaves overrideValue null,
+// so reading the numeric column would report every pinned text record as empty.
+// A non-string decode (corrupted or legacy composite text) reports null rather
+// than leaking a non-text value into a text-tagged outcome.
+const pinnedOverrideValue = (
+  targetKind: TargetFieldKind,
+  override: OverrideRecord,
+): EngineValue => {
+  if (targetKind !== 'TEXT') {
+    return override.overrideValue;
+  }
+  const decoded = decodeMirrorOverrideValue(override.overrideValueText).value;
+  return typeof decoded === 'string' ? decoded : null;
 };
 
 // Parses once and returns both the AST and its dependency set — the AST feeds
@@ -124,16 +147,23 @@ export const handleRecordUpdate = async ({
       if (formula.status === 'OFFLINE') continue;
 
       // Mirror fork: a mirror target stores non-numeric raw values, so the
-      // numeric funnel below cannot decide it. Same compare-value-not-actor rule
-      // as the numeric path, but with deep JSON equality on raw values.
+      // funnel below cannot decide it. Same compare-value-not-actor rule as the
+      // engine path, but with deep JSON equality on raw values.
+      // A TEXT target no longer takes this fork (ADR 0026): it goes down the
+      // funnel below, where normalizeStoredValue/storedValuesEqual compare
+      // strings strictly and overrideSlotForKind pins the JSON text column.
+      // The kind is checked first so the parse is skipped for every
+      // engine-family target (finding M1).
       let formulaIsMirror = false;
-      try {
-        formulaIsMirror = isMirrorDefinition(
-          compileFormula(formula.expression ?? '').ast,
-          formula.targetFieldType,
-        );
-      } catch {
-        formulaIsMirror = false;
+      if (isMirrorTargetKind(formula.targetFieldType ?? '')) {
+        try {
+          formulaIsMirror = isMirrorDefinition(
+            compileFormula(formula.expression ?? '').ast,
+            formula.targetFieldType,
+          );
+        } catch {
+          formulaIsMirror = false;
+        }
       }
 
       if (formulaIsMirror) {
@@ -256,8 +286,10 @@ export const handleRecordUpdate = async ({
       // Mirror formulas do their own kind-aware fetch inside
       // computeMirrorValueForRecord — the event `after` is NOT
       // sub-selection-guaranteed for composite mirror kinds, so it must not be
-      // trusted as a prefetch (FM Task 2 carry-forward). The numeric path keeps
-      // trusting `after` (byte-identical behavior).
+      // trusted as a prefetch (FM Task 2 carry-forward). The engine path keeps
+      // trusting `after` (byte-identical behavior), and TEXT joins it there: a
+      // TEXT column is a plain scalar in the payload, so the distinction
+      // dissolves and a deployed TEXT mirror now costs one fewer refetch.
       const isMirror = isMirrorDefinition(compiled.ast, formula.targetFieldType);
 
       // Respect an ACTIVE manual override on this specific record (#2).
@@ -268,6 +300,7 @@ export const handleRecordUpdate = async ({
         recordId,
       );
       if (override?.active) {
+        const pinnedKind = targetFieldKind(formula.targetFieldType);
         outcomes.push({
           formulaId: formula.id,
           targetRecordId: recordId,
@@ -278,8 +311,8 @@ export const handleRecordUpdate = async ({
           value: isMirror
             ? { kind: 'raw', value: null }
             : tagEngineValue(
-                targetFieldKind(formula.targetFieldType),
-                override.overrideValue,
+                pinnedKind,
+                pinnedOverrideValue(pinnedKind, override),
               ),
           error: null,
           overridden: true,

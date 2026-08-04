@@ -9,6 +9,7 @@ import { FormulaError, isFormulaError } from 'src/engine/errors';
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
 import {
   isMirrorDefinition,
+  isMirrorTargetKind,
   selectionEntryForMirrorKind,
 } from 'src/logic-functions/lib/mirror-kinds';
 import {
@@ -228,7 +229,14 @@ const valuesEqual = (a: EngineValue, b: EngineValue): boolean => a === b;
 
 // Whether the definition takes the mirror lane. An unparseable expression is not
 // a mirror; the engine path surfaces the error.
+// The kind is checked FIRST because it decides the lane on its own for every
+// engine-family target (isMirrorDefinition ANDs the same predicate), which keeps
+// the parse off the per-record hot path for NUMBER/CURRENCY/DATE/DATE_TIME and —
+// since the lane switch — TEXT (finding M1).
 const isMirrorFormula = (formula: FormulaDefinitionRecord): boolean => {
+  if (!isMirrorTargetKind(formula.targetFieldType ?? '')) {
+    return false;
+  }
   try {
     return isMirrorDefinition(
       compileFormula(formula.expression ?? '').ast,

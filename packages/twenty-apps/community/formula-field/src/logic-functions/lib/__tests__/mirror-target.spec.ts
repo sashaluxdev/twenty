@@ -137,20 +137,6 @@ describe('mirror recompute passthrough — scalar kinds', () => {
     expect(client.writes).toEqual(['company:c1:mirror="ACTIVE"']);
   });
 
-  it('copies a TEXT string verbatim', async () => {
-    client.setFieldKinds('company', { source: 'TEXT', mirror: 'TEXT' });
-    client.seed('company', [{ id: 'c1', source: 'hello world', mirror: null }]);
-
-    const outcome = await recomputeForRecord({
-      client,
-      formula: mirrorFormula({ targetFieldType: 'TEXT' }),
-      targetRecordId: 'c1',
-    });
-
-    expect(outcome.changed).toBe(true);
-    expect(client.get('company', 'c1')!.mirror).toBe('hello world');
-  });
-
   it('copies a BOOLEAN verbatim', async () => {
     client.setFieldKinds('company', { source: 'BOOLEAN', mirror: 'BOOLEAN' });
     client.seed('company', [{ id: 'c1', source: true, mirror: null }]);
@@ -194,6 +180,31 @@ describe('mirror recompute passthrough — scalar kinds', () => {
 
     expect(outcome.changed).toBe(true);
     expect(client.get('company', 'c1')!.mirror).toEqual(['A', 'B']);
+  });
+});
+
+// TEXT left MIRRORABLE_KINDS in the Task 7 lane switch: a bare-ref TEXT
+// definition is now a one-term ENGINE formula. What must not change is the
+// observable — the write payload a deployed TEXT mirror produces — so this case
+// asserts the payload rather than which internal lane ran. (The full TEXT
+// engine-lane matrix, including convergence and the accepted deltas, lives in
+// recompute.spec.ts.)
+describe('TEXT left the mirror lane — write payload unchanged', () => {
+  it('writes the source string verbatim, tagged text instead of raw', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', { source: 'TEXT', mirror: 'TEXT' });
+    client.seed('company', [{ id: 'c1', source: 'hello world', mirror: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: mirrorFormula({ targetFieldType: 'TEXT' }),
+      targetRecordId: 'c1',
+    });
+
+    expect(outcome.changed).toBe(true);
+    expect(client.get('company', 'c1')!.mirror).toBe('hello world');
+    expect(client.writes).toEqual(['company:c1:mirror="hello world"']);
+    expect(outcome.value).toEqual({ kind: 'text', value: 'hello world' });
   });
 });
 

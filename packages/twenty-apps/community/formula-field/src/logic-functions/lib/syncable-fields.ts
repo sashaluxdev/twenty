@@ -9,8 +9,9 @@ import { type FormulaClient } from 'src/logic-functions/lib/types';
 // Variation sync's field allowlist: every kind the mirror engine already knows
 // how to typed-passthrough-copy (design 2026-07-07). Deliberately reuses the
 // SAME two sets the mirror engine uses (not a new list) so the two can never
-// drift about what "copyable" means.
-const SYNCABLE_KINDS: ReadonlySet<string> = new Set([
+// drift about what "copyable" means. Exported so a test can pin the union
+// directly: TEXT moving between the two sets (ADR 0026) must leave it identical.
+export const SYNCABLE_KINDS: ReadonlySet<string> = new Set([
   ...MIRRORABLE_KINDS,
   ...ENGINE_FAMILY_KINDS,
 ]);

@@ -118,9 +118,10 @@ export const validateExpressionCore = ({
   //     whole-field ref, not an engine expression. A null/blank target kind
   //     defaults to NUMBER (engine family, same rule as value-io's
   //     targetFieldKind), so it keeps today's engine path and skips these checks.
-  //     A MIRRORABLE kind takes these checks even if the engine family also
-  //     covers it: TEXT is in both sets during the string-output transition and
-  //     the mirror lane still owns it until the lane switch.
+  //     The MIRRORABLE arm of the condition makes the two sets' membership
+  //     authoritative rather than the engine family alone; with TEXT now
+  //     engine-only (ADR 0026) a TEXT target skips these checks entirely, so any
+  //     engine expression — `code & "-" & 1` — validates onto it.
   if (
     targetFieldType != null &&
     targetFieldType !== '' &&

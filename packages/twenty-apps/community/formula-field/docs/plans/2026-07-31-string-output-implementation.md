@@ -630,12 +630,12 @@ The riskiest task: TEXT leaves the mirror lane. Deployed TEXT mirrors (bare-ref 
 5. Mirror suites: TEXT fixtures in `mirror-target.spec.ts` move semantics from "mirror lane" to "engine lane, same observable writes". Rewrite those cases to assert the *write payloads* are unchanged rather than which internal function ran. Non-TEXT mirror kinds (SELECT, BOOLEAN, composites…) must be completely untouched — any diff in their assertions is a bug.
 6. Save-validation via T2's core: with TEXT out of `MIRRORABLE_KINDS`, the mirror-validation block no longer constrains TEXT targets, so `aString & "INV" & 1+TODAY()` with `targetFieldType: 'TEXT'` now validates. Add exactly that as a `validation-core.spec.ts` case, plus: a non-bare-ref expression targeting a SELECT field still rejects (mirror rule intact for raw kinds).
 
-- [ ] **Step 1: Write the failing tests** — `mirror-kinds.spec.ts`: `MIRRORABLE_KINDS` no longer contains TEXT, `SYNCABLE_KINDS` unchanged as a set; `recompute.spec.ts`: a bare-ref TEXT definition writes the source string verbatim and converges (second run writes nothing); a `&` TEXT definition end-to-end (`recomputeForRecord` with a fake client) writes the concatenated string and records a text heartbeat; `validation-core.spec.ts` cases from constraint 6.
-- [ ] **Step 2: Run and verify failures.**
-- [ ] **Step 3: Implement** per constraints 1–6.
-- [ ] **Step 4: Whole suite green.** Explicitly re-run and report: `mirror-target.spec.ts`, `handlers.spec.ts`, `scan-resume.spec.ts`, `pagination.spec.ts`, `batch-write.spec.ts`.
-- [ ] **Step 5: Lint + typecheck.**
-- [ ] **Step 6: Commit** — `feat(formula-field): TEXT joins the engine lane; mirrors become one-term formulas`
+- [x] **Step 1: Write the failing tests** — `mirror-kinds.spec.ts`: `MIRRORABLE_KINDS` no longer contains TEXT, `SYNCABLE_KINDS` unchanged as a set; `recompute.spec.ts`: a bare-ref TEXT definition writes the source string verbatim and converges (second run writes nothing); a `&` TEXT definition end-to-end (`recomputeForRecord` with a fake client) writes the concatenated string and records a text heartbeat; `validation-core.spec.ts` cases from constraint 6.
+- [x] **Step 2: Run and verify failures.**
+- [x] **Step 3: Implement** per constraints 1–6.
+- [x] **Step 4: Whole suite green.** Explicitly re-run and report: `mirror-target.spec.ts`, `handlers.spec.ts`, `scan-resume.spec.ts`, `pagination.spec.ts`, `batch-write.spec.ts`.
+- [x] **Step 5: Lint + typecheck.**
+- [x] **Step 6: Commit** — `feat(formula-field): TEXT joins the engine lane; mirrors become one-term formulas`
 
 ---
 

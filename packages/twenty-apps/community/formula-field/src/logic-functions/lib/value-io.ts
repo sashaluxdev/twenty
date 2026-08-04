@@ -25,8 +25,8 @@ import { type ComputedValue } from 'src/logic-functions/lib/types';
 // silently (a drift-guard test asserts they stay equal).
 // TEXT joins the family with the string output domain (ADR 0026): the engine can
 // now EXPRESS a text result, so the write boundary must be able to store one.
-// TEXT is deliberately still in MIRRORABLE_KINDS too — routing a bare-ref TEXT
-// target away from the mirror lane is a separate, later step.
+// TEXT is no longer in MIRRORABLE_KINDS: a bare-ref TEXT target is a one-term
+// engine formula whose writes match what the mirror lane used to produce.
 export const ENGINE_FAMILY = [
   'NUMBER',
   'CURRENCY',

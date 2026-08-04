@@ -1,10 +1,45 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { __clearEnabledFormulasCacheForTests } from 'src/logic-functions/lib/formula-repository';
-import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
+import {
+  computeSyncableFields,
+  SYNCABLE_KINDS,
+} from 'src/logic-functions/lib/syncable-fields';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
 afterEach(() => __clearEnabledFormulasCacheForTests());
+
+// Lane-switch invariant (Task 7): variation sync copies the UNION of the mirror
+// allowlist and the engine family, so moving TEXT from one set to the other must
+// leave the union — and therefore every synced field — bit-for-bit identical.
+describe('SYNCABLE_KINDS', () => {
+  it('is unchanged by the TEXT lane switch (union of both sets)', () => {
+    expect([...SYNCABLE_KINDS].sort()).toEqual(
+      [
+        'ADDRESS',
+        'ARRAY',
+        'BOOLEAN',
+        'CURRENCY',
+        'DATE',
+        'DATE_TIME',
+        'EMAILS',
+        'FULL_NAME',
+        'LINKS',
+        'MULTI_SELECT',
+        'NUMBER',
+        'PHONES',
+        'RATING',
+        'RAW_JSON',
+        'SELECT',
+        'TEXT',
+      ].sort(),
+    );
+  });
+
+  it('still contains TEXT, now via the engine family rather than the mirror set', () => {
+    expect(SYNCABLE_KINDS.has('TEXT')).toBe(true);
+  });
+});
 
 describe('computeSyncableFields', () => {
   it('includes mirrorable and engine-family kinds, excludes the label field, the relation field, and non-writable kinds and settings-less relations', async () => {

@@ -621,6 +621,234 @@ describe('recomputeForRecord composite dependency selection', () => {
   });
 });
 
+// Lane switch (Task 7): a TEXT target is no longer a mirror. A deployed TEXT
+// mirror's expression is a BARE REF, so it becomes a one-term engine formula and
+// must keep writing exactly what the mirror lane wrote. These tests pin the
+// WRITE PAYLOADS (client.writes), which is the observable the deployed data
+// depends on, not which internal function produced them.
+describe('TEXT target on the engine lane — deployed-mirror write parity', () => {
+  let client: FakeClient;
+
+  const textMirror = (
+    overrides: Partial<FormulaDefinitionRecord> = {},
+  ): FormulaDefinitionRecord => ({
+    id: 'ft',
+    targetObject: 'company',
+    targetField: 'mirror',
+    targetFieldType: 'TEXT',
+    expression: 'source',
+    enabled: true,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    client = new FakeClient();
+    client.setFieldKinds('company', { source: 'TEXT', mirror: 'TEXT' });
+  });
+
+  it('writes the source string verbatim and converges on the second run', async () => {
+    client.seed('company', [{ id: 'c1', source: 'hello world', mirror: null }]);
+
+    const first = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(first.changed).toBe(true);
+    expect(first.value).toEqual({ kind: 'text', value: 'hello world' });
+    expect(client.writes).toEqual(['company:c1:mirror="hello world"']);
+
+    const second = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(second.changed).toBe(false);
+    expect(client.writes).toHaveLength(1);
+  });
+
+  // B5: numeric-shaped strings stay lazy, so a zip code keeps its leading zero
+  // exactly as the mirror lane's raw passthrough did.
+  it('keeps a numeric-shaped string verbatim (leading zeros preserved)', async () => {
+    client.seed('company', [{ id: 'c1', source: '042', mirror: null }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(client.writes).toEqual(['company:c1:mirror="042"']);
+  });
+
+  it('writes an empty string as an empty string, not a clear', async () => {
+    client.seed('company', [{ id: 'c1', source: '', mirror: 'OLD' }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(client.writes).toEqual(['company:c1:mirror=""']);
+  });
+
+  it('clears the target once when the source is null, then suppresses', async () => {
+    client.seed('company', [{ id: 'c1', source: null, mirror: 'OLD' }]);
+
+    const first = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    expect(first.changed).toBe(true);
+    expect(client.writes).toEqual(['company:c1:mirror=null']);
+
+    const second = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    expect(second.changed).toBe(false);
+    expect(client.writes).toHaveLength(1);
+  });
+
+  it('suppresses the write entirely when source and target are both empty', async () => {
+    client.seed('company', [{ id: 'c1', source: null, mirror: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(outcome.changed).toBe(false);
+    expect(client.writes).toHaveLength(0);
+    expect(client.mutations).toBe(0);
+  });
+
+  it('copies a cross-referenced TEXT source verbatim', async () => {
+    const sourceId = '440efe8c-f140-4fbc-99e6-9267344451b1';
+    client.setFieldKinds('opportunity', { mirror: 'TEXT' });
+    client.setFieldKinds('company', { name: 'TEXT' });
+    client.seed('company', [{ id: sourceId, name: 'Acme Inc' }]);
+    client.seed('opportunity', [{ id: 'o1', mirror: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: textMirror({
+        targetObject: 'opportunity',
+        expression: `[company:${sourceId}:name]`,
+      }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toEqual({ kind: 'text', value: 'Acme Inc' });
+    expect(client.writes).toEqual(['opportunity:o1:mirror="Acme Inc"']);
+  });
+
+  it('writes null with no error when the cross-referenced record is missing', async () => {
+    const sourceId = '440efe8c-f140-4fbc-99e6-9267344451b1';
+    client.setFieldKinds('opportunity', { mirror: 'TEXT' });
+    client.seed('opportunity', [{ id: 'o1', mirror: 'STALE' }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: textMirror({
+        targetObject: 'opportunity',
+        expression: `[company:${sourceId}:name]`,
+      }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.error).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'text', value: null });
+    expect(client.writes).toEqual(['opportunity:o1:mirror=null']);
+  });
+
+  // Accepted deltas (ADR 0026): dirty non-string data in a TEXT column, and the
+  // B2 date-shaped-content edge. Both used to copy raw; both now render through
+  // the engine's canonical text rendering.
+  it('renders a dirty non-string scalar canonically (accepted delta)', async () => {
+    client.seed('company', [{ id: 'c1', source: 42, mirror: null }]);
+    client.seed('company', [{ id: 'c2', source: true, mirror: null }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c2',
+    });
+
+    expect(client.writes).toEqual([
+      'company:c1:mirror="42"',
+      'company:c2:mirror="1"',
+    ]);
+  });
+
+  it('coerces date-shaped content to its serial (documented B2 edge)', async () => {
+    client.seed('company', [{ id: 'c1', source: '2026-07-04', mirror: null }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    // 2026-07-04 as whole UTC epoch-days, rendered canonically.
+    const serial = String(Date.parse('2026-07-04T00:00:00.000Z') / 86_400_000);
+    expect(client.writes).toEqual([`company:c1:mirror=${JSON.stringify(serial)}`]);
+  });
+});
+
+describe('TEXT target on the engine lane — concatenation end to end', () => {
+  it('writes the concatenated string and records a text heartbeat', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', {
+      invoiceNumber: 'TEXT',
+      invoiceCode: 'TEXT',
+    });
+    client.seed('company', [
+      { id: 'c1', invoiceNumber: '007', invoiceCode: null },
+    ]);
+    const concatFormula: FormulaDefinitionRecord = {
+      id: 'fc',
+      targetObject: 'company',
+      targetField: 'invoiceCode',
+      targetFieldType: 'TEXT',
+      expression: '"ACME-" & invoiceNumber',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [
+      concatFormula as Record<string, unknown> & { id: string },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: concatFormula,
+      targetRecordId: 'c1',
+    });
+
+    expect(outcome.value).toEqual({ kind: 'text', value: 'ACME-007' });
+    expect(client.writes).toEqual(['company:c1:invoiceCode="ACME-007"']);
+
+    await recomputeAllRecords(client, concatFormula);
+
+    // The heartbeat rides the outcome's 'text' tag into lastValueText; the
+    // NUMBER-typed lastValue column stays untouched.
+    expect(client.get('formulaDefinition', 'fc')!.lastValueText).toBe(
+      JSON.stringify('ACME-007'),
+    );
+    expect(client.get('formulaDefinition', 'fc')!.lastValue ?? null).toBeNull();
+  });
+});
+
 // ADR 0023: the definition-page sweep passes shouldContinue so an unmount can
 // stop the sweep at the next record boundary instead of running it to
 // completion orphaned. Guarded at the top of both the outer page loop and the
