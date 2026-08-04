@@ -130,25 +130,11 @@ describe('mirror recompute passthrough — scalar kinds', () => {
     });
 
     expect(outcome.changed).toBe(true);
-    expect(outcome.rawValue).toBe('ACTIVE');
-    // Mirrors carry text in the heartbeat, so the numeric outcome value is null.
-    expect(outcome.value).toBeNull();
+    // A mirror's outcome carries its raw value tagged 'raw', which is what routes
+    // it to the text heartbeat column instead of the NUMBER-typed lastValue.
+    expect(outcome.value).toEqual({ kind: 'raw', value: 'ACTIVE' });
     expect(client.get('company', 'c1')!.mirror).toBe('ACTIVE');
     expect(client.writes).toEqual(['company:c1:mirror="ACTIVE"']);
-  });
-
-  it('copies a TEXT string verbatim', async () => {
-    client.setFieldKinds('company', { source: 'TEXT', mirror: 'TEXT' });
-    client.seed('company', [{ id: 'c1', source: 'hello world', mirror: null }]);
-
-    const outcome = await recomputeForRecord({
-      client,
-      formula: mirrorFormula({ targetFieldType: 'TEXT' }),
-      targetRecordId: 'c1',
-    });
-
-    expect(outcome.changed).toBe(true);
-    expect(client.get('company', 'c1')!.mirror).toBe('hello world');
   });
 
   it('copies a BOOLEAN verbatim', async () => {
@@ -194,6 +180,31 @@ describe('mirror recompute passthrough — scalar kinds', () => {
 
     expect(outcome.changed).toBe(true);
     expect(client.get('company', 'c1')!.mirror).toEqual(['A', 'B']);
+  });
+});
+
+// TEXT left MIRRORABLE_KINDS in the Task 7 lane switch: a bare-ref TEXT
+// definition is now a one-term ENGINE formula. What must not change is the
+// observable — the write payload a deployed TEXT mirror produces — so this case
+// asserts the payload rather than which internal lane ran. (The full TEXT
+// engine-lane matrix, including convergence and the accepted deltas, lives in
+// recompute.spec.ts.)
+describe('TEXT left the mirror lane — write payload unchanged', () => {
+  it('writes the source string verbatim, tagged text instead of raw', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', { source: 'TEXT', mirror: 'TEXT' });
+    client.seed('company', [{ id: 'c1', source: 'hello world', mirror: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: mirrorFormula({ targetFieldType: 'TEXT' }),
+      targetRecordId: 'c1',
+    });
+
+    expect(outcome.changed).toBe(true);
+    expect(client.get('company', 'c1')!.mirror).toBe('hello world');
+    expect(client.writes).toEqual(['company:c1:mirror="hello world"']);
+    expect(outcome.value).toEqual({ kind: 'text', value: 'hello world' });
   });
 });
 
@@ -403,7 +414,7 @@ describe('mirror recompute — cross-record', () => {
     });
 
     expect(outcome.error).toBeNull();
-    expect(outcome.rawValue).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'raw', value: null });
     expect(client.get('opportunity', 'o1')!.mirror).toBeNull();
   });
 });
@@ -440,7 +451,7 @@ describe('mirror heartbeat — lastValueText', () => {
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: { firstName: 'Ada' } },
+      { value: { kind: 'raw', value: { firstName: 'Ada' } }, error: null },
       false,
     );
 
@@ -450,24 +461,61 @@ describe('mirror heartbeat — lastValueText', () => {
     expect(client.get('formulaDefinition', 'f1')!.lastValue ?? null).toBeNull();
   });
 
-  it('truncates lastValueText at 500 characters', async () => {
+  it('truncates lastValueText within 500 characters and keeps it valid JSON', async () => {
+    // Truncating AFTER JSON.stringify cut the envelope open, so every reader
+    // (displayHeartbeatValue) failed to parse it and a long text result showed a
+    // permanent dash. The VALUE is truncated instead; the envelope stays whole.
     const long = 'x'.repeat(600);
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: long },
+      { value: { kind: 'raw', value: long }, error: null },
       false,
     );
 
     const text = client.get('formulaDefinition', 'f1')!.lastValueText as string;
-    expect(text).toHaveLength(500);
+    expect(text.length).toBeLessThanOrEqual(500);
+    const decoded = JSON.parse(text) as unknown;
+    expect(typeof decoded).toBe('string');
+    expect(decoded).toBe('x'.repeat((decoded as string).length));
+    expect((decoded as string).length).toBeGreaterThan(400);
+  });
+
+  it('keeps the envelope valid when escaping expands the value', async () => {
+    // A value made of quotes doubles under escaping, so a fixed raw budget would
+    // overflow — the encoder re-encodes until the envelope fits.
+    const quotes = '"'.repeat(600);
+    await recordEvaluationHeartbeat(
+      client,
+      mirrorFormula(),
+      { value: { kind: 'raw', value: quotes }, error: null },
+      false,
+    );
+
+    const text = client.get('formulaDefinition', 'f1')!.lastValueText as string;
+    expect(text.length).toBeLessThanOrEqual(500);
+    expect(JSON.parse(text)).toBe('"'.repeat(249));
+  });
+
+  it('degrades an over-budget non-string value to a parseable preview', async () => {
+    const big = { note: 'y'.repeat(600) };
+    await recordEvaluationHeartbeat(
+      client,
+      mirrorFormula(),
+      { value: { kind: 'raw', value: big }, error: null },
+      false,
+    );
+
+    const text = client.get('formulaDefinition', 'f1')!.lastValueText as string;
+    expect(text.length).toBeLessThanOrEqual(500);
+    expect(JSON.parse(text) as string).toContain('{"note":"yyy');
   });
 
   it('writes null lastValueText for a null source', async () => {
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: null },
+      { value: { kind: 'raw', value: null }, error: null },
       false,
     );
 
@@ -484,7 +532,7 @@ describe('mirror heartbeat — lastValueText', () => {
     await recordEvaluationHeartbeat(
       client,
       formula,
-      { value: null, error: null, rawValue: 'ACTIVE' },
+      { value: { kind: 'raw', value: 'ACTIVE' }, error: null },
       false,
     );
 
@@ -520,7 +568,7 @@ describe('mirror heartbeat via recomputeAllRecords', () => {
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: circular },
+      { value: { kind: 'raw', value: circular }, error: null },
       false,
     );
 

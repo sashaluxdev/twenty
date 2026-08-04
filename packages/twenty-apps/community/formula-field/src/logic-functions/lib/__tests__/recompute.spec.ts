@@ -37,7 +37,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(25);
+    expect(outcome.value).toEqual({ kind: 'number', value: 25 });
     expect(outcome.changed).toBe(true);
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(25);
   });
@@ -53,7 +53,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(25);
+    expect(outcome.value).toEqual({ kind: 'number', value: 25 });
     expect(outcome.changed).toBe(false);
     expect(client.writes).toHaveLength(0);
     expect(client.mutations).toBe(0);
@@ -77,7 +77,7 @@ describe('recomputeForRecord', () => {
     });
 
     // Uses prefetched inputs (3 + 4*2 = 11), no read query needed.
-    expect(outcome.value).toBe(11);
+    expect(outcome.value).toEqual({ kind: 'number', value: 11 });
     expect(client.queries).toBe(0);
   });
 
@@ -92,7 +92,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'number', value: null });
     expect(outcome.changed).toBe(true);
     expect(client.get('opportunity', 'o1')!.formulaScore).toBeNull();
   });
@@ -149,7 +149,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(105);
+    expect(outcome.value).toEqual({ kind: 'number', value: 105 });
     expect(client.get('opportunity', 'o1')!.formulaCrossScore).toBe(105);
   });
 });
@@ -177,7 +177,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(1);
+    expect(outcome.value).toEqual({ kind: 'number', value: 1 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(1);
   });
 
@@ -197,7 +197,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(2);
+    expect(outcome.value).toEqual({ kind: 'number', value: 2 });
   });
 
   it('null-propagates (no write) when the compared SELECT field is null', async () => {
@@ -219,7 +219,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
 
     // null stage -> null string operand -> null IF -> null result. Stored value
     // is already null, so no write (no-op suppression path).
-    expect(outcome.value).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'number', value: null });
     expect(outcome.changed).toBe(false);
     expect(client.mutations).toBe(before);
   });
@@ -240,7 +240,40 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(10);
+    expect(outcome.value).toEqual({ kind: 'number', value: 10 });
+  });
+
+  it('reports NON_NUMERIC_VALUE (no write) when a text value reaches a numeric target', async () => {
+    // Text now survives evaluation, so the coercion that used to fail at resolve
+    // time fails at the write boundary instead — same reported error, still an
+    // outcome rather than a thrown exception, and still no write.
+    client.setFieldKinds('opportunity', { tier: 'TEXT' });
+    client.seed('opportunity', [{ id: 'o1', tier: 'gold', formulaScore: null }]);
+    const before = client.mutations;
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'tier' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.error).toMatch(/NON_NUMERIC_VALUE/);
+    expect(outcome.changed).toBe(false);
+    expect(client.mutations).toBe(before);
+  });
+
+  it('still writes a numeric-shaped text value to a numeric target', async () => {
+    client.setFieldKinds('opportunity', { tier: 'TEXT' });
+    client.seed('opportunity', [{ id: 'o1', tier: '042', formulaScore: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'tier' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toEqual({ kind: 'number', value: 42 });
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(42);
   });
 
   it('resolves a cross-record string comparison', async () => {
@@ -260,7 +293,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(10);
+    expect(outcome.value).toEqual({ kind: 'number', value: 10 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(10);
   });
 });
@@ -292,7 +325,7 @@ describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
     // The epoch-day for 2026-07-04 comfortably exceeds 100, so the condition
     // (formulaInputA > TODAY()) is false regardless of the exact serial value —
     // this asserts TODAY() actually reads a real, large epoch-day, not 0/NaN.
-    expect(outcome.value).toBe(0);
+    expect(outcome.value).toEqual({ kind: 'number', value: 0 });
     expect(outcome.error).toBeNull();
   });
 
@@ -313,7 +346,7 @@ describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
       formula: formula({ expression: 'IF(TODAY() >= formulaInputA, 1, 0)' }),
       targetRecordId: 'o1',
     });
-    expect(before.value).toBe(0);
+    expect(before.value).toEqual({ kind: 'number', value: 0 });
 
     vi.setSystemTime(new Date('2026-07-05T12:00:00.000Z'));
     const after = await recomputeForRecord({
@@ -321,7 +354,7 @@ describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
       formula: formula({ expression: 'IF(TODAY() >= formulaInputA, 1, 0)' }),
       targetRecordId: 'o1',
     });
-    expect(after.value).toBe(1);
+    expect(after.value).toEqual({ kind: 'number', value: 1 });
     expect(after.changed).toBe(true);
   });
 });
@@ -350,7 +383,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       stale,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       true,
     );
 
@@ -372,7 +405,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       fresh,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       true,
     );
 
@@ -392,7 +425,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       corrupt,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       true,
     );
 
@@ -414,7 +447,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       stale,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       false,
     );
 
@@ -432,7 +465,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       changed,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       false,
     );
 
@@ -443,6 +476,91 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
       lastError: '',
       lastEvaluatedAt: '2026-07-04T12:00:00.000Z',
     });
+  });
+
+  // The carve-out is lane-agnostic: a TEXT-target formula reading TODAY() (e.g.
+  // IF(TODAY() > dueDate, "Overdue", "OK")) goes long stretches without a value
+  // change, so without this its lastEvaluatedAt would read stale forever.
+  it('writes lastEvaluatedAt alone on a no-op TEXT outcome when the flag is set and the stored heartbeat is stale', async () => {
+    const stale = formula({
+      targetFieldType: 'TEXT',
+      lastValueText: '"OK"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      true,
+    );
+
+    expect(mutationSpy).toHaveBeenCalledTimes(1);
+    const [[selection]] = mutationSpy.mock.calls;
+    expect(selection.updateFormulaDefinition.__args.data).toEqual({
+      lastEvaluatedAt: '2026-07-04T12:00:00.000Z',
+    });
+  });
+
+  it('writes nothing on a no-op TEXT outcome when the flag is set but the stored heartbeat is fresh', async () => {
+    const fresh = formula({
+      targetFieldType: 'TEXT',
+      lastValueText: '"OK"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T11:30:00.000Z', // 30min old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      fresh,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      true,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
+  });
+
+  it('preserves M3 write-avoidance on the text lane: no write on a no-op outcome when the flag is false', async () => {
+    const stale = formula({
+      targetFieldType: 'TEXT',
+      lastValueText: '"OK"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      false,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
+  });
+
+  // Mirrors are bare refs, so the flag is never true for a raw outcome — the
+  // guard is uniform, and the zero-write mirror heartbeat is unaffected.
+  it('keeps the raw (mirror) lane write-avoidant on a no-op outcome', async () => {
+    const stale = formula({
+      targetFieldType: 'SELECT',
+      lastValueText: '"ACTIVE"',
+      lastError: '',
+      lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
+    });
+    const mutationSpy = vi.spyOn(client, 'mutation');
+
+    await recordEvaluationHeartbeat(
+      client,
+      stale,
+      { value: { kind: 'raw', value: 'ACTIVE' }, error: null },
+      false,
+    );
+
+    expect(mutationSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -474,7 +592,7 @@ describe('recomputeForRecord composite dependency selection', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(10_000_000);
+    expect(outcome.value).toEqual({ kind: 'number', value: 10_000_000 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(10_000_000);
   });
 
@@ -500,6 +618,295 @@ describe('recomputeForRecord composite dependency selection', () => {
       amountMicros: true,
       currencyCode: true,
     });
+  });
+});
+
+// Lane switch (Task 7): a TEXT target is no longer a mirror. A deployed TEXT
+// mirror's expression is a BARE REF, so it becomes a one-term engine formula and
+// must keep writing exactly what the mirror lane wrote. These tests pin the
+// WRITE PAYLOADS (client.writes), which is the observable the deployed data
+// depends on, not which internal function produced them.
+describe('TEXT target on the engine lane — deployed-mirror write parity', () => {
+  let client: FakeClient;
+
+  const textMirror = (
+    overrides: Partial<FormulaDefinitionRecord> = {},
+  ): FormulaDefinitionRecord => ({
+    id: 'ft',
+    targetObject: 'company',
+    targetField: 'mirror',
+    targetFieldType: 'TEXT',
+    expression: 'source',
+    enabled: true,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    client = new FakeClient();
+    client.setFieldKinds('company', { source: 'TEXT', mirror: 'TEXT' });
+  });
+
+  it('writes the source string verbatim and converges on the second run', async () => {
+    client.seed('company', [{ id: 'c1', source: 'hello world', mirror: null }]);
+
+    const first = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(first.changed).toBe(true);
+    expect(first.value).toEqual({ kind: 'text', value: 'hello world' });
+    expect(client.writes).toEqual(['company:c1:mirror="hello world"']);
+
+    const second = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(second.changed).toBe(false);
+    expect(client.writes).toHaveLength(1);
+  });
+
+  // B5: numeric-shaped strings stay lazy, so a zip code keeps its leading zero
+  // exactly as the mirror lane's raw passthrough did.
+  it('keeps a numeric-shaped string verbatim (leading zeros preserved)', async () => {
+    client.seed('company', [{ id: 'c1', source: '042', mirror: null }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(client.writes).toEqual(['company:c1:mirror="042"']);
+  });
+
+  it('writes an empty string as an empty string, not a clear', async () => {
+    client.seed('company', [{ id: 'c1', source: '', mirror: 'OLD' }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(client.writes).toEqual(['company:c1:mirror=""']);
+  });
+
+  it('clears the target once when the source is null, then suppresses', async () => {
+    client.seed('company', [{ id: 'c1', source: null, mirror: 'OLD' }]);
+
+    const first = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    expect(first.changed).toBe(true);
+    expect(client.writes).toEqual(['company:c1:mirror=null']);
+
+    const second = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    expect(second.changed).toBe(false);
+    expect(client.writes).toHaveLength(1);
+  });
+
+  it('suppresses the write entirely when source and target are both empty', async () => {
+    client.seed('company', [{ id: 'c1', source: null, mirror: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    expect(outcome.changed).toBe(false);
+    expect(client.writes).toHaveLength(0);
+    expect(client.mutations).toBe(0);
+  });
+
+  it('copies a cross-referenced TEXT source verbatim', async () => {
+    const sourceId = '440efe8c-f140-4fbc-99e6-9267344451b1';
+    client.setFieldKinds('opportunity', { mirror: 'TEXT' });
+    client.setFieldKinds('company', { name: 'TEXT' });
+    client.seed('company', [{ id: sourceId, name: 'Acme Inc' }]);
+    client.seed('opportunity', [{ id: 'o1', mirror: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: textMirror({
+        targetObject: 'opportunity',
+        expression: `[company:${sourceId}:name]`,
+      }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toEqual({ kind: 'text', value: 'Acme Inc' });
+    expect(client.writes).toEqual(['opportunity:o1:mirror="Acme Inc"']);
+  });
+
+  it('writes null with no error when the cross-referenced record is missing', async () => {
+    const sourceId = '440efe8c-f140-4fbc-99e6-9267344451b1';
+    client.setFieldKinds('opportunity', { mirror: 'TEXT' });
+    client.seed('opportunity', [{ id: 'o1', mirror: 'STALE' }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: textMirror({
+        targetObject: 'opportunity',
+        expression: `[company:${sourceId}:name]`,
+      }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.error).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'text', value: null });
+    expect(client.writes).toEqual(['opportunity:o1:mirror=null']);
+  });
+
+  // Accepted deltas (ADR 0026): dirty non-string data in a TEXT column, and the
+  // B2 date-shaped-content edge. Both used to copy raw; both now render through
+  // the engine's canonical text rendering.
+  it('renders a dirty non-string scalar canonically (accepted delta)', async () => {
+    client.seed('company', [{ id: 'c1', source: 42, mirror: null }]);
+    client.seed('company', [{ id: 'c2', source: true, mirror: null }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c2',
+    });
+
+    expect(client.writes).toEqual([
+      'company:c1:mirror="42"',
+      'company:c2:mirror="1"',
+    ]);
+  });
+
+  it('copies date-SHAPED content that is not a real date verbatim', async () => {
+    // Part numbers, reference codes and hyphenated phone numbers match the DATE
+    // shape. Parsing them threw, and the throw became an error outcome with
+    // write: null — every pass, forever, so a deployed mirror over such a column
+    // froze at its last pre-upgrade value. Validity-gating restores convergence.
+    client.seed('company', [{ id: 'c1', source: '8801-25-03', mirror: null }]);
+    client.seed('company', [{ id: 'c2', source: '1234-56-78', mirror: null }]);
+
+    const first = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    const second = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c2',
+    });
+
+    expect(first.error).toBeNull();
+    expect(second.error).toBeNull();
+    expect(client.writes).toEqual([
+      'company:c1:mirror="8801-25-03"',
+      'company:c2:mirror="1234-56-78"',
+    ]);
+  });
+
+  it('coerces date-shaped content to its serial (documented B2 edge)', async () => {
+    client.seed('company', [{ id: 'c1', source: '2026-07-04', mirror: null }]);
+
+    await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+
+    // 2026-07-04 as whole UTC epoch-days, rendered canonically.
+    const serial = String(Date.parse('2026-07-04T00:00:00.000Z') / 86_400_000);
+    expect(client.writes).toEqual([`company:c1:mirror=${JSON.stringify(serial)}`]);
+  });
+});
+
+// Accepted delta B6 (ADR 0026), the SAME-RECORD half. Nothing rejects this at
+// save time — the string-comparison rule (validation-core 1b) explicitly permits
+// TEXT and SELECT operands — so it has to be pinned where the real coercion runs.
+// A resolver built from pre-coerced values would bypass the mechanism entirely:
+// the flip happens in buildResolver's coerceToEngineValue call, not the evaluator.
+describe('TEXT target on the engine lane — same-record date-shaped comparison (B6)', () => {
+  it('compares date-shaped TEXT content against a text literal as FALSE', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', { signedOn: 'TEXT', tier: 'TEXT' });
+    client.seed('company', [
+      { id: 'c1', signedOn: '2026-01-15', tier: null },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: {
+        id: 'fb6',
+        targetObject: 'company',
+        targetField: 'tier',
+        targetFieldType: 'TEXT',
+        expression: 'IF(signedOn = "2026-01-15", "match", "other")',
+        enabled: true,
+      },
+      targetRecordId: 'c1',
+    });
+
+    // The content IS a valid date, so it resolves eagerly to its serial and the
+    // typed comparison against the text literal is a number-vs-string mismatch.
+    // v0.1.x compared the raw string here and took the "match" branch.
+    expect(outcome.error).toBeNull();
+    expect(client.writes).toEqual(['company:c1:tier="other"']);
+  });
+});
+
+describe('TEXT target on the engine lane — concatenation end to end', () => {
+  it('writes the concatenated string and records a text heartbeat', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', {
+      invoiceNumber: 'TEXT',
+      invoiceCode: 'TEXT',
+    });
+    client.seed('company', [
+      { id: 'c1', invoiceNumber: '007', invoiceCode: null },
+    ]);
+    const concatFormula: FormulaDefinitionRecord = {
+      id: 'fc',
+      targetObject: 'company',
+      targetField: 'invoiceCode',
+      targetFieldType: 'TEXT',
+      expression: '"ACME-" & invoiceNumber',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [
+      concatFormula as Record<string, unknown> & { id: string },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: concatFormula,
+      targetRecordId: 'c1',
+    });
+
+    expect(outcome.value).toEqual({ kind: 'text', value: 'ACME-007' });
+    expect(client.writes).toEqual(['company:c1:invoiceCode="ACME-007"']);
+
+    await recomputeAllRecords(client, concatFormula);
+
+    // The heartbeat rides the outcome's 'text' tag into lastValueText; the
+    // NUMBER-typed lastValue column stays untouched.
+    expect(client.get('formulaDefinition', 'fc')!.lastValueText).toBe(
+      JSON.stringify('ACME-007'),
+    );
+    expect(client.get('formulaDefinition', 'fc')!.lastValue ?? null).toBeNull();
   });
 });
 

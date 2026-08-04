@@ -29,7 +29,15 @@ describe('OUTPUT_FORMATS', () => {
       'currency',
       'date',
       'datetime',
+      'text',
     ]);
+  });
+
+  it('maps text to a TEXT field type', () => {
+    expect(getOutputFormat('text')).toMatchObject({
+      fieldType: 'TEXT',
+      targetFieldType: 'TEXT',
+    });
   });
 
   it('maps date / datetime to DATE / DATE_TIME field types', () => {
@@ -158,6 +166,29 @@ describe('buildFieldSettings — DATE / DATE_TIME', () => {
     expect(areFormatOptionsValid('integer', makeFormatOptions('integer'))).toBe(
       true,
     );
+  });
+});
+
+describe('buildFieldSettings — TEXT', () => {
+  it('carries no settings (a TEXT field has no display options in v1)', () => {
+    expect(buildFieldSettings('text', makeFormatOptions('text'))).toBeNull();
+  });
+
+  it('is always valid — there is nothing to fill in', () => {
+    expect(areFormatOptionsValid('text', makeFormatOptions('text'))).toBe(true);
+    // A stale CUSTOM date pattern carried over from another format must not
+    // block a TEXT field (the date branch is not reachable for TEXT).
+    expect(
+      areFormatOptionsValid('text', {
+        ...makeFormatOptions('text'),
+        dateDisplayFormat: 'CUSTOM' as const,
+        customUnicodeDateFormat: '',
+      }),
+    ).toBe(true);
+  });
+
+  it('leaves persisted options untouched when resuming a TEXT draft', () => {
+    expect(optionsFromSettings('text', null)).toEqual(makeFormatOptions('text'));
   });
 });
 

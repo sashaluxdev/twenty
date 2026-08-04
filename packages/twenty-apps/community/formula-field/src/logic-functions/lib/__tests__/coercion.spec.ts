@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { coerceToNumber } from 'src/logic-functions/lib/coercion';
+import {
+  coerceToEngineValue,
+  coerceToNumber,
+} from 'src/logic-functions/lib/coercion';
 import { MS_PER_DAY } from 'src/logic-functions/lib/date-serial';
 
 // Coercion of raw field values to the engine's number domain, focused on the
@@ -75,5 +78,67 @@ describe('coerceToNumber date parsing', () => {
     expect(coerceToNumber(true)).toBe(1);
     expect(coerceToNumber(false)).toBe(0);
     expect(coerceToNumber({ amountMicros: 5_000_000 })).toBe(5_000_000);
+  });
+});
+
+// The resolver-side coercion for the number | string | null value domain: dates
+// stay EAGER (deployed date comparisons keep working) while every other string
+// resolves verbatim, so text survives into concatenation and text targets and
+// numeric contexts coerce it at point of use instead.
+describe('coerceToEngineValue', () => {
+  it('should still coerce date-shaped strings to serials', () => {
+    expect(coerceToEngineValue('2026-01-15')).toBe(
+      Date.UTC(2026, 0, 15) / MS_PER_DAY,
+    );
+    expect(coerceToEngineValue('1970-01-01T06:00:00.000Z')).toBe(0.25);
+  });
+
+  it('should return numeric-shaped strings verbatim rather than parsing them', () => {
+    // A leading zero is the tell: coercing at resolve time would render "042"
+    // as 42 in text output.
+    expect(coerceToEngineValue('042')).toBe('042');
+    expect(coerceToEngineValue('42')).toBe('42');
+  });
+
+  it('should return empty and whitespace-only strings verbatim instead of throwing', () => {
+    expect(coerceToEngineValue('')).toBe('');
+    expect(coerceToEngineValue('   ')).toBe('   ');
+  });
+
+  it('should return non-numeric text verbatim instead of throwing', () => {
+    expect(coerceToEngineValue('won')).toBe('won');
+  });
+
+  it('should delegate non-string values to coerceToNumber unchanged', () => {
+    expect(coerceToEngineValue(null)).toBeNull();
+    expect(coerceToEngineValue(true)).toBe(1);
+    expect(coerceToEngineValue(false)).toBe(0);
+    expect(coerceToEngineValue(42)).toBe(42);
+    expect(coerceToEngineValue({ amountMicros: 5_000_000 })).toBe(5_000_000);
+  });
+
+  it('should resolve a date-SHAPED non-date verbatim instead of throwing', () => {
+    // Date eagerness is validity-gated: a part number, a reference code or a
+    // hyphenated phone number matches the DATE shape without being a calendar
+    // date. Throwing failed every pass of a deployed TEXT mirror over such a
+    // column, freezing its target at the last pre-upgrade value.
+    expect(coerceToEngineValue('2026-13-45')).toBe('2026-13-45');
+    expect(coerceToEngineValue('8801-25-03')).toBe('8801-25-03');
+    expect(coerceToEngineValue('1234-56-78')).toBe('1234-56-78');
+    expect(coerceToEngineValue('2024-07-32')).toBe('2024-07-32');
+    // The same gate on the datetime shape.
+    expect(coerceToEngineValue('2026-07-03T99:99:99Z')).toBe(
+      '2026-07-03T99:99:99Z',
+    );
+  });
+
+  it('should keep coerceToNumber throwing for the same content (numeric contexts)', () => {
+    // The verbatim fallback belongs to the value domain only: a numeric context
+    // genuinely has no answer for date-shaped junk, so nothing about arithmetic
+    // changed.
+    expect(() => coerceToNumber('8801-25-03')).toThrowError(
+      /NON_NUMERIC_VALUE|not a valid date/,
+    );
+    expect(() => coerceToNumber('2026-13-45')).toThrow();
   });
 });

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { buildScanSelection } from 'src/logic-functions/lib/scan-selection';
+import {
+  buildScanSelection,
+  scanNodeSelection,
+} from 'src/logic-functions/lib/scan-selection';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
@@ -57,20 +60,20 @@ describe('buildScanSelection', () => {
   });
 
   it('selects only the target field for a cross-record mirror', async () => {
-    client.setFieldKinds('company', { name: 'TEXT' });
+    client.setFieldKinds('company', { stage: 'SELECT' });
     const scan = await buildScanSelection(
       client,
       definition({
-        expression: '[company:11111111-1111-4111-8111-111111111111:name]',
-        targetField: 'companyName',
-        targetFieldType: 'TEXT',
+        expression: '[company:11111111-1111-4111-8111-111111111111:stage]',
+        targetField: 'stageCopy',
+        targetFieldType: 'SELECT',
       }),
     );
 
-    expect(scan?.fields).toEqual(['companyName']);
+    expect(scan?.fields).toEqual(['stageCopy']);
     // The target field must go through the mirror vocabulary, not the engine
     // one — this branch's whole job is emitting that entry.
-    expect(scan?.overrides.companyName).toBe(true);
+    expect(scan?.overrides.stageCopy).toBe(true);
   });
 
   it('selects source and target through the mirror vocabulary (not the engine one) for a same-record composite mirror', async () => {
@@ -120,13 +123,71 @@ describe('buildScanSelection', () => {
       definition({
         expression: 'unknownField',
         targetField: 'copy',
-        targetFieldType: 'TEXT',
+        targetFieldType: 'SELECT',
       }),
     );
 
     // Parity with computeMirrorValueForRecord: an unresolvable kind must fail
     // visibly per record, never be guessed at page level.
     expect(scan).toBeNull();
+  });
+
+  // Lane switch (Task 7): a TEXT target takes the ENGINE branch, so its page
+  // selection is built from the dependency path, not the mirror vocabulary. The
+  // node must still arrive complete — deps plus the target scalar — or every
+  // record would fall back to a per-record fetch (or worse, compare a value that
+  // was never selected).
+  it('selects the dependency field plus the TEXT target scalar for a same-record bare ref', async () => {
+    const scan = await buildScanSelection(
+      client,
+      definition({
+        expression: 'name',
+        targetField: 'nameCopy',
+        targetFieldType: 'TEXT',
+      }),
+    );
+
+    expect(scan?.fields).toEqual(['name']);
+    expect(scanNodeSelection(scan!)).toEqual({
+      id: true,
+      name: true,
+      nameCopy: true,
+    });
+  });
+
+  it('selects the TEXT target scalar alone for a cross-record bare ref', async () => {
+    const scan = await buildScanSelection(
+      client,
+      definition({
+        expression: '[company:11111111-1111-4111-8111-111111111111:name]',
+        targetField: 'companyName',
+        targetFieldType: 'TEXT',
+      }),
+    );
+
+    // The cross-referenced source is fetched once per pass by the cross-record
+    // cache, so only the current target value belongs on the scanned node.
+    expect(scan?.fields).toEqual([]);
+    expect(scanNodeSelection(scan!)).toEqual({ id: true, companyName: true });
+  });
+
+  it('sub-selects a composite dependency of a TEXT concatenation target', async () => {
+    const scan = await buildScanSelection(
+      client,
+      definition({
+        expression: '"JPY " & amount.amountMicros',
+        targetField: 'amountLabel',
+        targetFieldType: 'TEXT',
+      }),
+    );
+
+    // A CURRENCY dependency selected as a scalar silently reads null on the real
+    // server, so the engine vocabulary must still apply on the TEXT lane.
+    expect(scanNodeSelection(scan!)).toEqual({
+      id: true,
+      amount: { amountMicros: true, currencyCode: true },
+      amountLabel: true,
+    });
   });
 
   it('returns null when the definition has no target object or field', async () => {

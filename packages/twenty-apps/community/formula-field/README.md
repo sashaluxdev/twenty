@@ -1,7 +1,8 @@
 # Formula Field
 
 A Twenty **Apps SDK** application that gives any object a "chimeric" formula
-field: **reading** the field returns a computed number (API reads, CSV exports,
+field: **reading** the field returns a computed value — a number or a string
+(API reads, CSV exports,
 table cells, filters, aggregations, copy/paste all get the value, because it is
 a real native field); **editing** the field means editing a formula
 *expression*, not the value. Arithmetic formulas can reference other fields on
@@ -18,8 +19,9 @@ read/write renderers (`defineField` can only attach an *existing*
 `FieldMetadataType`). So a "chimeric" field is emulated with two real objects
 (ADR 0001):
 
-1. A **value field** — a genuine `NUMBER`, `CURRENCY`, `DATE` or `DATE_TIME`
-   column on the target object. This is what the UI shows and every read returns.
+1. A **value field** — a genuine `NUMBER`, `CURRENCY`, `DATE`, `DATE_TIME` or
+   `TEXT` column on the target object. This is what the UI shows and every read
+   returns.
 2. A **FormulaDefinition** record — one per formula — holding the target
    object/field, the expression string, the extracted dependency list, an
    `enabled` flag, operational status, and a last-evaluated heartbeat.
@@ -31,7 +33,7 @@ through a front component on the record page.
 ### Feature summary
 
 - **Guided "Add formula field" wizard** — pick object → output format (integer /
-  decimal / percent / short / currency / date / datetime) → per-format options
+  decimal / percent / short / currency / date / datetime / text) → per-format options
   (decimals, currency Short/Full + code, date display style with custom Unicode
   pattern — the same options the native field creator exposes) → name; the value
   field is created at runtime via the metadata API, no redeploy (ADR 0008). Every
@@ -43,8 +45,10 @@ through a front component on the record page.
   label and display settings (decimals, number/currency/date format) are
   editable and written straight back through `updateOneField`.
 - **Output formats** — integer, decimal, percent (all `NUMBER`), currency
-  (`CURRENCY`, stored and computed in **micros**, ×1e6), and date / datetime
-  (`DATE` / `DATE_TIME`, the Excel serial-date model — **epoch-days**, ADR 0011).
+  (`CURRENCY`, stored and computed in **micros**, ×1e6), date / datetime
+  (`DATE` / `DATE_TIME`, the Excel serial-date model — **epoch-days**, ADR 0011),
+  and text (`TEXT`, a computed string — concatenation, IF branches returning
+  text, or a bare reference to another TEXT field; ADR 0026, no display options).
 - **Same-record and cross-record references** — read another field on the same
   record, or a field on a specific record of any object by uuid.
 - **Manual per-record overrides** — a human editing the value directly pins that
@@ -70,49 +74,52 @@ The engine (`src/engine/`) is a whitelist tokenizer → recursive-descent parser
 tree-walking interpreter. There is no `eval` / `new Function` anywhere. Only the
 characters that make up the grammar below are accepted; everything else (`;`,
 single quotes, backslashes, unicode homoglyph operators, …) is rejected at the
-exact offset where it appears. The sole exception is the double-quote `"`, which
-opens a whitelisted string literal — legal **only** as a direct `=`/`!=` operand
-inside an IF condition (see below); single quotes are never accepted.
+exact offset where it appears. The double-quote `"` opens a whitelisted string
+literal, which is an ordinary value (ADR 0026) — legal anywhere a number is,
+except beside an ordering operator; single quotes are never accepted.
 
 ```
+concat       := expression ('&' expression)*   // the loosest value tier
 expression   := term (('+' | '-') term)*
 term         := unary (('*' | '/' | '%') unary)*
 unary        := ('+' | '-') unary | primary
-primary      := NUMBER | FIELD | CROSSREF | IF | TODAY | SUM | IFBLANK
-              | IFS | SWITCH | '(' expression ')'
-IF           := 'IF' '(' condition ',' expression ',' expression ')'
+primary      := NUMBER | STRING | FIELD | CROSSREF | IF | TODAY | SUM | IFBLANK
+              | IFS | SWITCH | '(' concat ')'
+IF           := 'IF' '(' condition ',' concat ',' concat ')'
 TODAY        := 'TODAY' '(' ')'
-SUM          := 'SUM' '(' expression (',' expression)* ')'
-IFBLANK      := 'IFBLANK' '(' expression ',' expression ')'
-IFS          := 'IFS' '(' condition ',' expression
-                    (',' condition ',' expression)* (',' expression)? ')'
-SWITCH       := 'SWITCH' '(' operand (',' operand ',' expression)+
-                    (',' expression)? ')'
-condition    := boolFunction | operand (compareOp operand)?
+SUM          := 'SUM' '(' concat (',' concat)* ')'
+IFBLANK      := 'IFBLANK' '(' concat ',' concat ')'
+IFS          := 'IFS' '(' condition ',' concat
+                    (',' condition ',' concat)* (',' concat)? ')'
+SWITCH       := 'SWITCH' '(' concat (',' concat ',' concat)+
+                    (',' concat)? ')'
+condition    := boolFunction | concat (compareOp concat)?
 boolFunction := 'AND' '(' condition (',' condition)+ ')'
               | 'OR'  '(' condition (',' condition)+ ')'
               | 'NOT' '(' condition ')'
-              | 'ISBLANK' '(' expression ')'
-operand      := STRING | expression            // STRING only as a =/!= operand
+              | 'ISBLANK' '(' concat ')'
 compareOp    := '>' | '<' | '>=' | '<=' | '=' | '==' | '!='
 
 NUMBER   := digits ['.' digits]              // e.g. 42, 3.14, .5
+STRING   := '"' chars '"'                     // double-quoted, a value anywhere
 FIELD    := ident ('.' ident)*               // same-record dotted path
 CROSSREF := '[' object ':' uuidV4 ':' fieldPath ']'
-STRING   := '"' chars '"'                     // double-quoted; =/!= operand only
 ident    := (letter | '_') (letter | digit | '_')*
 ```
 
 `TODAY()` resolves to the current epoch-day (ADR 0012), `SUM(...)` totals its
 non-null arguments (ADR 0016), `IFBLANK(value, fallback)` substitutes a fallback
-for a null value (ADR 0017), `AND`/`OR`/`NOT`/`ISBLANK` are condition-only
-combinators (ADR 0017), and `IFS`/`SWITCH` (ADR 0018) are readable multi-rung
-ladders that desugar into nested IFs at parse time. All are reserved words (see
-below).
+for a blank value (ADR 0017, widened by ADR 0026), `AND`/`OR`/`NOT`/`ISBLANK` are
+condition-only combinators (ADR 0017), and `IFS`/`SWITCH` (ADR 0018) are readable
+multi-rung ladders that desugar into nested IFs at parse time. All are reserved
+words (see below).
 
 Binary operators are left-associative; `*` `/` `%` bind tighter than `+` `-`;
 unary `+`/`-` bind tighter than binary but looser than parentheses. Arithmetic
 binds tighter than comparison: `a + b > c * 2` groups as `(a + b) > (c * 2)`.
+`&` (concatenation, ADR 0026) is looser than every arithmetic operator but
+tighter than a comparison, so `a & "-" & b = code` concatenates first and then
+compares the result.
 
 ### Examples
 
@@ -134,6 +141,9 @@ IF(ISBLANK(email), 0, 1)                      test whether a field is blank
 revenue + IFBLANK(upsell, 0)                  treat a blank input as 0
 IFS(score >= 90, 5, score >= 70, 4, 0)        readable range ladder (nested IF)
 SWITCH(stage, "lead", 1, "won", 3, 0)        map a SELECT field to a number
+"INV-" & customerCode & "-" & invoiceNumber  concatenation (TEXT output)
+IF(amount > 50000, "Hot", "Cold")            branches may return text
+sourceField                                   one-term formula = a TEXT mirror
 ```
 
 A same-record path like `amount.amountMicros` reaches into a composite field;
@@ -150,8 +160,8 @@ case-insensitive (`IF` / `if` / `If`). Rules:
 - **Comparisons are transient.** `> < >= <= = !=` (`==` is an alias of `=`) are
   legal **only** at the top level of IF's condition slot. A comparison anywhere
   a value is expected — top level, inside arithmetic, in a then/else branch,
-  inside a parenthesised comparison operand — is a parse error. Formulas always
-  produce `number | null`, never a boolean.
+  inside a parenthesised comparison operand — is a parse error. Formulas produce
+  `number | string | null` (ADR 0026), never a boolean.
 - **Chained comparisons** (`a > b > c`) are a parse error.
 - **Truthiness (Excel-style).** A comparison yields true/false; a plain numeric
   condition is allowed with `0` = false and any nonzero value (including
@@ -160,10 +170,12 @@ case-insensitive (`IF` / `if` / `If`). Rules:
   comparison operand, makes the **entire IF result null**. This deliberately
   deviates from Excel (where a blank cell compares as 0) to match the app's
   null-propagation policy — an empty input never silently becomes a 0.
-- **String literals (double-quoted).** `"..."` is legal only as a direct `=` /
-  `!=` operand at the top level of an IF condition (e.g. `IF(stage = "won", …)`);
-  strings compare for equality only, never ordering, and appear nowhere else.
-  Single quotes are always rejected.
+- **String literals (double-quoted).** `"..."` is an ordinary value (ADR 0026):
+  legal in a condition operand (`IF(stage = "won", …)`), in a branch
+  (`IF(x > 1, "Hot", "Cold")`), and in any other value slot. Strings still
+  compare for equality only — an ordering operator with a literal operand
+  (`a > "b"`) is a parse error. Equality is **typed and non-coercing**:
+  `42 = "42"` is false. Single quotes are always rejected.
 - **Lazy evaluation.** Only the taken branch is evaluated: an error in the
   untaken branch (e.g. division by zero) never fires. The condition is always
   evaluated.
@@ -210,22 +222,23 @@ Four condition-context combinators compose comparisons inside an IF condition
 true/false (never null) for a successfully evaluated argument; a typo'd field
 name inside it still throws `UNKNOWN_VARIABLE` (a formula bug, not a blank).
 
-- **Bare field / cross-record operand** — raw-first: an empty or whitespace-only
-  string is blank, any other non-empty string is not blank (so `ISBLANK(email)`
-  works on TEXT / SELECT fields day one). A non-string raw value falls back to
-  numeric: `null` is blank, a number is not, a missing linked record reads as
-  blank.
-- **Compound operand** (`ISBLANK(a + b)`) — evaluated in the numeric domain; a
-  null result (from internal null propagation) counts as blank.
+- **Bare field / cross-record operand** — an empty or whitespace-only string is
+  blank, any other non-empty string is not blank (so `ISBLANK(email)` works on
+  TEXT / SELECT fields day one). `null` is blank, a number is not, a missing
+  linked record reads as blank.
+- **Compound operand** (`ISBLANK(a + b)`) — a null result (from internal null
+  propagation) counts as blank.
 
-`IFBLANK(value, fallback)` returns `value` unless it is null, otherwise
+`IFBLANK(value, fallback)` returns `value` unless it is **blank**, otherwise
 `fallback` (which may itself be null). It is a **value** function, legal anywhere
 a number is — `revenue + IFBLANK(upsell, 0)` fixes the most common
 null-propagation complaint, and `IF(IFBLANK(amount, 0) > 1000, …)` reads as
 "treat a blank amount as 0". **Both arguments are always evaluated** (SUM
-precedent), so an error in the fallback fires even when the value is non-null.
-IFBLANK stays purely numeric — a text field inside it goes through the numeric
-resolver, a deliberate asymmetry with ISBLANK (only ISBLANK observes raw values).
+precedent), so an error in the fallback fires even when the value is non-blank.
+Since ADR 0026 the two functions agree on what blank means — `null`, or text
+that is empty/whitespace-only — so `IFBLANK(nickname, firstName)` substitutes on
+a blank TEXT field too. ADR 0017's "deliberate asymmetry" (IFBLANK null-only,
+numeric-only) is gone.
 
 ### Multi-rung ladders: IFS and SWITCH (ADR 0018)
 
@@ -260,6 +273,45 @@ just IFs.
   formula. Runtime error messages speak in IF terms (the real AST); parse-time
   errors (arity, malformed args) do say IFS/SWITCH.
 
+### Text values and concatenation (ADR 0026)
+
+The engine's value domain is `number | string | null`, so a formula can produce
+text as well as a number. `&` concatenates:
+
+```
+"INV-" & customerCode & "-" & invoiceNumber   a template
+firstName & " " & lastName                     null parts contribute nothing
+sourceField                                    a one-term formula copies a field
+```
+
+- **How a field resolves.** A DATE / DATE_TIME value — and any string whose
+  content is a **valid** date (`"2026-01-15"`, ISO datetime) — still becomes its
+  epoch-day serial at resolve time, so deployed date arithmetic and comparisons
+  are untouched. Every other string resolves **verbatim**: `"042"` keeps its
+  leading zero, a blank field is `""` rather than an error, and date-*shaped*
+  content that is not a real date (a part number like `8801-25-03`) stays text.
+- **Numeric contexts coerce at point of use.** `zip + 1`, ordering, `SUM`, and
+  condition truthiness parse numeric-shaped text as before; non-numeric text in
+  one of those slots is a `NON_NUMERIC_VALUE` error. `&` is not a numeric
+  context, so the two directions stay visibly distinct: `zip & 1` is `"01234 1"`
+  without the leading zero being lost.
+- **`&` semantics.** Numbers render canonically (integers bare, up to 15
+  significant digits, float dust trimmed); `null` contributes the empty string
+  (the ONE place null does not propagate — a template must not blank out because
+  one part is empty), so an all-null concat is `""`; dates render as their raw
+  serial numbers (no `TEXT()` formatting function ships in this version).
+- **`TEXT_TOO_LONG`.** The running result of a `&` chain is capped at 10 000
+  characters, checked after each part. The cap is concat-only: a long TEXT field
+  flowing through a one-term formula or an IF branch is never capped, which is
+  what keeps a TEXT passthrough at parity with its source field.
+- **Equality is typed.** `=`/`!=` compare without coercion, so a number never
+  equals its text form and two text values compare directly. Ordering
+  (`< <= > >=`) remains numeric-only.
+- **TEXT targets.** A Text-format definition writes the computed string verbatim;
+  a number result renders through the same canonical rendering `&` uses. A
+  one-term formula naming another TEXT (or SELECT) field is the sanctioned way to
+  mirror it; a bare reference to a field of any other kind is rejected at save.
+
 ### Dates (Excel serial model, ADR 0011)
 
 Dates are not a separate type — a date simply **is** a number, exactly like
@@ -278,8 +330,10 @@ IF(signedDate > closeDate,        dates compare as numbers, so ordering
 - **Reading.** A `DATE` field (`"yyyy-MM-dd"`) parses to whole epoch-days; a
   `DATE_TIME` field (ISO UTC) parses to fractional epoch-days. Parsing is by
   pattern, so a date-shaped value is understood regardless of its declared type.
-  An impossible date (`2026-13-45`) is a `NON_NUMERIC_VALUE` error, never a
-  silent NaN.
+  An impossible date (`2026-13-45`) is never a silent NaN: in a numeric context
+  it is a `NON_NUMERIC_VALUE` error, and in the value domain it resolves as
+  ordinary text (ADR 0026), since date-shaped strings that are not dates are
+  usually part numbers or reference codes.
 - **Writing.** A `DATE` **target floors to the whole UTC day** (a date has no
   time) and serializes to `"yyyy-MM-dd"`; a `DATE_TIME` target rounds to the
   whole millisecond and serializes to ISO UTC. So `closeDate + 0.5` on a DATE
@@ -294,14 +348,16 @@ IF(signedDate > closeDate,        dates compare as numbers, so ordering
   number, nonsensical operations are *not* rejected: `birthDate * 2` computes a
   meaningless serial number and, on a DATE target, writes it as some far-future
   date. There is no type system to catch this — the identical tradeoff Excel
-  makes, and the price of keeping the engine number-only.
+  makes, and the price of keeping dates in the number domain (a date inside `&`
+  renders as its serial for the same reason).
 
 ### Value & error semantics (ADR 0003)
 
-- **Field kinds coerce to numbers** (`coercion.ts`): numbers pass through;
-  booleans → 0/1; a CURRENCY composite referenced without a sub-path → its
-  `amountMicros`; numeric strings parse; DATE / DATE_TIME strings parse to
-  epoch-days (Excel serial model, ADR 0011).
+- **Field kinds coerce into `number | string | null`** (`coercion.ts`, ADR 0026):
+  numbers pass through; booleans → 0/1; a CURRENCY composite referenced without a
+  sub-path → its `amountMicros`; valid DATE / DATE_TIME strings parse to
+  epoch-days (Excel serial model, ADR 0011); every other string resolves verbatim
+  as text, and numeric contexts coerce it at point of use instead.
 - **Null propagates.** A field that exists but is empty resolves to `null`; any
   sub-expression touching a null yields null, and the whole result is null (the
   value field is cleared). This distinguishes "empty input" from "computed 0".
@@ -315,17 +371,20 @@ IF(signedDate > closeDate,        dates compare as numbers, so ordering
   only over-report). A cyclic formula is disabled with `CYCLE_DETECTED`.
 
 Error codes: `TOKENIZE_ERROR`, `PARSE_ERROR`, `DIVISION_BY_ZERO`,
-`UNKNOWN_VARIABLE`, `NON_NUMERIC_VALUE`, `MAX_DEPTH_EXCEEDED`, `CYCLE_DETECTED`.
+`UNKNOWN_VARIABLE`, `NON_NUMERIC_VALUE`, `MAX_DEPTH_EXCEEDED`, `CYCLE_DETECTED`,
+`TEXT_TOO_LONG`.
 
 ### Limits (DoS guards)
 
-Read from `src/engine/parser.ts` and `src/engine/evaluator.ts`:
+Read from `src/engine/parser.ts`, `src/engine/evaluator.ts` and
+`src/engine/text-format.ts`:
 
 | Limit | Value | Where |
 | --- | --- | --- |
 | Max expression length | 2000 chars | `MAX_EXPRESSION_LENGTH` (parser) |
 | Max parse recursion depth | 200 | `MAX_PARSE_DEPTH` (parser) |
 | Max evaluation depth | 64 | `DEFAULT_MAX_DEPTH` (evaluator) |
+| Max computed text (`&` chains) | 10 000 chars | `MAX_COMPUTED_TEXT_LENGTH` (text-format) |
 
 The parser caps source length and nesting before the JS call stack can overflow;
 the evaluator independently caps AST depth at runtime.

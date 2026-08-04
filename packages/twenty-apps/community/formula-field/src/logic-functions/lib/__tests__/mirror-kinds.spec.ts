@@ -13,7 +13,6 @@ const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
 
 describe('MIRRORABLE_KINDS allowlist', () => {
   const allowed = [
-    'TEXT',
     'SELECT',
     'MULTI_SELECT',
     'BOOLEAN',
@@ -32,12 +31,25 @@ describe('MIRRORABLE_KINDS allowlist', () => {
     expect(isMirrorTargetKind(kind)).toBe(true);
   });
 
-  it.each(['NUMBER', 'CURRENCY', 'DATE', 'DATE_TIME', 'RELATION', 'ACTOR', 'RICH_TEXT'])(
-    'rejects %s as a mirror target kind',
-    (kind) => {
-      expect(isMirrorTargetKind(kind)).toBe(false);
-    },
-  );
+  it('holds exactly eleven kinds — TEXT left the lane (ADR 0026)', () => {
+    expect([...MIRRORABLE_KINDS].sort()).toEqual([...allowed].sort());
+  });
+
+  // TEXT joins the engine family's rejected list: a bare-ref TEXT target is now
+  // a one-term ENGINE formula, not a mirror passthrough.
+  it.each([
+    'TEXT',
+    'NUMBER',
+    'CURRENCY',
+    'DATE',
+    'DATE_TIME',
+    'RELATION',
+    'ACTOR',
+    'RICH_TEXT',
+  ])('rejects %s as a mirror target kind', (kind) => {
+    expect(MIRRORABLE_KINDS.has(kind)).toBe(false);
+    expect(isMirrorTargetKind(kind)).toBe(false);
+  });
 });
 
 describe('ENGINE_FAMILY_KINDS', () => {
@@ -47,6 +59,9 @@ describe('ENGINE_FAMILY_KINDS', () => {
       'DATE',
       'DATE_TIME',
       'NUMBER',
+      // TEXT is now ONLY here: the engine expresses text end-to-end and the
+      // mirror lane no longer claims the kind.
+      'TEXT',
     ]);
   });
 });
@@ -117,11 +132,22 @@ describe('isMirrorDefinition', () => {
   });
 
   it('is a mirror for a bare cross-ref onto a mirrorable target', () => {
-    expect(isMirrorDefinition(parse(`[company:${UUID}:name]`), 'TEXT')).toBe(true);
+    expect(isMirrorDefinition(parse(`[company:${UUID}:select]`), 'SELECT')).toBe(
+      true,
+    );
   });
 
   it('is not a mirror when the target kind is engine-family', () => {
     expect(isMirrorDefinition(parse('status'), 'NUMBER')).toBe(false);
+  });
+
+  // The lane switch: a deployed TEXT mirror (bare same-record ref or bare
+  // cross-ref) is now an engine one-term formula, not a mirror.
+  it('is not a mirror for a bare ref onto a TEXT target', () => {
+    expect(isMirrorDefinition(parse('name'), 'TEXT')).toBe(false);
+    expect(isMirrorDefinition(parse(`[company:${UUID}:name]`), 'TEXT')).toBe(
+      false,
+    );
   });
 
   it('is not a mirror for a dotted subpath even onto a mirrorable target', () => {

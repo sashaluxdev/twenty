@@ -49,7 +49,7 @@ describe('recomputeForRecord with a DATE target field', () => {
     }).then((outcome) => {
       expect(outcome.changed).toBe(true);
       // 2026-07-03 + 30 days = 2026-08-02.
-      expect(outcome.value).toBe(epochDay(2026, 7, 2));
+      expect(outcome.value).toEqual({ kind: 'number', value: epochDay(2026, 7, 2) });
       expect(client.get('company', 'c1')!.renewDate).toBe('2026-08-02');
     });
   });
@@ -226,6 +226,6 @@ describe('IF over date dependencies (dates compare as numbers)', () => {
     expect(outcome.changed).toBe(true);
     // closeDate (Sep 1) is later than signedDate (Jul 3).
     expect(client.get('company', 'c1')!.latest).toBe('2026-09-01');
-    expect(outcome.value).toBe(epochDay(2026, 8, 1));
+    expect(outcome.value).toEqual({ kind: 'number', value: epochDay(2026, 8, 1) });
   });
 });

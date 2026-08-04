@@ -734,6 +734,12 @@ export const FormulaSetupWizard = ({
       const clonedOptions = clonesOptions
         ? cloneMirrorOptions(sourceField.options)
         : [];
+      // TEXT left the mirror allowlist (ADR 0026): the field is still CLONED
+      // from the source, but the definition runs the ENGINE lane — its seeded
+      // one-term expression evaluates to a string and the write boundary stores
+      // it. Marking it 'mirror' would point every kind-driven consumer (value
+      // IO, the settings editor, the override slot) at the raw lane.
+      const isTextTarget = sourceField.type === 'TEXT';
 
       if (!existingField) {
         await metadataClient.mutation({
@@ -769,7 +775,7 @@ export const FormulaSetupWizard = ({
           targetField: fieldName,
           targetFieldType: sourceField.type,
           currencyCode: '',
-          outputFormat: 'mirror',
+          outputFormat: isTextTarget ? 'text' : 'mirror',
           // Expression is seeded automatically (same-record bare ref or cross-
           // record [object:id:field]); enabling triggers the first passthrough.
           expression: seedMirrorExpression(mirrorDraft),
@@ -867,7 +873,9 @@ export const FormulaSetupWizard = ({
             </div>
           </div>
 
-          {format ? (
+          {/* TEXT has no options in v1 — FormatOptionsFields renders nothing
+              for it, so the step header would stand alone. */}
+          {format && getOutputFormat(format).fieldType !== 'TEXT' ? (
             <div style={layout.step}>
               <StepTitle style={layout.stepTitle}>2b · Format options</StepTitle>
               <FormatOptionsFields

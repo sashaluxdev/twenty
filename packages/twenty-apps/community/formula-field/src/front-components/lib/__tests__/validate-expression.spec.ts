@@ -41,7 +41,9 @@ describe('validateExpression', () => {
       definitions,
     );
 
-    expect(result).toContain('Dependency cycle');
+    // Wording unified with the server save path when both collapsed onto the
+    // shared validation core (the editor previously said "Dependency cycle:").
+    expect(result).toContain('Dependency cycle detected:');
   });
 
   it('accepts a SELECT field string comparison via the optional kinds accessor', () => {

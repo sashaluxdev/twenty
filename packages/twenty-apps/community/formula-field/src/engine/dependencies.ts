@@ -44,8 +44,8 @@ const walk = (
     case 'null':
       return;
 
-    // A string literal is inert data (only ever an = / != operand); it reads no
-    // field, so it contributes no dependency.
+    // A string literal is inert data; it reads no field, so it contributes no
+    // dependency.
     case 'string':
       return;
 
@@ -85,6 +85,14 @@ const walk = (
     case 'comparison':
       walk(node.left, sameRecordFields, crossRecordRefs);
       walk(node.right, sameRecordFields, crossRecordRefs);
+      return;
+
+    // Every operand contributes to the concatenated text, so all of them are
+    // dependencies.
+    case 'concat':
+      for (const part of node.parts) {
+        walk(part, sameRecordFields, crossRecordRefs);
+      }
       return;
 
     // Deliberately EAGER, unlike evaluation (lazy): the taken branch can flip
@@ -163,6 +171,9 @@ export const usesToday = (node: AstNode): boolean => {
     case 'comparison':
       return usesToday(node.left) || usesToday(node.right);
 
+    case 'concat':
+      return node.parts.some((part) => usesToday(part));
+
     // Same eager bias as dependency extraction: either branch can determine
     // staleness once its condition takes it, so OR across all three.
     case 'if':
@@ -190,10 +201,10 @@ export const usesToday = (node: AstNode): boolean => {
 };
 
 // The refs that appear as the non-literal operand of a STRING-MODE comparison
-// (one where either operand is a string literal — the parser confines string
-// literals to = / != operands). These are the fields whose runtime value is
-// compared as a string, so save-time validation can reject a comparison against
-// a field kind that can never hold a string (only SELECT / TEXT are supported).
+// (one where either operand is a DIRECT string literal). These are the fields
+// whose runtime value is compared as a string, so save-time validation can
+// reject a comparison against a field kind that can never hold a string (only
+// SELECT / TEXT are supported).
 export type StringComparisonRefs = {
   sameRecordPaths: string[];
   crossRefs: CrossRefValue[];
@@ -255,6 +266,16 @@ const walkStringComparisons = (
       // sub-IF is still reached.
       walkStringComparisons(node.left, sameRecordPaths, crossRefs);
       walkStringComparisons(node.right, sameRecordPaths, crossRefs);
+      return;
+
+    // DESCEND ONLY. A concat operand is not a string COMPARISON operand: every
+    // part is coerced to text at evaluation whatever its kind, so no part
+    // constrains the field kinds save-time validation accepts. Recursing still
+    // matters, because a part can contain a nested string comparison.
+    case 'concat':
+      for (const part of node.parts) {
+        walkStringComparisons(part, sameRecordPaths, crossRefs);
+      }
       return;
 
     case 'if':

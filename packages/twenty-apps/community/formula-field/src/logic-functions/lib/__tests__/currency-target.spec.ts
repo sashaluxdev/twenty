@@ -44,7 +44,7 @@ describe('recomputeForRecord with a CURRENCY target field', () => {
     });
 
     expect(outcome.changed).toBe(true);
-    expect(outcome.value).toBe(10_000_000);
+    expect(outcome.value).toEqual({ kind: 'number', value: 10_000_000 });
     expect(client.get('company', 'c1')!.budget).toEqual({
       amountMicros: 10_000_000,
       currencyCode: 'EUR',
@@ -144,7 +144,7 @@ describe('formulas with a CURRENCY dependency (input) field', () => {
     });
 
     expect(outcome.changed).toBe(true);
-    expect(outcome.value).toBe(5000);
+    expect(outcome.value).toEqual({ kind: 'number', value: 5000 });
     expect(client.get('company', 'c1')!.marginOut).toBe(5000);
 
     const recordQuery = client.querySelections.find(
@@ -169,7 +169,7 @@ describe('formulas with a CURRENCY dependency (input) field', () => {
       targetRecordId: 'c1',
     });
 
-    expect(outcome.value).toBe(8);
+    expect(outcome.value).toEqual({ kind: 'number', value: 8 });
     const recordQuery = client.querySelections.find(
       (selection) => selection.company,
     );

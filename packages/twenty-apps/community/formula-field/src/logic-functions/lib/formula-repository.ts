@@ -1,8 +1,7 @@
-import { compileFormula } from 'src/engine';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
-import { isMirrorDefinition } from 'src/logic-functions/lib/mirror-kinds';
 import { workspaceCacheKey } from 'src/logic-functions/lib/metadata-objects';
 import {
+  type ComputedValue,
   type FormulaClient,
   type FormulaDefinitionRecord,
 } from 'src/logic-functions/lib/types';
@@ -276,9 +275,29 @@ export const updateFormulaBookkeeping = async (
 // only these formulas, and only once per hour (sweep cadence), so
 // `lastEvaluatedAt` becomes truthful ("last evaluation") for TODAY formulas
 // while every other formula keeps the original zero-write guarantee.
-// JSON-stringifies a mirror's raw value for the lastValueText heartbeat,
-// truncated to 500 chars (display/diagnostic only). A nullish value -> null text.
+// JSON-stringifies a non-numeric value (a mirror's raw value or an engine text
+// result) for the lastValueText heartbeat, truncated to 500 chars
+// (display/diagnostic only). A nullish value -> null text. The JSON encoding is
+// the convention deployed mirror rows already store, so it must not change.
 const MIRROR_VALUE_TEXT_MAX = 500;
+
+// JSON-encodes a string so the ENVELOPE fits the budget, shrinking the slice
+// until it does. The encoded length is not simply the raw length + 2 quotes —
+// a quote, a backslash or a control character expands under escaping — so the
+// slice is re-encoded rather than sized by a guessed safe ratio.
+const encodeTextWithinBudget = (value: string): string => {
+  let end = Math.min(value.length, MIRROR_VALUE_TEXT_MAX);
+  let encoded = JSON.stringify(value.slice(0, end));
+  while (encoded.length > MIRROR_VALUE_TEXT_MAX && end > 0) {
+    // Rescale by the observed expansion ratio (a string of quotes doubles), and
+    // always drop at least one character so the loop cannot stall.
+    const rescaled = Math.floor((end * MIRROR_VALUE_TEXT_MAX) / encoded.length);
+    end = Math.max(Math.min(rescaled, end - 1), 0);
+    encoded = JSON.stringify(value.slice(0, end));
+  }
+  return encoded;
+};
+
 const mirrorValueText = (rawValue: unknown): string | null => {
   if (rawValue === null || rawValue === undefined) {
     return null;
@@ -292,20 +311,18 @@ const mirrorValueText = (rawValue: unknown): string | null => {
     // heartbeat throw. Truncation still applies below.
     serialized = '[unserializable]';
   }
-  return serialized.slice(0, MIRROR_VALUE_TEXT_MAX);
-};
-
-// True when the definition is a mirror (bare ref + non-engine target kind), so
-// the heartbeat records lastValueText instead of the NUMBER-typed lastValue.
-const isMirrorHeartbeat = (formula: FormulaDefinitionRecord): boolean => {
-  try {
-    return isMirrorDefinition(
-      compileFormula(formula.expression ?? '').ast,
-      formula.targetFieldType,
-    );
-  } catch {
-    return false;
+  if (serialized.length <= MIRROR_VALUE_TEXT_MAX) {
+    return serialized;
   }
+  // Over budget: truncate the VALUE and re-encode, never the encoded text.
+  // Slicing the envelope cuts mid-string and stores unterminated JSON, which
+  // every reader (displayHeartbeatValue) fails to parse — so a long text result
+  // showed a permanent dash instead of a preview. A non-string value degrades to
+  // a JSON string holding a preview of its encoding: this column is
+  // display/diagnostic only, and a readable preview beats an unparseable blob.
+  return encodeTextWithinBudget(
+    typeof rawValue === 'string' ? rawValue : serialized,
+  );
 };
 
 // Write-avoidance is handled by the caller (it only calls this when the cursor
@@ -326,23 +343,49 @@ export const updateScanCursor = async (
   );
 };
 
+// ADR 0015 staleness probe, shared by every heartbeat lane: a formula reading
+// TODAY() can go a long time between VALUE changes, so a no-op outcome still has
+// to refresh lastEvaluatedAt once per sweep cadence or "last evaluated" would
+// read stale forever. Scoped to TODAY-using formulas so every other formula
+// keeps finding M3's zero-write guarantee.
+const HEARTBEAT_STALE_MS = 60 * 60 * 1000;
+const heartbeatIsStale = (lastEvaluatedAt: string | null | undefined): boolean => {
+  // NaN from an unparseable timestamp must read as STALE, not fresh — a
+  // `now - NaN > staleMs` comparison is always false, which would stall the
+  // self-heal forever (same Number.isFinite guard as date-serial.ts).
+  const lastEvaluatedAtMs = Date.parse(lastEvaluatedAt ?? '');
+  return (
+    !Number.isFinite(lastEvaluatedAtMs) ||
+    Date.now() - lastEvaluatedAtMs > HEARTBEAT_STALE_MS
+  );
+};
+
 export const recordEvaluationHeartbeat = async (
   client: FormulaClient,
   formula: FormulaDefinitionRecord,
-  outcome: { value: number | null; error: string | null; rawValue?: unknown },
+  outcome: { value: ComputedValue; error: string | null },
   expressionUsesToday: boolean,
 ): Promise<void> => {
   const nextError = outcome.error ?? '';
   const errorChanged = (formula.lastError ?? '') !== nextError;
 
-  // Mirror formulas store their diagnostic value in lastValueText (lastValue is
-  // NUMBER-typed and stays null). Write-avoidance intact: text unchanged AND
-  // error unchanged -> zero writes. Mirrors never use TODAY(), so the ADR 0015
-  // stale carve-out below does not apply to them.
-  if (isMirrorHeartbeat(formula)) {
-    const nextValueText = mirrorValueText(outcome.rawValue);
+  // Non-numeric outcomes — a mirror passthrough or an engine text result — store
+  // their diagnostic value in lastValueText (lastValue is NUMBER-typed and stays
+  // null). The outcome's own tag decides this; nothing re-parses the expression.
+  // Write-avoidance intact: text unchanged AND error unchanged -> zero writes,
+  // save for the ADR 0015 TODAY carve-out, which is lane-agnostic — a TEXT
+  // formula reading TODAY() (IF(TODAY() > dueDate, "Overdue", "OK")) changes
+  // value rarely and would otherwise read stale forever. A mirror is a bare ref,
+  // so the flag is never set on the raw lane and its zero-write path stands.
+  if (outcome.value.kind !== 'number') {
+    const nextValueText = mirrorValueText(outcome.value.value);
     const textChanged = (formula.lastValueText ?? null) !== nextValueText;
     if (!textChanged && !errorChanged) {
+      if (expressionUsesToday && heartbeatIsStale(formula.lastEvaluatedAt)) {
+        await updateFormulaBookkeeping(client, formula.id, {
+          lastEvaluatedAt: new Date().toISOString(),
+        });
+      }
       return;
     }
     await updateFormulaBookkeeping(client, formula.id, {
@@ -353,23 +396,13 @@ export const recordEvaluationHeartbeat = async (
     return;
   }
 
-  const nextValue = outcome.value ?? null;
+  const nextValue = outcome.value.value ?? null;
   const valueChanged = (formula.lastValue ?? null) !== nextValue;
   if (!valueChanged && !errorChanged) {
-    if (expressionUsesToday) {
-      const staleMs = 60 * 60 * 1000;
-      // NaN from an unparseable timestamp must read as STALE, not fresh — a
-      // `now - NaN > staleMs` comparison is always false, which would stall
-      // the self-heal forever (same Number.isFinite guard as date-serial.ts).
-      const lastEvaluatedAtMs = Date.parse(formula.lastEvaluatedAt ?? '');
-      const isStale =
-        !Number.isFinite(lastEvaluatedAtMs) ||
-        Date.now() - lastEvaluatedAtMs > staleMs;
-      if (isStale) {
-        await updateFormulaBookkeeping(client, formula.id, {
-          lastEvaluatedAt: new Date().toISOString(),
-        });
-      }
+    if (expressionUsesToday && heartbeatIsStale(formula.lastEvaluatedAt)) {
+      await updateFormulaBookkeeping(client, formula.id, {
+        lastEvaluatedAt: new Date().toISOString(),
+      });
     }
     return;
   }

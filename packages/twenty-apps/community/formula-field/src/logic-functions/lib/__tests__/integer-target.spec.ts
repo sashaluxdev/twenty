@@ -77,7 +77,7 @@ describe('recomputeForRecord on an integer-backed target', () => {
 
     // 10 / 3 = 3.333… -> rounds to 3 (whole number, Int-safe).
     expect(outcome.changed).toBe(true);
-    expect(outcome.value).toBe(3);
+    expect(outcome.value).toEqual({ kind: 'number', value: 3 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(3);
   });
 

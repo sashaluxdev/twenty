@@ -132,8 +132,8 @@ describe('recomputeAllRecords page prefetch', () => {
     // no error outcomes, and the writes landed.
     expect(byId.get('opp-001')?.error).toBeNull();
     expect(byId.get('opp-002')?.error).toBeNull();
-    expect(byId.get('opp-001')?.value).toBe(2);
-    expect(byId.get('opp-002')?.value).toBe(3);
+    expect(byId.get('opp-001')?.value).toEqual({ kind: 'number', value: 2 });
+    expect(byId.get('opp-002')?.value).toEqual({ kind: 'number', value: 3 });
     expect(client.get('opportunity', 'opp-001')?.score).toBe(2);
     expect(client.get('opportunity', 'opp-002')?.score).toBe(3);
 

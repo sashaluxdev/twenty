@@ -1,12 +1,12 @@
 import { type CrossRefValue } from 'src/engine/tokenizer';
 
-// AST for the arithmetic grammar. Deliberately tiny: numbers, variable
+// AST for the arithmetic grammar. Deliberately tiny: numbers, strings, variable
 // references (same-record field or cross-record), unary +/-, binary + - * / %,
-// comparisons (confined to IF conditions by the parser), and IF conditionals.
-// There is still no general call node and no member-access node; the one string
-// node is inert data confined to = / != comparison operands, never a callable.
-// IF is static dispatch over three fixed sub-expressions, not code execution,
-// so the grammar still cannot express running arbitrary code.
+// concatenation, comparisons (confined to IF conditions by the parser), and IF
+// conditionals. There is still no general call node and no member-access node;
+// a string node is inert data, never a callable. IF is static dispatch over
+// three fixed sub-expressions, not code execution, so the grammar still cannot
+// express running arbitrary code.
 
 export type BinaryOperator = '+' | '-' | '*' | '/' | '%';
 export type UnaryOperator = '+' | '-';
@@ -18,9 +18,9 @@ export type NumberNode = {
   value: number;
 };
 
-// A double-quoted string literal. The parser only ever produces one as a direct
-// operand of an = / != comparison inside an IF condition (enforced structurally,
-// see parser.ts), so, like ComparisonNode, it never reaches a numeric value slot.
+// A double-quoted string literal. Legal in any value position now that the
+// engine's value domain includes text; the parser still rejects one beside an
+// ordering operator, where it could only ever be a type error.
 export type StringNode = {
   type: 'string';
   value: string;
@@ -50,9 +50,18 @@ export type BinaryNode = {
   right: AstNode;
 };
 
+// Text concatenation (`a & "-" & b`), the loosest tier of the value grammar.
+// The parser flattens a left-associative chain into ONE node with 2+ parts, so
+// nesting depth does not grow with chain length; parts are evaluated left to
+// right and each is coerced to text at use.
+export type ConcatNode = {
+  type: 'concat';
+  parts: AstNode[];
+};
+
 // Transient node: the parser only ever produces a comparison as the direct
-// condition of an IfNode, never where a numeric value is expected, so booleans
-// can never leak into the engine's public number|null value domain.
+// condition of an IfNode, never where a value is expected, so booleans can never
+// leak into the engine's public number|string|null value domain.
 export type ComparisonNode = {
   type: 'comparison';
   operator: ComparisonOperator;
@@ -89,15 +98,15 @@ export type SumNode = {
 // Boolean combinators (ADR 0017). AndNode/OrNode/NotNode/IsBlankNode are
 // TRANSIENT condition nodes, like ComparisonNode: the parser only ever produces
 // them in condition context (inside an IF's first argument, recursively), never
-// where a numeric value is expected, so booleans can never leak into the public
-// number|null value domain. The evaluator's value switch carries unreachable
-// guards for them so a hand-built AST that misplaces one fails loud.
+// where a value is expected, so booleans can never leak into the public
+// number|string|null value domain. The evaluator's value switch carries
+// unreachable guards for them so a hand-built AST that misplaces one fails loud.
 //   - AND/OR args are condition nodes; evaluation is full-evaluation Kleene
 //     (evaluate ALL args — errors always fire, no short-circuit; OR any-true ->
 //     true, AND any-false -> false, else any-null -> null).
 //   - NOT's operand is a condition node.
 //   - ISBLANK's operand is a VALUE node (an expression). ISBLANK observes
-//     blankness (raw-first for a bare field/crossref) rather than propagating.
+//     blankness (null, or empty/whitespace-only text) rather than propagating.
 export type AndNode = {
   type: 'and';
   args: AstNode[];
@@ -120,10 +129,12 @@ export type IsBlankNode = {
 
 // IFBLANK(value, fallback) (ADR 0017). Unlike the four combinators above this is
 // an ordinary VALUE node (like SumNode) — legal anywhere a number is, including
-// inside an ISBLANK operand. Returns `value` unless it evaluates to null, else
+// inside an ISBLANK operand. Returns `value` unless it evaluates to BLANK, else
 // `fallback` (which may itself be null); BOTH are always evaluated (SUM
-// precedent — errors always fire). Stays purely numeric: a text field inside it
-// goes through the numeric resolver, deliberately asymmetric with ISBLANK.
+// precedent — errors always fire). ADR 0026 widened "blank" from null alone to
+// null OR empty/whitespace-only text, which removes the old asymmetry: IFBLANK
+// and ISBLANK now judge blankness by the same rule, so IFBLANK(note, "unknown")
+// substitutes for a TEXT field holding only spaces.
 export type IfBlankNode = {
   type: 'ifblank';
   value: AstNode;
@@ -150,6 +161,7 @@ export type AstNode =
   | CrossRefNode
   | UnaryNode
   | BinaryNode
+  | ConcatNode
   | ComparisonNode
   | IfNode
   | TodayNode

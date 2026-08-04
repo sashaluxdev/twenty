@@ -16,7 +16,8 @@ export type OutputFormat =
   | 'shortNumber'
   | 'currency'
   | 'date'
-  | 'datetime';
+  | 'datetime'
+  | 'text';
 
 // The `type` key the native NUMBER settings UI writes.
 export type NumberDisplayType = 'number' | 'percentage' | 'shortNumber';
@@ -31,9 +32,9 @@ export type OutputFormatDefinition = {
   // Shown under the format button in the wizard.
   hint: string;
   // createOneField input pieces.
-  fieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME';
+  fieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME' | 'TEXT';
   // Value stored on FormulaDefinition.targetFieldType (drives value IO).
-  targetFieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME';
+  targetFieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME' | 'TEXT';
   // NUMBER formats: the native `settings.type` this format defaults to.
   numberDisplayType?: NumberDisplayType;
   // Decimals the format seeds when the user has not touched the counter.
@@ -103,6 +104,17 @@ export const OUTPUT_FORMATS: OutputFormatDefinition[] = [
     targetFieldType: 'DATE_TIME',
     defaultDecimals: 0,
   },
+  // TEXT is an engine output now (ADR 0026): the formula produces a string
+  // (concatenation, IF branches returning text, a bare TEXT reference) and the
+  // write boundary stores it verbatim. No display options in v1.
+  {
+    key: 'text',
+    label: 'Text',
+    hint: '"ACME-42"',
+    fieldType: 'TEXT',
+    targetFieldType: 'TEXT',
+    defaultDecimals: 0,
+  },
 ];
 
 // Currency codes the wizard/editor offer; JPY is the default when the user does
@@ -156,6 +168,13 @@ export const buildFieldSettings = (
   options: FormatOptions,
 ): Record<string, unknown> | null => {
   const definition = getOutputFormat(format);
+
+  // TEXT carries no settings at all — guard BEFORE the DATE/DATE_TIME
+  // fall-through below, which would otherwise write a displayFormat onto a text
+  // field. Callers spread settings conditionally, so null means "send none".
+  if (definition.fieldType === 'TEXT') {
+    return null;
+  }
 
   if (definition.fieldType === 'NUMBER') {
     const displayType = options.numberDisplayType;

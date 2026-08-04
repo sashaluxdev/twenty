@@ -10,6 +10,7 @@ import {
   deleteDefinitionCompletely,
   planDeleteDefinition,
 } from 'src/front-components/lib/delete-definition-completely';
+import { displayHeartbeatValue } from 'src/front-components/lib/display-value';
 import { FieldSettingsEditor } from 'src/front-components/lib/field-settings-editor';
 import { formatRelativePast } from 'src/front-components/lib/format-relative-past';
 import {
@@ -66,6 +67,9 @@ type Definition = {
   expression: string;
   enabled: boolean;
   lastValue: number | null;
+  // The non-numeric heartbeat lane (an engine TEXT result or a mirror
+  // passthrough), JSON-encoded — lastValue stays null for those.
+  lastValueText: string | null;
   lastError: string;
   status: string;
   statusReason: string;
@@ -399,6 +403,7 @@ const FormulaDefinitionEditor = () => {
             expression: true,
             enabled: true,
             lastValue: true,
+            lastValueText: true,
             lastError: true,
             status: true,
             statusReason: true,
@@ -422,6 +427,7 @@ const FormulaDefinitionEditor = () => {
         expression: edge.node.expression ?? '',
         enabled: edge.node.enabled ?? false,
         lastValue: edge.node.lastValue ?? null,
+        lastValueText: edge.node.lastValueText ?? null,
         lastError: edge.node.lastError ?? '',
         status: edge.node.status ?? '',
         statusReason: edge.node.statusReason ?? '',
@@ -598,7 +604,7 @@ const FormulaDefinitionEditor = () => {
           <MutedText as="div">Current value</MutedText>
         </div>
         <BigValue style={layout.value}>
-          {definition.lastValue === null ? '—' : definition.lastValue}
+          {displayHeartbeatValue(definition)}
         </BigValue>
       </div>
       {definition.lastEvaluatedAt ? (

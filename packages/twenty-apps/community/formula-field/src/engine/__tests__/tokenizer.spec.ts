@@ -225,10 +225,20 @@ describe('tokenizer', () => {
     });
 
     it('rejects string/template/backtick characters', () => {
-      // '=', '<', '>' are no longer here — they are comparison operators now.
-      for (const bad of ['"', "'", '`', '$', '{', '}', '\\', '&', '|', '^']) {
+      // '=', '<', '>' are no longer here — they are comparison operators now,
+      // and '&' left this list when it became the concatenation operator.
+      for (const bad of ['"', "'", '`', '$', '{', '}', '\\', '|', '^']) {
         expect(() => tokenize(`1 ${bad} 2`)).toThrow(FormulaError);
       }
+    });
+
+    it('tokenizes & as the concatenation operator', () => {
+      expect(types('1 & 2')).toEqual([
+        'NUMBER',
+        'AMPERSAND',
+        'NUMBER',
+        'EOF',
+      ]);
     });
 
     it('rejects a non-breaking space', () => {
