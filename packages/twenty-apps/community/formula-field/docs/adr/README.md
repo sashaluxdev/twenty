@@ -28,3 +28,7 @@ is maintainable without re-deriving the reasoning.
 | [0020](0020-timeline-noise-cleanup.md) | Timeline noise cleanup via a 10-minute cron sweep | Implemented |
 | [0021](0021-replace-fx-status-companion-with-snackbar.md) | Replace the FX Status companion field with a status snackbar | Implemented |
 | [0022](0022-timeline-bookkeeping-quiet.md) | Quiet the timeline further — deterministic sampling, write-avoidant bookkeeping, wider cleanup scope | Implemented |
+| [0023](0023-contain-mount-triggered-recompute-sweeps.md) | Contain mount-triggered recompute sweeps | Implemented |
+| [0024](0024-widget-cold-open-critical-path.md) | Widget cold-open critical path (v0.1.10) | Implemented |
+| [0025](0025-recompute-scan-efficiency.md) | Full-object recompute scan efficiency — prefetch, batching, and a resumable cursor | Implemented |
+| [0026](0026-string-values-and-concatenation.md) | String values and `&` concatenation | Implemented |

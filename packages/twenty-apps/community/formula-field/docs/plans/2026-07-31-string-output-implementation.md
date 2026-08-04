@@ -711,12 +711,12 @@ export const displayValue = (
 6. `formula-field-formats.spec.ts:24-33` exact key list gains `'text'` at the end. Add `display-value.spec.ts`: string verbatim, null dash, CURRENCY micros division, TEXT-target number `String()`.
 7. No new dependencies; `.tsx` files stay untested (vitest glob) — all asserted logic lives in the two `lib/` modules.
 
-- [ ] **Step 1: Write the failing tests** (formats key list + `display-value.spec.ts`).
-- [ ] **Step 2: Run and verify failures.**
-- [ ] **Step 3: Implement** per constraints 1–7.
-- [ ] **Step 4: Whole suite green + `npx tsc --noEmit`** (the `.tsx` changes are only checked by tsc — treat a clean typecheck as mandatory, not optional).
-- [ ] **Step 5: Lint.**
-- [ ] **Step 6: Commit** — `feat(formula-field): Text output format, wizard routing, string-aware displays`
+- [x] **Step 1: Write the failing tests** (formats key list + `display-value.spec.ts`).
+- [x] **Step 2: Run and verify failures.**
+- [x] **Step 3: Implement** per constraints 1–7.
+- [x] **Step 4: Whole suite green + `npx tsc --noEmit`** (the `.tsx` changes are only checked by tsc — treat a clean typecheck as mandatory, not optional).
+- [x] **Step 5: Lint.**
+- [x] **Step 6: Commit** — `feat(formula-field): Text output format, wizard routing, string-aware displays`
 
 ---
 
@@ -726,23 +726,23 @@ export const displayValue = (
 - Create: `docs/adr/0026-string-values-and-concatenation.md`
 - Modify: `docs/adr/README.md` (rows 0023–0026), `docs/plans/2026-07-28-string-output-design.md:4` (status → `implemented by docs/plans/2026-07-31-string-output-implementation.md`), `package.json:3` (`0.2.0`)
 
-- [ ] **Step 1: Write ADR 0026** following the structural model of `docs/adr/0017-boolean-condition-functions.md` (Context / Decision / Consequences / Not done). It must cover, bullet-by-bullet: D1–D5 as adopted; the `&` grammar tier and precedence; semi-eager coercion (`coerceToEngineValue`: dates eager, numeric strings lazy) with behavior deltas B1–B5 and the B2 date-shaped-TEXT edge; typed non-coercing equality; `TEXT_TOO_LONG` (10k, concat-only); the target-kind dispatch replacing the eleven mirror-vs-engine forks (name them); the JSON conventions kept for `overrideValueText`/`lastValueText` back-compat; the dirty-data corner from T7 constraint 2. Not done: `TEXT()`, date formatting in `&`, kind-aware resolution (escape hatch), SELECT output (next version).
-- [ ] **Step 2: Refresh the ADR index** — `docs/adr/README.md` gains four rows in the existing `| [NNNN](NNNN-slug.md) | Title | Status |` format: 0023 (Implemented), 0024 (Implemented), 0025 (Implemented), 0026 (Implemented). Titles verbatim from each file's H1.
-- [ ] **Step 3: Flip the design doc status line and bump `package.json` to `0.2.0`** (first language-surface expansion — design doc rollout section).
-- [ ] **Step 4: Full verification (see next section); paste the outputs into the task report.**
-- [ ] **Step 5: Commit** — `docs(formula-field): ADR 0026 string values and concatenation; ADR index catch-up; v0.2.0`
+- [x] **Step 1: Write ADR 0026** following the structural model of `docs/adr/0017-boolean-condition-functions.md` (Context / Decision / Consequences / Not done). It must cover, bullet-by-bullet: D1–D5 as adopted; the `&` grammar tier and precedence; semi-eager coercion (`coerceToEngineValue`: dates eager, numeric strings lazy) with behavior deltas B1–B5 and the B2 date-shaped-TEXT edge; typed non-coercing equality; `TEXT_TOO_LONG` (10k, concat-only); the target-kind dispatch replacing the eleven mirror-vs-engine forks (name them); the JSON conventions kept for `overrideValueText`/`lastValueText` back-compat; the dirty-data corner from T7 constraint 2. Not done: `TEXT()`, date formatting in `&`, kind-aware resolution (escape hatch), SELECT output (next version).
+- [x] **Step 2: Refresh the ADR index** — `docs/adr/README.md` gains four rows in the existing `| [NNNN](NNNN-slug.md) | Title | Status |` format: 0023 (Implemented), 0024 (Implemented), 0025 (Implemented), 0026 (Implemented). Titles verbatim from each file's H1.
+- [x] **Step 3: Flip the design doc status line and bump `package.json` to `0.2.0`** (first language-surface expansion — design doc rollout section).
+- [x] **Step 4: Full verification (see next section); paste the outputs into the task report.**
+- [x] **Step 5: Commit** — `docs(formula-field): ADR 0026 string values and concatenation; ADR index catch-up; v0.2.0`
 
 ## Verification before calling this done
 
-- [ ] `node /home/sasha_shin/twenty/node_modules/vitest/vitest.mjs run` — everything green; final count reported (baseline 962; expect roughly +60–90).
-- [ ] `npx tsc --noEmit` — clean.
-- [ ] `npm run lint` — clean.
-- [ ] Anti-regression greps (all must return nothing):
+- [x] `node /home/sasha_shin/twenty/node_modules/vitest/vitest.mjs run` — everything green; final count reported (baseline 962; expect roughly +60–90).
+- [x] `npx tsc --noEmit` — clean.
+- [x] `npm run lint` — clean.
+- [x] Anti-regression greps (all must return nothing):
   - `grep -rn "resolveRaw\|RawVariableResolver\|resolveStringOperand\|buildRawResolver\|isMirrorHeartbeat" src/`
   - `grep -rn "parseConditionOperand\|stringOutsideConditionError" src/engine/`
   - `grep -n "'TEXT'" src/logic-functions/lib/mirror-kinds.ts` — TEXT appears only via `ENGINE_FAMILY`, not in `MIRRORABLE_KINDS`.
-- [ ] Confirm zero diffs under `src/objects/` (`git diff main --stat -- src/objects` empty).
-- [ ] Spot-check the flagship expression end-to-end in a unit test (exists from T7 Step 1): `aString & "INV" & 1+TODAY()` against a fake client writes the expected string.
+- [x] Confirm zero diffs under `src/objects/` (`git diff main --stat -- src/objects` empty).
+- [x] Spot-check the flagship expression end-to-end in a unit test (exists from T7 Step 1): `aString & "INV" & 1+TODAY()` against a fake client writes the expected string.
 - [ ] Phase H review workflow (see Execution model): five parallel opus lenses, findings adversarially verified by sonnet skeptics; only confirmed findings come back as fix dispatches. The branch is done when Phase H returns no confirmed findings.
 
 Deployment to cloud (npm twenty-sdk on the hosted platform line), the formulahelp `reference.md` refresh (hard truth #1 — "formulas can never output text" — becomes false), and any workspace verification are **not** part of this plan and need explicit user approval.

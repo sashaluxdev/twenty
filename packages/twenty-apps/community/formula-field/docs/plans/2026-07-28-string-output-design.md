@@ -1,7 +1,7 @@
 # String Output and & Concatenation: Design
 
 Date: 2026-07-28
-Status: approved (brainstorm complete, implementation plan pending)
+Status: implemented by docs/plans/2026-07-31-string-output-implementation.md
 Implementation must author ADR 0026 (string values + concatenation) and refresh the stale ADR index.
 
 ## Goal
