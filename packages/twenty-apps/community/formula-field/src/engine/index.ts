@@ -21,9 +21,9 @@ export {
 export { FormulaError, isFormulaError, type FormulaErrorCode } from 'src/engine/errors';
 export {
   DEFAULT_MAX_DEPTH,
+  type EngineValue,
   evaluate,
   type EvaluateOptions,
-  type RawVariableResolver,
   type VariableReference,
   type VariableResolver,
 } from 'src/engine/evaluator';

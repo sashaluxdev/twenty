@@ -433,7 +433,7 @@ const toNumber = (value: number | string): number => {
 7. The evaluator header comment (`:5-37`) and the domain-invariant comments (`evaluator.ts:96`, `parser.ts:40`, `ast.ts:55`, `ast.ts:93`) are updated to describe the `number | string | null` domain.
 8. **Expected legacy-test churn is confined to:** the `evaluator string comparisons (resolveRaw)` describe (`:643` — rewritten against the typed resolver: field-vs-literal text compare still works, string-vs-number now false instead of null per B4), any evaluator/recompute tests that passed `resolveRaw`, and coercion tests asserting `coerceToNumber('42') === 42` semantics at resolve (now asserted against `coerceToEngineValue` returning `'42'`). Every other one of the 900+ tests must pass unmodified — if a different test breaks, stop and reassess rather than "fixing" the test.
 
-- [ ] **Step 1: Write the failing tests** — new describe `evaluator typed value domain` in `evaluator.spec.ts`:
+- [x] **Step 1: Write the failing tests** — new describe `evaluator typed value domain` in `evaluator.spec.ts`:
 
 ```ts
 const resolver = (values: Record<string, EngineValue>): VariableResolver =>
@@ -471,11 +471,11 @@ it('compares two text fields without erroring', () => {
 
 And in `coercion.spec.ts`: `coerceToEngineValue('2026-01-15')` → serial number; `coerceToEngineValue('042')` → `'042'`; `coerceToEngineValue('')` → `''`; `coerceToEngineValue(true)` → `1`; `coerceToEngineValue(null)` → `null`.
 
-- [ ] **Step 2: Run and verify failures** (type errors on `EngineValue` import first, then behavioral).
-- [ ] **Step 3: Implement** per constraints 1–7.
-- [ ] **Step 4: Run the whole suite.** Reconcile churn strictly per constraint 8; report the final count.
-- [ ] **Step 5: Lint + typecheck.**
-- [ ] **Step 6: Commit** — `feat(formula-field): typed number|string value domain with single resolver`
+- [x] **Step 2: Run and verify failures** (type errors on `EngineValue` import first, then behavioral).
+- [x] **Step 3: Implement** per constraints 1–7.
+- [x] **Step 4: Run the whole suite.** Reconcile churn strictly per constraint 8; report the final count.
+- [x] **Step 5: Lint + typecheck.**
+- [x] **Step 6: Commit** — `feat(formula-field): typed number|string value domain with single resolver`
 
 ---
 

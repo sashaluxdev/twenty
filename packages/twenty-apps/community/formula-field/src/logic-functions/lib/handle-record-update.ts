@@ -7,6 +7,7 @@ import {
 import {
   computeFormulaValueForRecord,
   computeMirrorValueForRecord,
+  numericComputedValue,
   recomputeAllRecords,
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
@@ -189,9 +190,19 @@ export const handleRecordUpdate = async ({
       // stale echo as a human pin would be wrong. Skip it.
       if (!numbersEqual(currentStored, eventValue)) continue;
 
+      // A text result cannot be a numeric target's own recompute; coercing it
+      // the way the resolver used to keeps the "can't compute -> never risk a
+      // false pin" rule above covering that case too.
+      let freshNumeric: number | null;
+      try {
+        freshNumeric = numericComputedValue(fresh.value);
+      } catch {
+        continue;
+      }
+
       const computedStored = normalizeComputedValue(
         formula.targetFieldType,
-        fresh.value,
+        freshNumeric,
         { integerBacked: isIntegerBackedFormat(formula.outputFormat) },
       );
 

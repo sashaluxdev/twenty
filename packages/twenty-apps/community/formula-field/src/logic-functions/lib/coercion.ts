@@ -1,4 +1,5 @@
 import { FormulaError } from 'src/engine/errors';
+import { type EngineValue } from 'src/engine/evaluator';
 import {
   isDateOnlyString,
   isIsoDateTimeString,
@@ -108,4 +109,31 @@ export const coerceToNumber = (raw: unknown): number | null => {
     'NON_NUMERIC_VALUE',
     `Field value is not numeric (${JSON.stringify(raw)})`,
   );
+};
+
+// Coerces a resolved raw value into the engine's number | string | null domain
+// (ADR 0026). Semi-eager by design: DATE/DATE_TIME strings still become serials
+// at resolve time, so deployed date comparisons and `closeDate + 30` are
+// untouched, while every other string resolves VERBATIM — a numeric-shaped
+// string keeps its leading zeros for text output, and an empty one is text
+// rather than a NON_NUMERIC_VALUE error. Numeric contexts coerce text at point
+// of use inside the evaluator instead.
+export const coerceToEngineValue = (raw: unknown): EngineValue => {
+  if (typeof raw !== 'string') {
+    return coerceToNumber(raw);
+  }
+
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    return raw;
+  }
+
+  if (isDateOnlyString(trimmed)) {
+    return parseDateOnlyToEpochDays(trimmed);
+  }
+  if (isIsoDateTimeString(trimmed)) {
+    return parseIsoDateTimeToEpochDays(trimmed);
+  }
+
+  return raw;
 };

@@ -243,6 +243,39 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
     expect(outcome.value).toBe(10);
   });
 
+  it('reports NON_NUMERIC_VALUE (no write) when a text value reaches a numeric target', async () => {
+    // Text now survives evaluation, so the coercion that used to fail at resolve
+    // time fails at the write boundary instead — same reported error, still an
+    // outcome rather than a thrown exception, and still no write.
+    client.setFieldKinds('opportunity', { tier: 'TEXT' });
+    client.seed('opportunity', [{ id: 'o1', tier: 'gold', formulaScore: null }]);
+    const before = client.mutations;
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'tier' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.error).toMatch(/NON_NUMERIC_VALUE/);
+    expect(outcome.changed).toBe(false);
+    expect(client.mutations).toBe(before);
+  });
+
+  it('still writes a numeric-shaped text value to a numeric target', async () => {
+    client.setFieldKinds('opportunity', { tier: 'TEXT' });
+    client.seed('opportunity', [{ id: 'o1', tier: '042', formulaScore: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: formula({ expression: 'tier' }),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toBe(42);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(42);
+  });
+
   it('resolves a cross-record string comparison', async () => {
     const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     client.setFieldKinds('opportunity', { branchA: 'NUMBER', branchB: 'NUMBER' });

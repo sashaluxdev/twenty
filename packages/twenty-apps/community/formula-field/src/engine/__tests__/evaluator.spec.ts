@@ -3,14 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { type AstNode } from 'src/engine/ast';
 import { FormulaError } from 'src/engine/errors';
 import {
+  type EngineValue,
   evaluate,
-  type VariableReference,
   type VariableResolver,
 } from 'src/engine/evaluator';
 import { parse } from 'src/engine/parser';
 
 const resolverFor =
-  (values: Record<string, number | null | undefined>): VariableResolver =>
+  (values: Record<string, EngineValue | undefined>): VariableResolver =>
   (reference) => {
     if (reference.kind === 'same') {
       return values[reference.path];
@@ -21,26 +21,8 @@ const resolverFor =
 
 const run = (
   source: string,
-  values: Record<string, number | null | undefined> = {},
+  values: Record<string, EngineValue | undefined> = {},
 ) => evaluate(parse(source), resolverFor(values));
-
-// Raw resolver used for string-mode comparisons. Mirrors resolverFor's keying
-// but returns unknown, so a field can resolve to a string, a non-string, or
-// nothing at all.
-const rawResolverFor =
-  (values: Record<string, unknown>) =>
-  (reference: VariableReference): unknown => {
-    if (reference.kind === 'same') {
-      return values[reference.path];
-    }
-    const key = `[${reference.ref.object}:${reference.ref.recordId}:${reference.ref.fieldPath}]`;
-    return values[key];
-  };
-
-// String-mode runner: fields resolve through resolveRaw, never the numeric
-// resolver, so an empty numeric resolver is correct here.
-const runStr = (source: string, raw: Record<string, unknown> = {}) =>
-  evaluate(parse(source), resolverFor({}), { resolveRaw: rawResolverFor(raw) });
 
 describe('evaluator arithmetic', () => {
   it('evaluates the a + b * 2 acceptance formula', () => {
@@ -358,15 +340,15 @@ describe('evaluator boolean condition functions (ADR 0017)', () => {
     expect(run('IF(IFBLANK(x, 99) > 10, 1, 0)', { x: null })).toBe(1);
   });
 
-  it('makes the ADR 0017 idioms work through the raw-first ISBLANK path (empty string)', () => {
-    // End-to-end via resolveRaw: an empty-string field is blank, so
-    // OR(ISBLANK(email), ...) skips-when-blank and AND(NOT(ISBLANK(email)), ...)
-    // fails-when-blank exactly as advertised — no null leaks out.
-    expect(runStr('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: '' })).toBe(1);
-    expect(runStr('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: 'vip@x.com' })).toBe(1);
-    expect(runStr('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: 'other@x.com' })).toBe(0);
-    expect(runStr('IF(AND(NOT(ISBLANK(email)), email = "vip@x.com"), 1, 0)', { email: '' })).toBe(0);
-    expect(runStr('IF(AND(NOT(ISBLANK(email)), email = "vip@x.com"), 1, 0)', { email: 'vip@x.com' })).toBe(1);
+  it('makes the ADR 0017 idioms work on a text field (empty string)', () => {
+    // An empty-string field is blank, so OR(ISBLANK(email), ...) skips-when-blank
+    // and AND(NOT(ISBLANK(email)), ...) fails-when-blank exactly as advertised —
+    // no null leaks out.
+    expect(run('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: '' })).toBe(1);
+    expect(run('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: 'vip@x.com' })).toBe(1);
+    expect(run('IF(OR(ISBLANK(email), email = "vip@x.com"), 1, 0)', { email: 'other@x.com' })).toBe(0);
+    expect(run('IF(AND(NOT(ISBLANK(email)), email = "vip@x.com"), 1, 0)', { email: '' })).toBe(0);
+    expect(run('IF(AND(NOT(ISBLANK(email)), email = "vip@x.com"), 1, 0)', { email: 'vip@x.com' })).toBe(1);
   });
 
   it('still fires errors in EVERY argument even when the result is already determined (no short-circuit)', () => {
@@ -395,7 +377,7 @@ describe('evaluator boolean condition functions (ADR 0017)', () => {
 });
 
 describe('evaluator ISBLANK (ADR 0017)', () => {
-  it('numeric semantics without resolveRaw: null is blank, a number is not', () => {
+  it('numeric semantics: null is blank, a number is not', () => {
     expect(run('IF(ISBLANK(a), 1, 0)', { a: null })).toBe(1);
     expect(run('IF(ISBLANK(a), 1, 0)', { a: 42 })).toBe(0);
     expect(run('IF(ISBLANK(a), 1, 0)', { a: 0 })).toBe(0);
@@ -420,56 +402,25 @@ describe('evaluator ISBLANK (ADR 0017)', () => {
     }
   });
 
-  it('raw-first: an empty string is blank, whitespace-only is blank, non-empty is not', () => {
-    expect(runStr('IF(ISBLANK(email), 1, 0)', { email: '' })).toBe(1);
-    expect(runStr('IF(ISBLANK(email), 1, 0)', { email: '   ' })).toBe(1);
-    expect(runStr('IF(ISBLANK(email), 1, 0)', { email: 'a@b.com' })).toBe(0);
+  it('text: an empty string is blank, whitespace-only is blank, non-empty is not', () => {
+    expect(run('IF(ISBLANK(email), 1, 0)', { email: '' })).toBe(1);
+    expect(run('IF(ISBLANK(email), 1, 0)', { email: '   ' })).toBe(1);
+    expect(run('IF(ISBLANK(email), 1, 0)', { email: 'a@b.com' })).toBe(0);
   });
 
-  it('raw-first falls back to numeric when the raw value is not a string', () => {
-    // A number raw -> resolveRaw returns non-string -> numeric fallback. But the
-    // numeric resolver here is empty, so the field is truly unknown -> throws.
-    // Use a resolver that has the numeric value to exercise the fallback cleanly.
-    const raw = rawResolverFor({ a: 42 });
-    expect(
-      evaluate(parse('IF(ISBLANK(a), 1, 0)'), resolverFor({ a: 42 }), {
-        resolveRaw: raw,
-      }),
-    ).toBe(0);
-    expect(
-      evaluate(parse('IF(ISBLANK(a), 1, 0)'), resolverFor({ a: null }), {
-        resolveRaw: rawResolverFor({ a: 42 }),
-      }),
-    ).toBe(1);
+  it('never treats numeric-shaped or zero-like text as blank', () => {
+    // Blankness is observed on the TEXT, not on what it would coerce to: "0"
+    // is content, so it is not blank (and neither is the number 0).
+    expect(run('IF(ISBLANK(a), 1, 0)', { a: '0' })).toBe(0);
+    expect(run('IF(ISBLANK(a), 1, 0)', { a: 0 })).toBe(0);
   });
 
-  it('does NOT consult resolveRaw for a COMPOUND operand even when one is present', () => {
-    // Belt-and-suspenders: the raw-first gate is limited to bare field/crossref
-    // operands. For a compound operand (a + b) the evaluator stays in the
-    // numeric domain, so resolveRaw must never be called; a numeric null still
-    // counts as blank.
-    let rawCalls = 0;
-    const spyingRaw = (reference: VariableReference): unknown => {
-      rawCalls += 1;
-      return reference.kind === 'same' ? 'not-blank' : undefined;
-    };
-    const result = evaluate(
-      parse('IF(ISBLANK(a + b), 1, 0)'),
-      resolverFor({ a: null, b: 3 }),
-      { resolveRaw: spyingRaw },
-    );
-    expect(result).toBe(1);
-    expect(rawCalls).toBe(0);
-  });
-
-  it('raw-first: a missing cross record reads as blank (numeric fallback null)', () => {
+  it('a missing cross record reads as blank (resolves to null)', () => {
     const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     expect(
-      evaluate(
-        parse(`IF(ISBLANK([company:${uuid}:name]), 1, 0)`),
-        resolverFor({ [`[company:${uuid}:name]`]: null }),
-        { resolveRaw: rawResolverFor({}) },
-      ),
+      run(`IF(ISBLANK([company:${uuid}:name]), 1, 0)`, {
+        [`[company:${uuid}:name]`]: null,
+      }),
     ).toBe(1);
   });
 });
@@ -540,18 +491,18 @@ describe('evaluator IFS / SWITCH sugar (ADR 0018)', () => {
     expect(run(ladder, { a: 0, b: 0 })).toBe(0);
   });
 
-  it('maps a string SELECT field with SWITCH via resolveRaw', () => {
+  it('maps a string SELECT field with SWITCH', () => {
     const ladder = 'SWITCH(stage, "lead", 1, "qualified", 2, "won", 3, 0)';
-    expect(runStr(ladder, { stage: 'lead' })).toBe(1);
-    expect(runStr(ladder, { stage: 'qualified' })).toBe(2);
-    expect(runStr(ladder, { stage: 'won' })).toBe(3);
-    expect(runStr(ladder, { stage: 'lost' })).toBe(0);
+    expect(run(ladder, { stage: 'lead' })).toBe(1);
+    expect(run(ladder, { stage: 'qualified' })).toBe(2);
+    expect(run(ladder, { stage: 'won' })).toBe(3);
+    expect(run(ladder, { stage: 'lost' })).toBe(0);
   });
 
   it('nulls the whole SWITCH ladder when the subject field is blank (first-rung null propagation)', () => {
     // A blank subject makes `stage = "lead"` null at the FIRST rung, so the
     // whole ladder is null — even though a default 0 is present (ADR 0018).
-    expect(runStr('SWITCH(stage, "lead", 1, "won", 2, 0)', { stage: null })).toBeNull();
+    expect(run('SWITCH(stage, "lead", 1, "won", 2, 0)', { stage: null })).toBeNull();
   });
 
   it('nulls a numeric SWITCH when the subject is null', () => {
@@ -640,93 +591,138 @@ describe('evaluator errors', () => {
   });
 });
 
-describe('evaluator string comparisons (resolveRaw)', () => {
-  it('takes the then-branch when a field raw string equals the literal', () => {
-    expect(runStr('IF(status = "active", 1, 0)', { status: 'active' })).toBe(1);
+describe('evaluator typed value domain', () => {
+  it('resolves text fields verbatim and compares typed', () => {
+    const values = { zip: '01234', amount: 42 };
+    expect(run('IF(zip = "01234", 1, 0)', values)).toBe(1);
+    // B1: `=` is typed and non-coercing, so a number never equals its text form.
+    expect(run('IF(amount = "42", 1, 0)', values)).toBe(0);
+    expect(run('IF(amount != "42", 1, 0)', values)).toBe(1);
   });
 
-  it('takes the else-branch when a field raw string differs from the literal', () => {
-    expect(runStr('IF(status = "active", 1, 0)', { status: 'inactive' })).toBe(0);
+  it('coerces numeric-shaped text at point of use in arithmetic', () => {
+    const values = { zip: '01234' };
+    expect(run('zip + 1', values)).toBe(1235);
+    // Concatenation evaluation lands in the next task; until then it is
+    // unhandled by the value switch.
+    expect(() => run('zip & 1', values)).toThrow();
+  });
+
+  it('treats empty text as non-numeric, not zero', () => {
+    // Number('') is 0 — the empty-string guard is what stops a blank text field
+    // from silently arithmetically behaving like a zero.
+    expect(() => run('note + 1', { note: '' })).toThrow(FormulaError);
+  });
+
+  it('ISBLANK sees whitespace-only text as blank via the value domain', () => {
+    const values = { note: '   ', name: 'x' };
+    expect(run('IF(ISBLANK(note), 1, 0)', values)).toBe(1);
+    expect(run('IF(ISBLANK(name), 1, 0)', values)).toBe(0);
+  });
+
+  it('compares two text fields without erroring', () => {
+    // B4: no string literal is involved, so the old string mode never fired and
+    // both operands went through the numeric resolver.
+    expect(run('IF(a = b, 1, 0)', { a: 'won', b: 'won' })).toBe(1);
+    expect(run('IF(a = b, 1, 0)', { a: 'won', b: 'lost' })).toBe(0);
+  });
+
+  it('orders text fields by their numeric value at point of use', () => {
+    expect(run('IF(a > b, 1, 0)', { a: '10', b: '9' })).toBe(1);
+    expect(() => run('IF(a > b, 1, 0)', { a: 'won', b: '9' })).toThrow(
+      FormulaError,
+    );
+  });
+
+  it('keeps text out of numeric truthiness unless it is numeric-shaped', () => {
+    expect(run('IF(flag, 1, 0)', { flag: '0' })).toBe(0);
+    expect(run('IF(flag, 1, 0)', { flag: '3' })).toBe(1);
+    expect(() => run('IF(flag, 1, 0)', { flag: 'yes' })).toThrow(FormulaError);
+  });
+});
+
+describe('evaluator string comparisons (typed value domain)', () => {
+  it('takes the then-branch when a text field equals the literal', () => {
+    expect(run('IF(status = "active", 1, 0)', { status: 'active' })).toBe(1);
+  });
+
+  it('takes the else-branch when a text field differs from the literal', () => {
+    expect(run('IF(status = "active", 1, 0)', { status: 'inactive' })).toBe(0);
   });
 
   it('handles != in both directions', () => {
-    expect(runStr('IF(status != "active", 1, 0)', { status: 'inactive' })).toBe(1);
-    expect(runStr('IF(status != "active", 1, 0)', { status: 'active' })).toBe(0);
+    expect(run('IF(status != "active", 1, 0)', { status: 'inactive' })).toBe(1);
+    expect(run('IF(status != "active", 1, 0)', { status: 'active' })).toBe(0);
   });
 
-  it('yields null for != when the field raw is null (null-propagation beats != intuition)', () => {
+  it('yields null for != when the field is null (null-propagation beats != intuition)', () => {
     // A naive reading of `status != "active"` on an empty field might expect
     // "true" (null is not "active"); the app's null-propagation policy overrides
     // that — a null operand nulls the whole IF regardless of the operator.
-    expect(runStr('IF(status != "active", 1, 0)', { status: null })).toBeNull();
+    expect(run('IF(status != "active", 1, 0)', { status: null })).toBeNull();
   });
 
-  it('yields null when a field raw is null (IF result null)', () => {
-    expect(runStr('IF(status = "active", 1, 0)', { status: null })).toBeNull();
+  it('yields null when the field is null (IF result null)', () => {
+    expect(run('IF(status = "active", 1, 0)', { status: null })).toBeNull();
   });
 
-  it('yields null when a field raw is a number, not a string', () => {
-    expect(runStr('IF(status = "active", 1, 0)', { status: 42 })).toBeNull();
+  it('compares FALSE, not null, when the field is a number (B4)', () => {
+    // Typed equality: a number and a text literal are simply unequal, so the
+    // else branch runs instead of the whole IF nulling out.
+    expect(run('IF(status = "active", 1, 0)', { status: 42 })).toBe(0);
+    expect(run('IF(status != "active", 1, 0)', { status: 42 })).toBe(1);
   });
 
-  it('yields null when a literal is compared against an arithmetic operand', () => {
-    // "a" makes it string mode; the 1 + 2 side is not a string -> null -> IF null.
-    expect(runStr('IF("a" = 1 + 2, 1, 0)')).toBeNull();
+  it('compares FALSE when a literal is compared against an arithmetic operand', () => {
+    expect(run('IF("a" = 1 + 2, 1, 0)')).toBe(0);
   });
 
   it('compares two string literals directly', () => {
-    expect(runStr('IF("A" = "A", 1, 0)')).toBe(1);
-    expect(runStr('IF("A" = "B", 1, 0)')).toBe(0);
+    expect(run('IF("A" = "A", 1, 0)')).toBe(1);
+    expect(run('IF("A" = "B", 1, 0)')).toBe(0);
   });
 
-  it('resolves a cross-record raw string via resolveRaw', () => {
+  it('resolves a cross-record text value', () => {
     const uuid = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     expect(
-      runStr(`IF([company:${uuid}:name] = "Acme", 1, 0)`, {
+      run(`IF([company:${uuid}:name] = "Acme", 1, 0)`, {
         [`[company:${uuid}:name]`]: 'Acme',
       }),
     ).toBe(1);
     expect(
-      runStr(`IF([company:${uuid}:name] = "Acme", 1, 0)`, {
+      run(`IF([company:${uuid}:name] = "Acme", 1, 0)`, {
         [`[company:${uuid}:name]`]: 'Other',
       }),
     ).toBe(0);
   });
 
-  it('yields null when resolveRaw is omitted entirely', () => {
-    // No resolveRaw in options -> field operand resolves to null -> IF null.
-    expect(evaluate(parse('IF(status = "active", 1, 0)'), resolverFor({}))).toBeNull();
+  it('throws UNKNOWN_VARIABLE for an unresolvable field in a text comparison', () => {
+    // The single resolver puts a text comparison under the same typo protection
+    // as arithmetic; the old raw channel silently nulled the IF instead.
+    try {
+      run('IF(status = "active", 1, 0)', {});
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as FormulaError).code).toBe('UNKNOWN_VARIABLE');
+    }
   });
 
-  it('regression: numeric comparisons behave identically when resolveRaw is present but unused', () => {
-    const raw = rawResolverFor({ status: 'active' });
+  it('regression: numeric comparisons behave identically alongside text values', () => {
+    const values = { inputA: 10, inputB: 5, status: 'active' };
+    expect(run('IF(inputA > 9, inputA + inputB, inputA)', values)).toBe(15);
     expect(
-      evaluate(parse('IF(inputA > 9, inputA + inputB, inputA)'), resolverFor({ inputA: 10, inputB: 5 }), {
-        resolveRaw: raw,
-      }),
-    ).toBe(15);
-    expect(
-      evaluate(parse('IF(inputA > 9, inputA + inputB, inputA)'), resolverFor({ inputA: 3, inputB: 5 }), {
-        resolveRaw: raw,
-      }),
+      run('IF(inputA > 9, inputA + inputB, inputA)', { ...values, inputA: 3 }),
     ).toBe(3);
-    expect(
-      evaluate(parse('IF(1 = 1, 1, 0)'), resolverFor({}), { resolveRaw: raw }),
-    ).toBe(1);
+    expect(run('IF(1 = 1, 1, 0)', values)).toBe(1);
   });
 });
 
 describe('evaluator exhaustiveness guard (hand-built ASTs)', () => {
-  it('throws NON_NUMERIC_VALUE when a string node reaches a value position', () => {
-    // The parser can never produce this: a StringNode only appears beside = / !=.
+  it('evaluates a string node in a value position to its text', () => {
+    // A StringNode is an ordinary value now that the domain carries text, so it
+    // is no longer part of the guard — it evaluates like any other literal.
     const stringInValueSlot: AstNode = { type: 'string', value: 'x' };
-    try {
-      evaluate(stringInValueSlot, resolverFor({}));
-      throw new Error('should have thrown');
-    } catch (error) {
-      expect(error).toBeInstanceOf(FormulaError);
-      expect((error as FormulaError).code).toBe('NON_NUMERIC_VALUE');
-    }
+    expect(evaluate(stringInValueSlot, resolverFor({}))).toBe('x');
   });
 
   it('throws NON_NUMERIC_VALUE for an unknown/future node type', () => {

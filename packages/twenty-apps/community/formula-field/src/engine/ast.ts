@@ -60,8 +60,8 @@ export type ConcatNode = {
 };
 
 // Transient node: the parser only ever produces a comparison as the direct
-// condition of an IfNode, never where a numeric value is expected, so booleans
-// can never leak into the engine's public number|null value domain.
+// condition of an IfNode, never where a value is expected, so booleans can never
+// leak into the engine's public number|string|null value domain.
 export type ComparisonNode = {
   type: 'comparison';
   operator: ComparisonOperator;
@@ -98,15 +98,15 @@ export type SumNode = {
 // Boolean combinators (ADR 0017). AndNode/OrNode/NotNode/IsBlankNode are
 // TRANSIENT condition nodes, like ComparisonNode: the parser only ever produces
 // them in condition context (inside an IF's first argument, recursively), never
-// where a numeric value is expected, so booleans can never leak into the public
-// number|null value domain. The evaluator's value switch carries unreachable
-// guards for them so a hand-built AST that misplaces one fails loud.
+// where a value is expected, so booleans can never leak into the public
+// number|string|null value domain. The evaluator's value switch carries
+// unreachable guards for them so a hand-built AST that misplaces one fails loud.
 //   - AND/OR args are condition nodes; evaluation is full-evaluation Kleene
 //     (evaluate ALL args — errors always fire, no short-circuit; OR any-true ->
 //     true, AND any-false -> false, else any-null -> null).
 //   - NOT's operand is a condition node.
 //   - ISBLANK's operand is a VALUE node (an expression). ISBLANK observes
-//     blankness (raw-first for a bare field/crossref) rather than propagating.
+//     blankness (null, or empty/whitespace-only text) rather than propagating.
 export type AndNode = {
   type: 'and';
   args: AstNode[];
@@ -131,8 +131,9 @@ export type IsBlankNode = {
 // an ordinary VALUE node (like SumNode) — legal anywhere a number is, including
 // inside an ISBLANK operand. Returns `value` unless it evaluates to null, else
 // `fallback` (which may itself be null); BOTH are always evaluated (SUM
-// precedent — errors always fire). Stays purely numeric: a text field inside it
-// goes through the numeric resolver, deliberately asymmetric with ISBLANK.
+// precedent — errors always fire). Substitutes on null ALONE, so text that is
+// empty or whitespace-only is returned as-is — deliberately asymmetric with
+// ISBLANK, which observes that text as blank.
 export type IfBlankNode = {
   type: 'ifblank';
   value: AstNode;

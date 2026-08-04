@@ -17,11 +17,15 @@ import {
   type ScanSelection,
 } from 'src/logic-functions/lib/scan-selection';
 import {
+  type EngineValue,
   evaluate,
-  type RawVariableResolver,
   type VariableResolver,
 } from 'src/engine/evaluator';
-import { coerceToNumber, navigatePath } from 'src/logic-functions/lib/coercion';
+import {
+  coerceToEngineValue,
+  coerceToNumber,
+  navigatePath,
+} from 'src/logic-functions/lib/coercion';
 import { currentEpochDay } from 'src/logic-functions/lib/date-serial';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import {
@@ -194,7 +198,7 @@ const buildResolver = (
       if (raw === undefined) {
         return undefined;
       }
-      return coerceToNumber(raw);
+      return coerceToEngineValue(raw);
     }
 
     const record = crossRecords.get(
@@ -210,35 +214,15 @@ const buildResolver = (
     if (raw === undefined) {
       return undefined;
     }
-    return coerceToNumber(raw);
+    return coerceToEngineValue(raw);
   };
 };
 
-// Raw (untyped) resolver for string-mode = / != comparisons. Same navigation as
-// buildResolver — same-record navigatePath, cross-record map lookup — but WITHOUT
-// coerceToNumber: a value is kept only when it is actually a string, so a string
-// comparison matches on the field's raw string (anything else -> null, which
-// null-propagates the IF). A missing cross record -> null (silent-null parity).
-const buildRawResolver = (
-  sameRecord: Record<string, unknown>,
-  crossRecords: Map<string, Record<string, unknown> | null>,
-): RawVariableResolver => {
-  return (reference) => {
-    if (reference.kind === 'same') {
-      const raw = navigatePath(sameRecord, reference.path);
-      return typeof raw === 'string' ? raw : null;
-    }
-
-    const record = crossRecords.get(
-      crossKey(reference.ref.object, reference.ref.recordId),
-    );
-    if (record === undefined || record === null) {
-      return null;
-    }
-    const raw = navigatePath(record, reference.ref.fieldPath);
-    return typeof raw === 'string' ? raw : null;
-  };
-};
+// The write lane and override detection are still numeric until TEXT gets its
+// own target lane, so a text result coerces here exactly as the resolver used to
+// at resolve time — the same NON_NUMERIC_VALUE failure, raised one step later.
+export const numericComputedValue = (value: EngineValue): number | null =>
+  typeof value === 'string' ? coerceToNumber(value) : value;
 
 const valuesEqual = (a: number | null, b: number | null): boolean => {
   if (a === null || b === null) {
@@ -268,7 +252,7 @@ export type RecomputeArgs = {
 // to know "what would the formula say?" to tell an app recompute apart from a
 // genuine human edit.
 export type ComputeResult = {
-  value: number | null;
+  value: EngineValue;
   error: string | null;
   sameRecord: Record<string, unknown> | null;
 };
@@ -362,7 +346,6 @@ export const computeFormulaValueForRecord = async ({
         // the value the evaluator documents.
         maxDepth: DEFAULT_MAX_DEPTH,
         todayEpochDay: currentEpochDay(),
-        resolveRaw: buildRawResolver(sameRecord, crossRecords),
       },
     );
     return { value, sameRecord, error: null };
@@ -616,10 +599,25 @@ export const planRecomputeForRecord = async ({
       write: null,
     };
   }
+  let numericValue: number | null;
+  try {
+    numericValue = numericComputedValue(computed.value);
+  } catch (error) {
+    return {
+      outcome: {
+        ...base,
+        error: isFormulaError(error)
+          ? `${error.code}: ${error.message}`
+          : String(error),
+      },
+      write: null,
+    };
+  }
+
   // CURRENCY stores integer micros and integer-backed NUMBER fields store whole
   // numbers — compare and write the rounded value, or a fractional result would
   // never match the stored value and rewrite forever (finding M2).
-  const result = normalizeComputedValue(formula.targetFieldType, computed.value, {
+  const result = normalizeComputedValue(formula.targetFieldType, numericValue, {
     integerBacked: isIntegerBackedFormat(formula.outputFormat),
   });
   const sameRecord = computed.sameRecord;

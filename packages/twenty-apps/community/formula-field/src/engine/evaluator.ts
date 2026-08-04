@@ -8,6 +8,14 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 // eval, and no dynamic code path.
 //
 // Value semantics (documented policy, exercised by unit tests):
+//   - The value domain is `number | string | null` (ADR 0026). Text enters it
+//     from a resolver (a TEXT/SELECT field resolves verbatim) or a string
+//     literal, and flows through IF branches and IFBLANK. A
+//     NUMERIC context (arithmetic, unary, SUM, ordering, truthiness) coerces
+//     text at POINT OF USE via `toNumber`, which fails loud with
+//     NON_NUMERIC_VALUE on text that is not numeric-shaped — including the
+//     empty string, since `Number('')` is 0 and a blank field must never behave
+//     like a zero.
 //   - A resolver returning `undefined` means the variable does not exist ->
 //     UNKNOWN_VARIABLE error (fail loud; likely a typo in the formula).
 //   - A resolver returning `null` means the field exists but is empty. Null
@@ -16,7 +24,12 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 //     "not computed yet / missing input" from "computed as 0".
 //   - Division or modulo by zero -> DIVISION_BY_ZERO error (value left
 //     unchanged by the engine, error surfaced on lastError).
-//   - Non-finite results (Infinity/NaN) -> NON_NUMERIC_VALUE error.
+//   - Non-finite NUMERIC results (Infinity/NaN) -> NON_NUMERIC_VALUE error.
+//   - `=` / `!=` are TYPED and non-coercing (ADR 0026): a cross-type pair is
+//     simply unequal, so `42 = "42"` is false and `42 != "42"` is true. Text
+//     compares to text, numbers compare to numbers, and a null on either side
+//     still null-propagates. Ordering (`< <= > >=`) is numeric-only and coerces
+//     both operands.
 //   - IF(condition, then, else): the condition is always evaluated; only the
 //     TAKEN branch is (lazy — an error in the untaken branch cannot fire).
 //     A comparison condition yields an internal boolean that never escapes
@@ -31,8 +44,8 @@ import { type CrossRefValue } from 'src/engine/tokenizer';
 //     is null else true, and OR is true if any is true else null if any is null
 //     else false (a determined truth dominates a null). NOT negates its
 //     argument (null stays null). ISBLANK is the one exception to null handling
-//     — it OBSERVES blankness (raw-first for a bare field/crossref) and returns
-//     a boolean, never null, for a successfully evaluated argument.
+//     — it OBSERVES blankness (null, or text that is empty/whitespace-only) and
+//     returns a boolean, never null, for a successfully evaluated argument.
 //   - IFBLANK(value, fallback) (ADR 0017) is a value node: returns value unless
 //     null, else fallback; both are always evaluated (SUM precedent).
 
@@ -40,16 +53,12 @@ export type VariableReference =
   | { kind: 'same'; path: string }
   | { kind: 'cross'; ref: CrossRefValue };
 
+// The engine's runtime value domain (ADR 0026).
+export type EngineValue = number | string | null;
+
 export type VariableResolver = (
   reference: VariableReference,
-) => number | null | undefined;
-
-// Raw resolver for string-mode comparisons. Returns the field's underlying
-// value untyped: string mode keeps a result only when it is actually a string,
-// treating anything else (number, null, undefined, object) as "no string here".
-// Kept separate from the numeric VariableResolver so the numeric contract is
-// untouched — string support is purely additive via EvaluateOptions.resolveRaw.
-export type RawVariableResolver = (reference: VariableReference) => unknown;
+) => EngineValue | undefined;
 
 export const DEFAULT_MAX_DEPTH = 64;
 
@@ -60,82 +69,63 @@ export type EvaluateOptions = {
   // pure function of its arguments. Required only when the AST contains a
   // TODAY() node.
   todayEpochDay?: number;
-  // Resolves a field/crossref to its raw value for string-mode = / !=
-  // comparisons. Optional: when absent, string comparisons against a field
-  // operand resolve to null (null-propagates to an empty IF result).
-  resolveRaw?: RawVariableResolver;
 };
 
-// Resolves one operand of a string-mode comparison to `string | null`. A string
-// literal is its own value; a field/crossref yields its raw value only when that
-// value is actually a string (else null, incl. a missing resolveRaw); any other
-// node shape (number, binary, unary, if, today) is a runtime type mismatch in
-// string mode and resolves to null. Null on either side null-propagates the IF.
-const resolveStringOperand = (
-  node: AstNode,
-  resolveRaw: RawVariableResolver | undefined,
-): string | null => {
-  if (node.type === 'string') {
-    return node.value;
+// Point-of-use numeric coercion for the text domain. Date-shaped strings were
+// already coerced to serials at resolve time, so only Number() applies here.
+const toNumber = (value: number | string): number => {
+  if (typeof value === 'number') {
+    return value;
   }
-
-  if (node.type === 'field') {
-    const raw = resolveRaw?.({ kind: 'same', path: node.path });
-    return typeof raw === 'string' ? raw : null;
+  const trimmed = value.trim();
+  if (trimmed !== '') {
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
-
-  if (node.type === 'crossref') {
-    const raw = resolveRaw?.({ kind: 'cross', ref: node.ref });
-    return typeof raw === 'string' ? raw : null;
-  }
-
-  return null;
+  throw new FormulaError(
+    'NON_NUMERIC_VALUE',
+    `Text value is not numeric (${JSON.stringify(value)})`,
+  );
 };
+
+// Blankness in the value domain: an empty field, or text with nothing in it.
+const isBlankValue = (value: EngineValue): boolean =>
+  value === null || (typeof value === 'string' && value.trim() === '');
 
 // Comparison truth, internal only: booleans stay confined to IF's condition
-// slot; the public evaluate() signature remains number | null. Null in either
-// operand yields null (propagation), never false.
+// slot; the public evaluate() signature remains number | string | null. Null in
+// either operand yields null (propagation), never false.
 const evaluateConditionTruth = (
   node: AstNode,
   resolve: VariableResolver,
   depth: number,
   maxDepth: number,
   todayEpochDay: number | undefined,
-  resolveRaw: RawVariableResolver | undefined,
 ): boolean | null => {
   if (node.type === 'comparison') {
-    // String mode: entered iff either operand is a string literal. The parser
-    // only ever pairs a string literal with = / != (never an ordering op), so
-    // this branch handles equality alone. Numeric mode below is unchanged.
-    if (node.left.type === 'string' || node.right.type === 'string') {
-      const leftString = resolveStringOperand(node.left, resolveRaw);
-      const rightString = resolveStringOperand(node.right, resolveRaw);
-
-      if (leftString === null || rightString === null) {
-        return null;
-      }
-
-      return node.operator === '!='
-        ? leftString !== rightString
-        : leftString === rightString;
-    }
-
-    const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
-    const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+    const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay);
+    const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay);
 
     if (left === null || right === null) {
       return null;
     }
 
     switch (node.operator) {
+      // Ordering is numeric-only — the parser already rejects a string literal
+      // beside one, and a text FIELD coerces at point of use like anywhere else.
       case '>':
-        return left > right;
+        return toNumber(left) > toNumber(right);
       case '<':
-        return left < right;
+        return toNumber(left) < toNumber(right);
       case '>=':
-        return left >= right;
+        return toNumber(left) >= toNumber(right);
       case '<=':
-        return left <= right;
+        return toNumber(left) <= toNumber(right);
+      // Typed and non-coercing (ADR 0026 delta B1): `===` already makes a
+      // cross-type pair unequal, so `42 = "42"` is false and `42 != "42"` true
+      // without a separate typeof branch.
       case '=':
         return left === right;
       case '!=':
@@ -163,7 +153,6 @@ const evaluateConditionTruth = (
         depth + 1,
         maxDepth,
         todayEpochDay,
-        resolveRaw,
       );
       if (truth === null) {
         anyNull = true;
@@ -192,53 +181,34 @@ const evaluateConditionTruth = (
       depth + 1,
       maxDepth,
       todayEpochDay,
-      resolveRaw,
     );
     return truth === null ? null : !truth;
   }
 
   // ISBLANK observes blankness instead of propagating null: it never RETURNS
   // null for a successfully evaluated argument (a typo'd field still throws
-  // UNKNOWN_VARIABLE). Raw-first for a bare field/crossref operand — consult
-  // resolveRaw (a string means blank iff trim() === '', so ISBLANK(email) works
-  // on TEXT/SELECT day one); a non-string raw (incl. a missing cross record)
-  // falls back to the numeric resolver, where null is blank and a number is not.
-  // A compound operand is evaluated in the numeric domain; a null there (from
-  // internal null propagation) counts as blank.
+  // UNKNOWN_VARIABLE). Now that text lives in the value domain, one evaluation
+  // covers both lanes — an empty field is blank, and so is text that is empty or
+  // whitespace-only, so ISBLANK(email) still works on TEXT/SELECT.
   if (node.type === 'isblank') {
-    const operand = node.operand;
-    if (
-      resolveRaw !== undefined &&
-      (operand.type === 'field' || operand.type === 'crossref')
-    ) {
-      const reference: VariableReference =
-        operand.type === 'field'
-          ? { kind: 'same', path: operand.path }
-          : { kind: 'cross', ref: operand.ref };
-      const raw = resolveRaw(reference);
-      if (typeof raw === 'string') {
-        return raw.trim() === '';
-      }
-    }
     const value = evaluateNode(
-      operand,
+      node.operand,
       resolve,
       depth + 1,
       maxDepth,
       todayEpochDay,
-      resolveRaw,
     );
-    return value === null;
+    return isBlankValue(value);
   }
 
-  const value = evaluateNode(node, resolve, depth, maxDepth, todayEpochDay, resolveRaw);
+  const value = evaluateNode(node, resolve, depth, maxDepth, todayEpochDay);
 
   if (value === null) {
     return null;
   }
 
   // Excel truthiness for numeric conditions: 0 is false, anything else true.
-  return value !== 0;
+  return toNumber(value) !== 0;
 };
 
 const evaluateNode = (
@@ -247,8 +217,7 @@ const evaluateNode = (
   depth: number,
   maxDepth: number,
   todayEpochDay: number | undefined,
-  resolveRaw: RawVariableResolver | undefined,
-): number | null => {
+): EngineValue => {
   if (depth > maxDepth) {
     throw new FormulaError(
       'MAX_DEPTH_EXCEEDED',
@@ -301,21 +270,26 @@ const evaluateNode = (
     }
 
     case 'unary': {
-      const operand = evaluateNode(node.operand, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+      const operand = evaluateNode(node.operand, resolve, depth + 1, maxDepth, todayEpochDay);
       if (operand === null) {
         return null;
       }
-      return node.operator === '-' ? -operand : operand;
+      const numeric = toNumber(operand);
+      return node.operator === '-' ? -numeric : numeric;
     }
 
     case 'binary': {
-      const left = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
-      const right = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+      const leftValue = evaluateNode(node.left, resolve, depth + 1, maxDepth, todayEpochDay);
+      const rightValue = evaluateNode(node.right, resolve, depth + 1, maxDepth, todayEpochDay);
 
       // Null propagation: any null operand makes the result null.
-      if (left === null || right === null) {
+      if (leftValue === null || rightValue === null) {
         return null;
       }
+
+      // Arithmetic is a numeric context: text coerces here, at point of use.
+      const left = toNumber(leftValue);
+      const right = toNumber(rightValue);
 
       let result: number;
       switch (node.operator) {
@@ -359,7 +333,6 @@ const evaluateNode = (
         depth + 1,
         maxDepth,
         todayEpochDay,
-        resolveRaw,
       );
 
       // Null condition (or null in a comparison operand) nulls the whole IF.
@@ -375,7 +348,6 @@ const evaluateNode = (
         depth + 1,
         maxDepth,
         todayEpochDay,
-        resolveRaw,
       );
     }
 
@@ -388,12 +360,12 @@ const evaluateNode = (
       let total = 0;
       let anyNonNull = false;
       for (const arg of node.args) {
-        const value = evaluateNode(arg, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+        const value = evaluateNode(arg, resolve, depth + 1, maxDepth, todayEpochDay);
         if (value === null) {
           continue;
         }
         anyNonNull = true;
-        total += value;
+        total += toNumber(value);
       }
 
       if (!anyNonNull) {
@@ -412,11 +384,10 @@ const evaluateNode = (
 
     // ADR 0017: return `value` unless it is null, else `fallback`. BOTH are
     // always evaluated (SUM precedent — an error in the fallback fires even when
-    // the value is non-null). Purely numeric: a text operand goes through the
-    // numeric resolver like any other value reference.
+    // the value is non-null).
     case 'ifblank': {
-      const value = evaluateNode(node.value, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
-      const fallback = evaluateNode(node.fallback, resolve, depth + 1, maxDepth, todayEpochDay, resolveRaw);
+      const value = evaluateNode(node.value, resolve, depth + 1, maxDepth, todayEpochDay);
+      const fallback = evaluateNode(node.fallback, resolve, depth + 1, maxDepth, todayEpochDay);
       return value !== null ? value : fallback;
     }
 
@@ -436,13 +407,7 @@ const evaluateNode = (
       );
 
     case 'string':
-      // Unreachable via parse(): the parser confines string literals to = / !=
-      // comparison operands, handled in string mode by evaluateConditionTruth,
-      // so one never reaches a numeric value slot. Guard for hand-built ASTs.
-      throw new FormulaError(
-        'NON_NUMERIC_VALUE',
-        `String literal "${node.value}" is not a numeric value`,
-      );
+      return node.value;
 
     case 'comparison':
       // Unreachable via parse(): the parser confines comparisons to IF's
@@ -454,8 +419,8 @@ const evaluateNode = (
 
     default:
       // Exhaustiveness guard: every known node type is handled above, so a
-      // StringNode/ComparisonNode in a value slot fails loud rather than
-      // returning undefined. A future node type lands here for the same reason.
+      // ComparisonNode in a value slot fails loud rather than returning
+      // undefined. A future node type lands here for the same reason.
       throw new FormulaError(
         'NON_NUMERIC_VALUE',
         `Unsupported node type "${(node as AstNode).type}"`,
@@ -467,11 +432,12 @@ export const evaluate = (
   node: AstNode,
   resolve: VariableResolver,
   options: EvaluateOptions = {},
-): number | null => {
+): EngineValue => {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
-  const result = evaluateNode(node, resolve, 0, maxDepth, options.todayEpochDay, options.resolveRaw);
+  const result = evaluateNode(node, resolve, 0, maxDepth, options.todayEpochDay);
 
-  if (result !== null && !Number.isFinite(result)) {
+  // Finiteness is a NUMERIC invariant — text results pass through untouched.
+  if (typeof result === 'number' && !Number.isFinite(result)) {
     throw new FormulaError(
       'NON_NUMERIC_VALUE',
       `Expression produced a non-finite value (${result})`,

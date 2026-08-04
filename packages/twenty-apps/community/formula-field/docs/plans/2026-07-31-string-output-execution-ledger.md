@@ -24,3 +24,8 @@ Entry classes: `dispatch`, `report`, `verdict`, `deviation`, `phase-done`, `setu
 - [report] Review-findings fix commit `b302a31975` — test-only, production diff for `parser.ts` and `validation-core.ts` verified empty. Measured depth boundaries first rather than trusting the review: parens 99 accepted / 100 throws, nested IF 65 accepted / 66 throws.
 - [phase-done] **Phase A complete.** Branch `feat/formula-field-string-output` at `b302a31975`. Whole suite **987 passed** (64 files), oxlint 0/0, `tsc --noEmit` clean — re-verified by the orchestrator after worktree teardown. Three Phase A worktrees and their branches removed (fully merged). Stopped here at the user's request.
 - [status] **next:** Phase B — Task 4 (Evaluator: typed value domain and single resolver), opus implementer then opus reviewer, via superpowers:subagent-driven-development. Task 4 is the first task of the strict linear chain T4→T5→T6→T7; no parallelism exists from here until the final review phase. Nothing is in flight.
+
+## 2026-08-04
+
+- [dispatch] Task 4 implementer (opus, general-purpose, main checkout, no worktree) dispatched off BASE `d207279186`. Brief: `.superpowers/sdd/2026-07-31-string-output-implementation/task-4-brief.md`.
+- [setup] Cold-session resume. Checker agent verified the claimed position against reality: all Phase A commits present on `feat/formula-field-string-output` at `d207279186`, plan checkboxes T1-T3 fully ticked / T4-T9 unticked, no uncommitted `src/` changes, whole suite **987 passed** (64 files), oxlint 0/0, `tsc --noEmit` clean, `tsc --build` shows exactly the 32 baseline spec-project errors. No discrepancies; ledger position trusted. SDD workspace for Phase B-G: `.superpowers/sdd/2026-07-31-string-output-implementation/`.
