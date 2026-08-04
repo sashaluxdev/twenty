@@ -17,7 +17,8 @@ export type FormulaDefinitionRecord = {
   name?: string | null;
   targetObject?: string | null;
   targetField?: string | null;
-  // 'NUMBER' (default when null), 'CURRENCY', 'DATE' or 'DATE_TIME'. Currency
+  // 'NUMBER' (default when null), 'CURRENCY', 'DATE', 'DATE_TIME' or 'TEXT'. A
+  // TEXT target stores the engine's string domain (ADR 0026). Currency
   // value fields are composite: the formula's numeric value is the amountMicros
   // sub-field. DATE/DATE_TIME follow the Excel serial-date model (ADR 0011):
   // the numeric value is epoch-days, serialized to the scalar on write.
@@ -44,9 +45,10 @@ export type FormulaDefinitionRecord = {
   enabled?: boolean | null;
   lastValue?: number | null;
   // Mirror heartbeat (design 2026-07-06): JSON-stringified, 500-char-truncated
-  // last mirrored raw value. Non-engine (mirror) targets store their diagnostic
-  // last value here since lastValue is NUMBER-typed; lastValue stays null for a
-  // mirror. Display/heartbeat only — never read back for computation.
+  // last mirrored raw value. Every non-numeric outcome (a mirror passthrough or
+  // an engine text result) stores its diagnostic last value here since lastValue
+  // is NUMBER-typed, which stays null in that case. Display/heartbeat only —
+  // never read back for computation.
   lastValueText?: string | null;
   lastError?: string | null;
   // ISO timestamp of the last evaluation (ADR 0015: for TODAY-using formulas
@@ -58,18 +60,25 @@ export type FormulaDefinitionRecord = {
   scanCursor?: string | null;
 };
 
+// What a recompute produced, tagged with the lane its bookkeeping must take.
+// The tag — not a typeof probe on the payload — decides which column a value is
+// recorded in and which override slot pins it: 'number' is the engine's numeric
+// domain (lastValue, overrideValue), 'text' is an engine string result and 'raw'
+// is a mirror passthrough (both -> lastValueText / overrideValueText). A null
+// payload is still tagged, so an error or a skipped record keeps its lane.
+export type ComputedValue =
+  | { kind: 'number'; value: number | null }
+  | { kind: 'text'; value: string | null }
+  | { kind: 'raw'; value: unknown };
+
 export type RecomputeOutcome = {
   formulaId: string;
   targetRecordId: string;
   // Whether a write to the value field actually happened.
   changed: boolean;
-  // The computed value (null when null-propagation cleared it). Always null for
-  // a mirror passthrough — its raw value rides `rawValue` instead.
-  value: number | null;
-  // Mirror passthrough only: the source field's raw value written verbatim
-  // (scalar, array or composite). Undefined for engine-family formulas. Carried
-  // so the column-level heartbeat can derive lastValueText from a sample record.
-  rawValue?: unknown;
+  // The computed value and its lane (null payload when null-propagation cleared
+  // it, when the record was skipped, or when evaluation failed).
+  value: ComputedValue;
   // Non-null when evaluation failed; the value field is left unchanged.
   error: string | null;
   // True when the record was skipped because the user manually overrode it.

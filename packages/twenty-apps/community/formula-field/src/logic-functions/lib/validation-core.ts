@@ -113,15 +113,19 @@ export const validateExpressionCore = ({
     }
   }
 
-  // 1c. Mirror validation. A non-engine-family target field is in "mirror mode":
-  //     its value is a typed raw passthrough of a single bare whole-field ref,
-  //     not an engine expression. A null/blank target kind defaults to NUMBER
-  //     (engine family, same rule as value-io's targetFieldKind), so it keeps
-  //     today's engine path and skips these checks.
+  // 1c. Mirror validation. A target field the engine family does not cover is in
+  //     "mirror mode": its value is a typed raw passthrough of a single bare
+  //     whole-field ref, not an engine expression. A null/blank target kind
+  //     defaults to NUMBER (engine family, same rule as value-io's
+  //     targetFieldKind), so it keeps today's engine path and skips these checks.
+  //     A MIRRORABLE kind takes these checks even if the engine family also
+  //     covers it: TEXT is in both sets during the string-output transition and
+  //     the mirror lane still owns it until the lane switch.
   if (
     targetFieldType != null &&
     targetFieldType !== '' &&
-    !ENGINE_FAMILY_KINDS.has(targetFieldType)
+    (isMirrorTargetKind(targetFieldType) ||
+      !ENGINE_FAMILY_KINDS.has(targetFieldType))
   ) {
     // (a) The target kind is not mirrorable at all.
     if (!isMirrorTargetKind(targetFieldType)) {

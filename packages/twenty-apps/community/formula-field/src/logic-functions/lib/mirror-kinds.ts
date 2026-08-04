@@ -28,10 +28,12 @@ export const MIRRORABLE_KINDS: ReadonlySet<string> = new Set([
   'RAW_JSON',
 ]);
 
-// The engine's numeric value family, DERIVED from value-io's ENGINE_FAMILY (the
-// single source of truth — FM Task 1 rider) so the two can never drift. A bare
-// ref onto one of these keeps today's engine path unchanged — it is NOT mirror
-// mode.
+// The engine's value family, DERIVED from value-io's ENGINE_FAMILY (the single
+// source of truth — FM Task 1 rider) so the two can never drift. A bare ref onto
+// one of these keeps today's engine path unchanged — it is NOT mirror mode.
+// TEXT is in BOTH sets during the string-output transition: the engine can now
+// express text, but a bare-ref TEXT target still routes through the mirror lane
+// (isMirrorTargetKind above) until that lane switch lands.
 export const ENGINE_FAMILY_KINDS: ReadonlySet<string> = new Set(ENGINE_FAMILY);
 
 export const isMirrorTargetKind = (kind: string): boolean =>

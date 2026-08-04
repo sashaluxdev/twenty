@@ -7,7 +7,6 @@ import {
 import {
   computeFormulaValueForRecord,
   computeMirrorValueForRecord,
-  numericComputedValue,
   recomputeAllRecords,
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
@@ -15,6 +14,7 @@ import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
 import { isMirrorDefinition } from 'src/logic-functions/lib/mirror-kinds';
 import {
   findOverride,
+  overrideSlotForKind,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
 import {
@@ -30,7 +30,10 @@ import {
   isIntegerBackedFormat,
   normalizeComputedValue,
   normalizeStoredValue,
+  tagEngineValue,
+  targetFieldKind,
 } from 'src/logic-functions/lib/value-io';
+import { type EngineValue } from 'src/engine/evaluator';
 
 // Shared body for every per-object database-event trigger. Given a record that
 // changed on `objectName`, it recomputes:
@@ -44,11 +47,14 @@ import {
 // formula whose only changed field is its own value output (our previous write)
 // is a no-op — the trigger-level half of the recursion guard.
 
-// Float-tolerant equality with null handling — used to compare a written value
-// against the formula's computed value.
-const numbersEqual = (a: number | null, b: number | null): boolean => {
-  if (a === null || b === null) return a === b;
-  return Math.abs(a - b) < 1e-9;
+// Equality between a written value and the formula's computed value: numbers
+// compare float-tolerantly (a stored value has been through a round-trip), text
+// and nulls compare strictly.
+const storedValuesEqual = (a: EngineValue, b: EngineValue): boolean => {
+  if (typeof a === 'number' && typeof b === 'number') {
+    return Math.abs(a - b) < 1e-9;
+  }
+  return a === b;
 };
 
 // Parses once and returns both the AST and its dependency set — the AST feeds
@@ -158,15 +164,20 @@ export const handleRecordUpdate = async ({
 
         // A human pinned a value that differs from the source: store its raw
         // value as JSON text (overrideValueText); overrideValue stays null.
-        await upsertOverride(client, objectName, field, recordId, {
-          text: JSON.stringify(currentRaw ?? null),
-        });
+        await upsertOverride(
+          client,
+          objectName,
+          field,
+          recordId,
+          overrideSlotForKind('raw', currentRaw),
+        );
         continue;
       }
 
-      // Composite-aware: a CURRENCY value field arrives as
+      // Kind-aware: a CURRENCY value field arrives as
       // { amountMicros, currencyCode } — its numeric value is the micros.
-      const eventValue = normalizeStoredValue(after?.[field]);
+      const targetKind = targetFieldKind(formula.targetFieldType);
+      const eventValue = normalizeStoredValue(after?.[field], targetKind);
 
       // finding m1: read the record FRESH (no prefetch) so the decision uses the
       // CURRENT inputs and CURRENT stored value, not the possibly-stale event
@@ -183,36 +194,40 @@ export const handleRecordUpdate = async ({
 
       const currentStored = normalizeStoredValue(
         navigatePath(fresh.sameRecord, field),
+        targetKind,
       );
 
       // Superseded write in flight: the stored value already moved past the
       // value this event reports, so a newer write is converging — treating the
       // stale echo as a human pin would be wrong. Skip it.
-      if (!numbersEqual(currentStored, eventValue)) continue;
+      if (!storedValuesEqual(currentStored, eventValue)) continue;
 
-      // A text result cannot be a numeric target's own recompute; coercing it
-      // the way the resolver used to keeps the "can't compute -> never risk a
-      // false pin" rule above covering that case too.
-      let freshNumeric: number | null;
+      // The same write-boundary normalization recompute applies, so the compare
+      // happens in the field's own representation. A value the target cannot
+      // hold (text onto a numeric field) throws here — "can't compute -> never
+      // risk a false pin" covers that case too.
+      let computedStored: EngineValue;
       try {
-        freshNumeric = numericComputedValue(fresh.value);
+        computedStored = normalizeComputedValue(
+          formula.targetFieldType,
+          fresh.value,
+          { integerBacked: isIntegerBackedFormat(formula.outputFormat) },
+        );
       } catch {
         continue;
       }
 
-      const computedStored = normalizeComputedValue(
-        formula.targetFieldType,
-        freshNumeric,
-        { integerBacked: isIntegerBackedFormat(formula.outputFormat) },
-      );
-
       // The current stored value matches the formula on CURRENT inputs -> it is
       // the app's own recompute, not a human pin.
-      if (numbersEqual(computedStored, currentStored)) continue;
+      if (storedValuesEqual(computedStored, currentStored)) continue;
 
-      await upsertOverride(client, objectName, field, recordId, {
-        numeric: currentStored,
-      });
+      await upsertOverride(
+        client,
+        objectName,
+        field,
+        recordId,
+        overrideSlotForKind(targetKind, currentStored),
+      );
     }
   }
 
@@ -238,6 +253,13 @@ export const handleRecordUpdate = async ({
       formula.targetObject === objectName &&
       sameRecordAffected(dependencies.sameRecordFields, updatedFields)
     ) {
+      // Mirror formulas do their own kind-aware fetch inside
+      // computeMirrorValueForRecord — the event `after` is NOT
+      // sub-selection-guaranteed for composite mirror kinds, so it must not be
+      // trusted as a prefetch (FM Task 2 carry-forward). The numeric path keeps
+      // trusting `after` (byte-identical behavior).
+      const isMirror = isMirrorDefinition(compiled.ast, formula.targetFieldType);
+
       // Respect an ACTIVE manual override on this specific record (#2).
       const override = await findOverride(
         client,
@@ -250,18 +272,20 @@ export const handleRecordUpdate = async ({
           formulaId: formula.id,
           targetRecordId: recordId,
           changed: false,
-          value: override.overrideValue,
+          // A mirror pins its value in the text column, so the numeric column
+          // this outcome reports is null for that lane — tagged 'raw' rather
+          // than mistagged as a number.
+          value: isMirror
+            ? { kind: 'raw', value: null }
+            : tagEngineValue(
+                targetFieldKind(formula.targetFieldType),
+                override.overrideValue,
+              ),
           error: null,
           overridden: true,
         });
         continue;
       }
-      // Mirror formulas do their own kind-aware fetch inside
-      // computeMirrorValueForRecord — the event `after` is NOT
-      // sub-selection-guaranteed for composite mirror kinds, so it must not be
-      // trusted as a prefetch (FM Task 2 carry-forward). The numeric path keeps
-      // trusting `after` (byte-identical behavior).
-      const isMirror = isMirrorDefinition(compiled.ast, formula.targetFieldType);
       const outcome = await recomputeForRecord({
         client,
         formula,
@@ -272,13 +296,7 @@ export const handleRecordUpdate = async ({
       await recordEvaluationHeartbeat(
         client,
         formula,
-        {
-          value: outcome.value,
-          error: outcome.error,
-          // Mirrors carry their diagnostic value on rawValue so the heartbeat can
-          // derive lastValueText (numeric formulas leave it undefined).
-          rawValue: outcome.rawValue,
-        },
+        { value: outcome.value, error: outcome.error },
         usesToday(compiled.ast),
       );
       continue;

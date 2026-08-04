@@ -23,7 +23,6 @@ import {
 } from 'src/engine/evaluator';
 import {
   coerceToEngineValue,
-  coerceToNumber,
   navigatePath,
 } from 'src/logic-functions/lib/coercion';
 import { currentEpochDay } from 'src/logic-functions/lib/date-serial';
@@ -38,6 +37,8 @@ import {
   normalizeComputedValue,
   normalizeStoredValue,
   selectionEntryForFieldKind,
+  tagEngineValue,
+  targetFieldKind,
 } from 'src/logic-functions/lib/value-io';
 import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
 import { pluralize } from 'src/logic-functions/lib/plural';
@@ -46,6 +47,7 @@ import {
   type PendingWrite,
 } from 'src/logic-functions/lib/batch-write';
 import {
+  type ComputedValue,
   type FormulaClient,
   type FormulaDefinitionRecord,
   type RecomputeOutcome,
@@ -218,18 +220,35 @@ const buildResolver = (
   };
 };
 
-// The write lane and override detection are still numeric until TEXT gets its
-// own target lane, so a text result coerces here exactly as the resolver used to
-// at resolve time — the same NON_NUMERIC_VALUE failure, raised one step later.
-export const numericComputedValue = (value: EngineValue): number | null =>
-  typeof value === 'string' ? coerceToNumber(value) : value;
+// Convergence check for the no-op guard. Strict identity covers both domains:
+// numbers compare exactly (every kind is rounded to its stored representation
+// first, so a fractional result can never rewrite forever), and text converges on
+// exact string equality — no trimming, no case folding.
+const valuesEqual = (a: EngineValue, b: EngineValue): boolean => a === b;
 
-const valuesEqual = (a: number | null, b: number | null): boolean => {
-  if (a === null || b === null) {
-    return a === b;
+// Whether the definition takes the mirror lane. An unparseable expression is not
+// a mirror; the engine path surfaces the error.
+const isMirrorFormula = (formula: FormulaDefinitionRecord): boolean => {
+  try {
+    return isMirrorDefinition(
+      compileFormula(formula.expression ?? '').ast,
+      formula.targetFieldType,
+    );
+  } catch {
+    return false;
   }
-  return a === b;
 };
+
+// The neutral outcome value for a record that produced nothing (an error, an
+// override skip, an empty pass). Tagged by the LANE rather than left untagged so
+// the heartbeat still records it in the column that lane owns.
+const emptyComputedValue = (
+  formula: FormulaDefinitionRecord,
+  isMirror: boolean,
+): ComputedValue =>
+  isMirror
+    ? { kind: 'raw', value: null }
+    : tagEngineValue(targetFieldKind(formula.targetFieldType), null);
 
 export type RecomputeArgs = {
   client: FormulaClient;
@@ -527,32 +546,23 @@ export const planRecomputeForRecord = async ({
 }: RecomputeArgs): Promise<RecomputePlan> => {
   const targetField = formula.targetField ?? '';
 
+  // Mirror mode: a bare whole-field ref onto a mirrorable target kind performs a
+  // typed RAW passthrough — write the source value verbatim, bypassing
+  // normalizeComputedValue / normalizeStoredValue / buildTargetWriteData
+  // entirely. Engine formulas fall through to the unchanged path below.
+  const isMirror = isMirrorFormula(formula);
+
   const base: RecomputeOutcome = {
     formulaId: formula.id,
     targetRecordId,
     changed: false,
-    value: null,
+    value: emptyComputedValue(formula, isMirror),
     error: null,
   };
 
   // Manual override: this record is pinned by the user — do not recompute it.
   if (overriddenRecordIds?.has(targetRecordId)) {
     return { outcome: { ...base, overridden: true }, write: null };
-  }
-
-  // Mirror mode: a bare whole-field ref onto a non-engine target kind performs a
-  // typed RAW passthrough — write the source value verbatim, bypassing
-  // normalizeComputedValue / normalizeStoredValue / buildTargetWriteData
-  // entirely. Engine-family formulas fall through to the unchanged path below.
-  let isMirror = false;
-  try {
-    isMirror = isMirrorDefinition(
-      compileFormula(formula.expression ?? '').ast,
-      formula.targetFieldType,
-    );
-  } catch {
-    // Unparseable expression is not a mirror; the engine path surfaces the error.
-    isMirror = false;
   }
 
   if (isMirror) {
@@ -575,13 +585,21 @@ export const planRecomputeForRecord = async ({
     // target value and the source value skips the write.
     if (deepJsonEqual(currentRaw, mirror.rawValue)) {
       return {
-        outcome: { ...base, changed: false, rawValue: mirror.rawValue },
+        outcome: {
+          ...base,
+          changed: false,
+          value: { kind: 'raw', value: mirror.rawValue },
+        },
         write: null,
       };
     }
 
     return {
-      outcome: { ...base, changed: true, rawValue: mirror.rawValue },
+      outcome: {
+        ...base,
+        changed: true,
+        value: { kind: 'raw', value: mirror.rawValue },
+      },
       write: { recordId: targetRecordId, data: { [targetField]: mirror.rawValue } },
     };
   }
@@ -599,9 +617,18 @@ export const planRecomputeForRecord = async ({
       write: null,
     };
   }
-  let numericValue: number | null;
+  // The write boundary: CURRENCY stores integer micros and integer-backed NUMBER
+  // fields store whole numbers — compare and write the rounded value, or a
+  // fractional result would never match the stored value and rewrite forever
+  // (finding M2). A TEXT target renders a number to canonical text; a numeric
+  // target coerces a text result and FAILS here (NON_NUMERIC_VALUE) exactly as
+  // the resolver used to fail at resolve time.
+  const targetKind = targetFieldKind(formula.targetFieldType);
+  let result: EngineValue;
   try {
-    numericValue = numericComputedValue(computed.value);
+    result = normalizeComputedValue(formula.targetFieldType, computed.value, {
+      integerBacked: isIntegerBackedFormat(formula.outputFormat),
+    });
   } catch (error) {
     return {
       outcome: {
@@ -613,27 +640,21 @@ export const planRecomputeForRecord = async ({
       write: null,
     };
   }
-
-  // CURRENCY stores integer micros and integer-backed NUMBER fields store whole
-  // numbers — compare and write the rounded value, or a fractional result would
-  // never match the stored value and rewrite forever (finding M2).
-  const result = normalizeComputedValue(formula.targetFieldType, numericValue, {
-    integerBacked: isIntegerBackedFormat(formula.outputFormat),
-  });
+  const tagged = tagEngineValue(targetKind, result);
   const sameRecord = computed.sameRecord;
 
   const currentRaw = navigatePath(sameRecord, targetField);
-  // Composite-aware read: for CURRENCY value fields the stored numeric value is
-  // the amountMicros sub-field (micros end-to-end).
-  const currentValue = normalizeStoredValue(currentRaw);
+  // Kind-aware read: for CURRENCY value fields the stored numeric value is the
+  // amountMicros sub-field (micros end-to-end); for TEXT it is the string itself.
+  const currentValue = normalizeStoredValue(currentRaw, targetKind);
 
   // No-op suppression / recursion guard: skip the write when nothing changed.
   if (valuesEqual(currentValue, result)) {
-    return { outcome: { ...base, value: result, changed: false }, write: null };
+    return { outcome: { ...base, value: tagged, changed: false }, write: null };
   }
 
   return {
-    outcome: { ...base, value: result, changed: true },
+    outcome: { ...base, value: tagged, changed: true },
     write: {
       recordId: targetRecordId,
       data: buildTargetWriteData(
@@ -714,6 +735,9 @@ export const recomputeAllRecords = async (
   const targetField = formula.targetField ?? '';
   const pluralName = pluralize(targetObject);
   const outcomes: RecomputeOutcome[] = [];
+  // The lane is a property of the definition, not of a record, so it is resolved
+  // once per pass and reused for every value-less outcome below.
+  const emptyValue = emptyComputedValue(formula, isMirrorFormula(formula));
 
   // Load the overridden record ids once so pinned records are skipped (#2).
   const overriddenRecordIds = await loadOverriddenRecordIds(
@@ -850,7 +874,7 @@ export const recomputeAllRecords = async (
           formulaId: formula.id,
           targetRecordId: id,
           changed: false,
-          value: null,
+          value: emptyValue,
           error: String(error),
         });
       }
@@ -906,25 +930,18 @@ export const recomputeAllRecords = async (
   // path above skips it.
   if (!resumedFromCursor && outcomes.length > 0) {
     const firstError = outcomes.find((o) => o.error)?.error ?? null;
+    // One sample for every lane: the first non-error outcome that actually
+    // produced something, else the first non-error outcome, else the lane's empty
+    // value. The tag rides along, so the heartbeat dispatches on it instead of
+    // re-deriving mirror-ness from the expression.
     const sampleValue =
-      outcomes.find((o) => !o.error && o.value !== null)?.value ??
+      outcomes.find((o) => !o.error && o.value.value !== null)?.value ??
       outcomes.find((o) => !o.error)?.value ??
-      null;
-    // Mirror heartbeat: sample a representative raw value (the heartbeat itself
-    // detects mirror-ness and derives lastValueText). Undefined for engine
-    // formulas, which the heartbeat ignores in favour of `value`.
-    const sampleRawValue =
-      outcomes.find(
-        (o) => !o.error && o.rawValue !== null && o.rawValue !== undefined,
-      )?.rawValue ?? null;
+      emptyValue;
     await recordEvaluationHeartbeat(
       client,
       formula,
-      {
-        value: sampleValue,
-        error: firstError,
-        rawValue: sampleRawValue,
-      },
+      { value: sampleValue, error: firstError },
       expressionUsesTodayOf(formula),
     );
   }

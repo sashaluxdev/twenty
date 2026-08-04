@@ -8,6 +8,7 @@ import {
   selectionEntryForFieldKind,
 } from 'src/logic-functions/lib/value-io';
 import { MS_PER_DAY } from 'src/logic-functions/lib/date-serial';
+import { isFormulaError } from 'src/engine/errors';
 
 describe('targetFieldKind', () => {
   it('defaults to NUMBER for null/undefined/unknown', () => {
@@ -48,25 +49,30 @@ describe('selectionEntryForFieldKind', () => {
 
 describe('normalizeStoredValue', () => {
   it('passes numbers through and maps empty to null', () => {
-    expect(normalizeStoredValue(25)).toBe(25);
-    expect(normalizeStoredValue(null)).toBeNull();
-    expect(normalizeStoredValue(undefined)).toBeNull();
+    expect(normalizeStoredValue(25, 'NUMBER')).toBe(25);
+    expect(normalizeStoredValue(null, 'NUMBER')).toBeNull();
+    expect(normalizeStoredValue(undefined, 'NUMBER')).toBeNull();
   });
 
   it('reads amountMicros from a currency composite', () => {
     expect(
-      normalizeStoredValue({ amountMicros: 5_000_000, currencyCode: 'EUR' }),
+      normalizeStoredValue(
+        { amountMicros: 5_000_000, currencyCode: 'EUR' },
+        'CURRENCY',
+      ),
     ).toBe(5_000_000);
     expect(
-      normalizeStoredValue({ amountMicros: null, currencyCode: 'EUR' }),
+      normalizeStoredValue({ amountMicros: null, currencyCode: 'EUR' }, 'CURRENCY'),
     ).toBeNull();
     // bigint columns can serialise micros as strings
-    expect(normalizeStoredValue({ amountMicros: '7000000' })).toBe(7_000_000);
+    expect(normalizeStoredValue({ amountMicros: '7000000' }, 'CURRENCY')).toBe(
+      7_000_000,
+    );
   });
 
   it('normalizes garbage to null instead of throwing', () => {
-    expect(normalizeStoredValue('not a number')).toBeNull();
-    expect(normalizeStoredValue({ foo: 'bar' })).toBeNull();
+    expect(normalizeStoredValue('not a number', 'NUMBER')).toBeNull();
+    expect(normalizeStoredValue({ foo: 'bar' }, 'NUMBER')).toBeNull();
   });
 });
 
@@ -154,6 +160,66 @@ describe('buildTargetWriteData', () => {
   });
 });
 
+describe('TEXT target kind', () => {
+  it('recognises TEXT as its own kind (no fallback to NUMBER)', () => {
+    expect(targetFieldKind('TEXT')).toBe('TEXT');
+  });
+
+  it('selects a TEXT value field as a scalar', () => {
+    expect(selectionEntryForFieldKind('TEXT')).toBe(true);
+  });
+
+  it('renders a computed number as canonical text', () => {
+    expect(normalizeComputedValue('TEXT', 42, { integerBacked: false })).toBe(
+      '42',
+    );
+  });
+
+  it('passes a computed string through verbatim', () => {
+    expect(
+      normalizeComputedValue('TEXT', 'ACME-INV42', { integerBacked: false }),
+    ).toBe('ACME-INV42');
+  });
+
+  it('keeps a null computed value null', () => {
+    expect(
+      normalizeComputedValue('TEXT', null, { integerBacked: false }),
+    ).toBeNull();
+  });
+
+  it('reads a stored TEXT value as the raw string', () => {
+    expect(normalizeStoredValue('ACME-INV42', 'TEXT')).toBe('ACME-INV42');
+    expect(normalizeStoredValue('', 'TEXT')).toBe('');
+    expect(normalizeStoredValue(null, 'TEXT')).toBeNull();
+  });
+
+  it('writes an empty string as an empty string and null as a clear', () => {
+    expect(buildTargetWriteData('code', 'TEXT', '')).toEqual({ code: '' });
+    expect(buildTargetWriteData('code', 'TEXT', null)).toEqual({ code: null });
+    expect(buildTargetWriteData('code', 'TEXT', 'ACME')).toEqual({
+      code: 'ACME',
+    });
+  });
+});
+
+describe('write-boundary coercion onto a numeric target', () => {
+  it('coerces a numeric-shaped string', () => {
+    expect(normalizeComputedValue('NUMBER', '42', { integerBacked: false })).toBe(
+      42,
+    );
+  });
+
+  it('throws NON_NUMERIC_VALUE for a non-numeric string', () => {
+    let code: string | null = null;
+    try {
+      normalizeComputedValue('NUMBER', 'INV42', { integerBacked: false });
+    } catch (error) {
+      code = isFormulaError(error) ? error.code : null;
+    }
+    expect(code).toBe('NON_NUMERIC_VALUE');
+  });
+});
+
 describe('DATE / DATE_TIME normalize + serialize round-trips (ADR 0011)', () => {
   it('floors a computed DATE to whole epoch-days', () => {
     const epochDays = Date.UTC(2026, 6, 3) / MS_PER_DAY;
@@ -172,7 +238,7 @@ describe('DATE / DATE_TIME normalize + serialize round-trips (ADR 0011)', () => 
     const computed = Date.UTC(2026, 6, 3) / MS_PER_DAY + 0.3;
     const normalized = normalizeComputedValue('DATE', computed);
     const written = buildTargetWriteData('due', 'DATE', normalized).due;
-    const reparsed = normalizeStoredValue(written);
+    const reparsed = normalizeStoredValue(written, 'DATE');
     // Exact equality — this is what recompute's valuesEqual (===) compares.
     expect(reparsed).toBe(normalized);
   });
@@ -181,7 +247,7 @@ describe('DATE / DATE_TIME normalize + serialize round-trips (ADR 0011)', () => 
     const computed = Date.parse('2026-07-03T23:30:00.000Z') / MS_PER_DAY + 0.123;
     const normalized = normalizeComputedValue('DATE_TIME', computed);
     const written = buildTargetWriteData('at', 'DATE_TIME', normalized).at;
-    const reparsed = normalizeStoredValue(written);
+    const reparsed = normalizeStoredValue(written, 'DATE_TIME');
     expect(reparsed).toBe(normalized);
   });
 
@@ -189,9 +255,10 @@ describe('DATE / DATE_TIME normalize + serialize round-trips (ADR 0011)', () => 
     // 2026-07-04T01:30:00+02:00 is 2026-07-03T23:30:00Z — the same instant,
     // even though the local wall-clock date is the 4th. UTC-only math means the
     // two strings normalize to the identical epoch-day fraction (DST-immune).
-    const utcLate = normalizeStoredValue('2026-07-03T23:30:00.000Z');
+    const utcLate = normalizeStoredValue('2026-07-03T23:30:00.000Z', 'DATE_TIME');
     const offsetCrossingMidnight = normalizeStoredValue(
       '2026-07-04T01:30:00.000+02:00',
+      'DATE_TIME',
     );
     expect(offsetCrossingMidnight).toBe(utcLate);
     // And flooring that instant to a DATE yields the UTC day (the 3rd), not the

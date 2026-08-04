@@ -37,7 +37,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(25);
+    expect(outcome.value).toEqual({ kind: 'number', value: 25 });
     expect(outcome.changed).toBe(true);
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(25);
   });
@@ -53,7 +53,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(25);
+    expect(outcome.value).toEqual({ kind: 'number', value: 25 });
     expect(outcome.changed).toBe(false);
     expect(client.writes).toHaveLength(0);
     expect(client.mutations).toBe(0);
@@ -77,7 +77,7 @@ describe('recomputeForRecord', () => {
     });
 
     // Uses prefetched inputs (3 + 4*2 = 11), no read query needed.
-    expect(outcome.value).toBe(11);
+    expect(outcome.value).toEqual({ kind: 'number', value: 11 });
     expect(client.queries).toBe(0);
   });
 
@@ -92,7 +92,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'number', value: null });
     expect(outcome.changed).toBe(true);
     expect(client.get('opportunity', 'o1')!.formulaScore).toBeNull();
   });
@@ -149,7 +149,7 @@ describe('recomputeForRecord', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(105);
+    expect(outcome.value).toEqual({ kind: 'number', value: 105 });
     expect(client.get('opportunity', 'o1')!.formulaCrossScore).toBe(105);
   });
 });
@@ -177,7 +177,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(1);
+    expect(outcome.value).toEqual({ kind: 'number', value: 1 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(1);
   });
 
@@ -197,7 +197,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(2);
+    expect(outcome.value).toEqual({ kind: 'number', value: 2 });
   });
 
   it('null-propagates (no write) when the compared SELECT field is null', async () => {
@@ -219,7 +219,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
 
     // null stage -> null string operand -> null IF -> null result. Stored value
     // is already null, so no write (no-op suppression path).
-    expect(outcome.value).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'number', value: null });
     expect(outcome.changed).toBe(false);
     expect(client.mutations).toBe(before);
   });
@@ -240,7 +240,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(10);
+    expect(outcome.value).toEqual({ kind: 'number', value: 10 });
   });
 
   it('reports NON_NUMERIC_VALUE (no write) when a text value reaches a numeric target', async () => {
@@ -272,7 +272,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(42);
+    expect(outcome.value).toEqual({ kind: 'number', value: 42 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(42);
   });
 
@@ -293,7 +293,7 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(10);
+    expect(outcome.value).toEqual({ kind: 'number', value: 10 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(10);
   });
 });
@@ -325,7 +325,7 @@ describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
     // The epoch-day for 2026-07-04 comfortably exceeds 100, so the condition
     // (formulaInputA > TODAY()) is false regardless of the exact serial value —
     // this asserts TODAY() actually reads a real, large epoch-day, not 0/NaN.
-    expect(outcome.value).toBe(0);
+    expect(outcome.value).toEqual({ kind: 'number', value: 0 });
     expect(outcome.error).toBeNull();
   });
 
@@ -346,7 +346,7 @@ describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
       formula: formula({ expression: 'IF(TODAY() >= formulaInputA, 1, 0)' }),
       targetRecordId: 'o1',
     });
-    expect(before.value).toBe(0);
+    expect(before.value).toEqual({ kind: 'number', value: 0 });
 
     vi.setSystemTime(new Date('2026-07-05T12:00:00.000Z'));
     const after = await recomputeForRecord({
@@ -354,7 +354,7 @@ describe('recomputeForRecord with TODAY() (ADR 0012)', () => {
       formula: formula({ expression: 'IF(TODAY() >= formulaInputA, 1, 0)' }),
       targetRecordId: 'o1',
     });
-    expect(after.value).toBe(1);
+    expect(after.value).toEqual({ kind: 'number', value: 1 });
     expect(after.changed).toBe(true);
   });
 });
@@ -383,7 +383,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       stale,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       true,
     );
 
@@ -405,7 +405,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       fresh,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       true,
     );
 
@@ -425,7 +425,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       corrupt,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       true,
     );
 
@@ -447,7 +447,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       stale,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       false,
     );
 
@@ -465,7 +465,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
     await recordEvaluationHeartbeat(
       client,
       changed,
-      { value: 25, error: null },
+      { value: { kind: 'number', value: 25 }, error: null },
       false,
     );
 
@@ -507,7 +507,7 @@ describe('recomputeForRecord composite dependency selection', () => {
       targetRecordId: 'o1',
     });
 
-    expect(outcome.value).toBe(10_000_000);
+    expect(outcome.value).toEqual({ kind: 'number', value: 10_000_000 });
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(10_000_000);
   });
 

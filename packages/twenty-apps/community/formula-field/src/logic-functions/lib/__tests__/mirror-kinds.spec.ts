@@ -47,6 +47,10 @@ describe('ENGINE_FAMILY_KINDS', () => {
       'DATE',
       'DATE_TIME',
       'NUMBER',
+      // TEXT is in the engine family AND still in MIRRORABLE_KINDS: the engine
+      // can express text at the write boundary before the mirror lane hands the
+      // kind over.
+      'TEXT',
     ]);
   });
 });

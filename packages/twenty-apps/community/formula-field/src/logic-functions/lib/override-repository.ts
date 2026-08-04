@@ -1,4 +1,5 @@
 import { type FormulaClient } from 'src/logic-functions/lib/types';
+import { type TargetFieldKind } from 'src/logic-functions/lib/value-io';
 import { withRetry } from 'src/logic-functions/lib/with-retry';
 
 // Data access for FormulaOverride rows (feature #2). One row per
@@ -164,14 +165,27 @@ export const findOverride = async (
   );
 };
 
-// The pinned value for an override: an engine-family target pins `numeric`
-// (overrideValue); a mirror target pins `text` (overrideValueText, a
-// JSON-stringified raw value). Exactly one is meaningful per call — the other
+// The pinned value for an override: a numeric target pins `numeric`
+// (overrideValue); a TEXT or mirror target pins `text` (overrideValueText, a
+// JSON-stringified value). Exactly one is meaningful per call — the other
 // column is written null so the two never disagree.
 export type OverrideValue = {
   numeric?: number | null;
   text?: string | null;
 };
+
+// Slot choice, driven by the TARGET KIND rather than by the value's runtime
+// type: the engine's numeric kinds pin the numeric column; TEXT and every mirror
+// ('raw') kind pin the JSON-text column. The text encoding is exactly
+// `JSON.stringify(value ?? null)`, the convention decodeMirrorOverrideValue
+// already reads, so deployed mirror overrides keep round-tripping unchanged.
+export const overrideSlotForKind = (
+  kind: TargetFieldKind | 'raw',
+  value: unknown,
+): OverrideValue =>
+  kind === 'TEXT' || kind === 'raw'
+    ? { text: JSON.stringify(value ?? null) }
+    : { numeric: typeof value === 'number' ? value : null };
 
 // Creates or updates an ACTIVE override pinning the given value. Numeric targets
 // pin overrideValue (overrideValueText null); mirror targets pin overrideValueText

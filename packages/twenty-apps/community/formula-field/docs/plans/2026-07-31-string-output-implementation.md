@@ -598,12 +598,12 @@ export type ComputedValue =
 6. Override slot choice becomes target-kind-driven: TEXT and raw kinds → `{ text: JSON.stringify(value ?? null) }` (the existing mirror convention — deployed TEXT-mirror overrides must round-trip through `decodeMirrorOverrideValue` unchanged); numeric kinds → `{ numeric: value }`. In this task only the numeric-side call site (`handle-record-update.ts:202-204`) is confirmed unchanged; the TEXT routing lands with T7. Add a comment at `override-repository.ts:171-174` stating the convention.
 7. Existing suites (`value-io.spec.ts` 22, `currency/date/integer-target`, `mirror-target.spec.ts` 32) must pass with only mechanical updates (type widenings, `ComputedValue` unwrapping in assertions). Behavioral diffs are bugs.
 
-- [ ] **Step 1: Write the failing tests** — in `value-io.spec.ts`, describe `TEXT target kind`: `targetFieldKind('TEXT') === 'TEXT'`; `normalizeComputedValue('TEXT', 42, {integerBacked:false}) === '42'`; `normalizeComputedValue('TEXT', 'ACME-INV42', ...) === 'ACME-INV42'`; `normalizeComputedValue('NUMBER', '42', ...) === 42`; `normalizeComputedValue('NUMBER', 'INV42', ...)` throws `NON_NUMERIC_VALUE`; `buildTargetWriteData('code', 'TEXT', '')` → `{ code: '' }`; `buildTargetWriteData('code', 'TEXT', null)` → `{ code: null }`. In `handlers.spec.ts`: a heartbeat for a TEXT-kind outcome writes `lastValueText` (JSON-encoded) and leaves `lastValue` untouched.
-- [ ] **Step 2: Run and verify failures.**
-- [ ] **Step 3: Implement** per constraints 1–6.
-- [ ] **Step 4: Whole suite green; report count and enumerate which existing assertions needed mechanical updates.**
-- [ ] **Step 5: Lint + typecheck.**
-- [ ] **Step 6: Commit** — `feat(formula-field): TEXT write boundary, tagged ComputedValue outcome, kind-dispatched bookkeeping`
+- [x] **Step 1: Write the failing tests** — in `value-io.spec.ts`, describe `TEXT target kind`: `targetFieldKind('TEXT') === 'TEXT'`; `normalizeComputedValue('TEXT', 42, {integerBacked:false}) === '42'`; `normalizeComputedValue('TEXT', 'ACME-INV42', ...) === 'ACME-INV42'`; `normalizeComputedValue('NUMBER', '42', ...) === 42`; `normalizeComputedValue('NUMBER', 'INV42', ...)` throws `NON_NUMERIC_VALUE`; `buildTargetWriteData('code', 'TEXT', '')` → `{ code: '' }`; `buildTargetWriteData('code', 'TEXT', null)` → `{ code: null }`. In `handlers.spec.ts`: a heartbeat for a TEXT-kind outcome writes `lastValueText` (JSON-encoded) and leaves `lastValue` untouched.
+- [x] **Step 2: Run and verify failures.**
+- [x] **Step 3: Implement** per constraints 1–6.
+- [x] **Step 4: Whole suite green; report count and enumerate which existing assertions needed mechanical updates.**
+- [x] **Step 5: Lint + typecheck.**
+- [x] **Step 6: Commit** — `feat(formula-field): TEXT write boundary, tagged ComputedValue outcome, kind-dispatched bookkeeping`
 
 ---
 

@@ -65,6 +65,7 @@ import {
   buildTargetWriteData,
   normalizeStoredValue,
   selectionEntryForFieldKind,
+  targetFieldKind,
 } from 'src/logic-functions/lib/value-io';
 
 // Record-page "Formulas" tab (object-agnostic — the wizard attaches it to any
@@ -482,7 +483,10 @@ const FormulaEditor = () => {
         // a number for numeric display.
         nextValues[definition.targetField] = isMirrorRow(definition)
           ? record[definition.targetField] ?? null
-          : normalizeStoredValue(record[definition.targetField]);
+          : normalizeStoredValue(
+              record[definition.targetField],
+              targetFieldKind(definition.targetFieldType),
+            );
       }
       setValues(nextValues);
 

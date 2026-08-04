@@ -10,7 +10,10 @@ import {
   findOverride,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
-import { loadAllEnabledFormulas } from 'src/logic-functions/lib/formula-repository';
+import {
+  loadAllEnabledFormulas,
+  recordEvaluationHeartbeat,
+} from 'src/logic-functions/lib/formula-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
@@ -1069,5 +1072,58 @@ describe('loadEnabledFormulas ordering', () => {
     expect(pageQuery.formulaDefinitions.__args.orderBy).toEqual([
       { id: { __graphqlEnum: 'AscNullsFirst' } },
     ]);
+  });
+});
+
+// Write boundary (Task 6): the heartbeat dispatches on the outcome's tagged
+// kind, not on a re-parse of the expression. A text-kind outcome takes the same
+// lastValueText lane deployed mirrors already use.
+describe('recordEvaluationHeartbeat — text-kind outcome', () => {
+  const textFormula = (
+    overrides: Partial<FormulaDefinitionRecord> = {},
+  ): FormulaDefinitionRecord => ({
+    id: 'ft',
+    targetObject: 'company',
+    targetField: 'invoiceCode',
+    targetFieldType: 'TEXT',
+    expression: '"ACME-" & invoiceNumber',
+    enabled: true,
+    ...overrides,
+  });
+
+  it('writes lastValueText (JSON-encoded) and leaves lastValue untouched', async () => {
+    const client = new FakeClient();
+    client.seed('formulaDefinition', [
+      textFormula() as Record<string, unknown> & { id: string },
+    ]);
+
+    await recordEvaluationHeartbeat(
+      client,
+      textFormula(),
+      { value: { kind: 'text', value: 'ACME-42' }, error: null },
+      false,
+    );
+
+    const stored = client.get('formulaDefinition', 'ft')!;
+    expect(stored.lastValueText).toBe(JSON.stringify('ACME-42'));
+    expect(stored.lastValue ?? null).toBeNull();
+  });
+
+  it('performs zero writes when the text and error are unchanged', async () => {
+    const client = new FakeClient();
+    const formula = textFormula({ lastValueText: '"ACME-42"', lastError: '' });
+    client.seed('formulaDefinition', [
+      formula as Record<string, unknown> & { id: string },
+    ]);
+    const before = client.mutations;
+
+    await recordEvaluationHeartbeat(
+      client,
+      formula,
+      { value: { kind: 'text', value: 'ACME-42' }, error: null },
+      false,
+    );
+
+    expect(client.mutations).toBe(before);
   });
 });

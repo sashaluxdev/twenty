@@ -130,9 +130,9 @@ describe('mirror recompute passthrough — scalar kinds', () => {
     });
 
     expect(outcome.changed).toBe(true);
-    expect(outcome.rawValue).toBe('ACTIVE');
-    // Mirrors carry text in the heartbeat, so the numeric outcome value is null.
-    expect(outcome.value).toBeNull();
+    // A mirror's outcome carries its raw value tagged 'raw', which is what routes
+    // it to the text heartbeat column instead of the NUMBER-typed lastValue.
+    expect(outcome.value).toEqual({ kind: 'raw', value: 'ACTIVE' });
     expect(client.get('company', 'c1')!.mirror).toBe('ACTIVE');
     expect(client.writes).toEqual(['company:c1:mirror="ACTIVE"']);
   });
@@ -403,7 +403,7 @@ describe('mirror recompute — cross-record', () => {
     });
 
     expect(outcome.error).toBeNull();
-    expect(outcome.rawValue).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'raw', value: null });
     expect(client.get('opportunity', 'o1')!.mirror).toBeNull();
   });
 });
@@ -440,7 +440,7 @@ describe('mirror heartbeat — lastValueText', () => {
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: { firstName: 'Ada' } },
+      { value: { kind: 'raw', value: { firstName: 'Ada' } }, error: null },
       false,
     );
 
@@ -455,7 +455,7 @@ describe('mirror heartbeat — lastValueText', () => {
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: long },
+      { value: { kind: 'raw', value: long }, error: null },
       false,
     );
 
@@ -467,7 +467,7 @@ describe('mirror heartbeat — lastValueText', () => {
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: null },
+      { value: { kind: 'raw', value: null }, error: null },
       false,
     );
 
@@ -484,7 +484,7 @@ describe('mirror heartbeat — lastValueText', () => {
     await recordEvaluationHeartbeat(
       client,
       formula,
-      { value: null, error: null, rawValue: 'ACTIVE' },
+      { value: { kind: 'raw', value: 'ACTIVE' }, error: null },
       false,
     );
 
@@ -520,7 +520,7 @@ describe('mirror heartbeat via recomputeAllRecords', () => {
     await recordEvaluationHeartbeat(
       client,
       mirrorFormula(),
-      { value: null, error: null, rawValue: circular },
+      { value: { kind: 'raw', value: circular }, error: null },
       false,
     );
 
