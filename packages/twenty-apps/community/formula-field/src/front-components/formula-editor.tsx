@@ -7,9 +7,9 @@ import { enqueueSnackbar, useRecordId } from 'twenty-sdk/front-component';
 import { parse, usesToday } from 'src/engine';
 import {
   isMirrorDefinition,
-  isMirrorTargetKind,
   selectionEntryForMirrorKind,
 } from 'src/logic-functions/lib/mirror-kinds';
+import { displayValue } from 'src/front-components/lib/display-value';
 import {
   formatRelativePast,
   isStaleTimestamp,
@@ -19,6 +19,11 @@ import {
   useObjectFields,
 } from 'src/front-components/lib/formula-field-input';
 import { cacheHostObject, getCachedHostObject } from 'src/front-components/lib/host-resolution-cache';
+import {
+  overrideSlotKind,
+  pinnedEngineOverrideValue,
+  pinnedOverrideDisplayValue,
+} from 'src/front-components/lib/override-slot';
 import { POLL_INTERVAL_MS } from 'src/front-components/lib/poll-interval';
 import {
   refreshStaleTodayFormulas,
@@ -51,12 +56,9 @@ import {
   activateOverride,
   deactivateOverride,
   decodeMirrorOverrideValue,
+  overrideSlotForKind,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
-import {
-  epochDaysToDateString,
-  epochDaysToIsoDateTime,
-} from 'src/logic-functions/lib/date-serial';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { convergeTrashedDefinitionLayout } from 'src/logic-functions/lib/fx-status-field';
 import { loadTrashedFormulas } from 'src/logic-functions/lib/formula-repository';
@@ -128,34 +130,6 @@ const isMirrorRow = (definition: {
   } catch {
     return false;
   }
-};
-
-// Values are handled in micros for CURRENCY fields (like the engine); shown to
-// the user in currency units. Mirror targets carry raw non-numeric values.
-const displayValue = (definition: Definition, value: unknown): string => {
-  if (value === null || value === undefined) return '—';
-  // Mirror targets: render the raw value directly — string as-is, number/boolean
-  // stringified, object/array as compact JSON (design 2026-07-06).
-  if (isMirrorTargetKind(definition.targetFieldType)) {
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' || typeof value === 'boolean') {
-      return String(value);
-    }
-    return JSON.stringify(value);
-  }
-  const numericValue = value as number;
-  if (definition.targetFieldType === 'CURRENCY') {
-    return `${(numericValue / 1_000_000).toFixed(2)}`;
-  }
-  // DATE / DATE_TIME values are epoch-days (Excel serial model, ADR 0011) —
-  // show them as their calendar/ISO scalar rather than a raw day count.
-  if (definition.targetFieldType === 'DATE') {
-    return epochDaysToDateString(numericValue);
-  }
-  if (definition.targetFieldType === 'DATE_TIME') {
-    return epochDaysToIsoDateTime(numericValue);
-  }
-  return String(numericValue);
 };
 
 const OverrideToggle = ({
@@ -499,12 +473,18 @@ const FormulaEditor = () => {
           const definition = defs.find(
             (candidate) => candidate.targetField === edge.node.targetField,
           );
-          // Mirror overrides pin a raw value as JSON text; engine overrides pin a
-          // numeric column. A corrupted text decodes to null (harmless display).
-          const overrideValue =
-            definition && isMirrorRow(definition)
-              ? decodeMirrorOverrideValue(edge.node.overrideValueText).value
-              : edge.node.overrideValue ?? null;
+          // Which column holds the pin depends on the row's kind: mirror AND
+          // TEXT rows pin JSON text, the numeric kinds pin overrideValue. A
+          // corrupted text decodes to null (harmless display).
+          const overrideValue = definition
+            ? pinnedOverrideDisplayValue(
+                overrideSlotKind(
+                  definition.targetFieldType,
+                  isMirrorRow(definition),
+                ),
+                edge.node,
+              )
+            : edge.node.overrideValue ?? null;
           nextOverrides[edge.node.targetField] = {
             value: overrideValue,
             active: edge.node.active ?? false,
@@ -669,6 +649,9 @@ const FormulaEditor = () => {
     const client = createDynamicCoreClient();
         if (turnOn) {
           const mirror = isMirrorRow(definition);
+          // The column this row's pin lives in — TEXT rows share the mirror
+          // lane's JSON-text slot even though they are engine rows.
+          const slot = overrideSlotKind(definition.targetFieldType, mirror);
           // Restore a previously-set override value if one exists, otherwise pin
           // the current value.
           const restored = await activateOverride(
@@ -704,7 +687,7 @@ const FormulaEditor = () => {
                 definition.targetObject,
                 definition.targetField,
                 recordId,
-                { text: JSON.stringify(current) },
+                overrideSlotForKind(slot, current),
               );
               setOverrides((prev) => ({
                 ...prev,
@@ -712,45 +695,65 @@ const FormulaEditor = () => {
               }));
             }
           } else if (restored) {
-            // Engine target: write the retained numeric value back (composite-
-            // aware; a restored CURRENCY value resolves its code as
-            // existing-on-record -> definition.currencyCode -> JPY fallback,
-            // per buildTargetWriteData).
-            await client.mutation({
-              [`update${capitalize(definition.targetObject)}`]: {
-                __args: {
-                  id: recordId,
-                  data: buildTargetWriteData(
-                    definition.targetField,
-                    definition.targetFieldType,
-                    restored.overrideValue,
-                    undefined,
-                    definition.currencyCode,
-                  ),
+            // Engine target: write the retained value back from ITS slot — a
+            // TEXT row's pin is the decoded text, not the (always null) numeric
+            // column, or re-enabling would blank the user's pinned string.
+            // buildTargetWriteData is composite-aware: a restored CURRENCY value
+            // resolves its code as existing-on-record ->
+            // definition.currencyCode -> JPY fallback.
+            const pinned = pinnedEngineOverrideValue(slot, restored);
+            if (pinned.restorable) {
+              await client.mutation({
+                [`update${capitalize(definition.targetObject)}`]: {
+                  __args: {
+                    id: recordId,
+                    data: buildTargetWriteData(
+                      definition.targetField,
+                      definition.targetFieldType,
+                      pinned.value,
+                      undefined,
+                      definition.currencyCode,
+                    ),
+                  },
+                  id: true,
                 },
-                id: true,
-              },
-            });
-            setRestoredHint((prev) => ({ ...prev, [definition.id]: true }));
-            setOverrides((prev) => ({
-              ...prev,
-              [definition.targetField]: {
-                value: restored.overrideValue,
-                active: true,
-              },
-            }));
+              });
+              setRestoredHint((prev) => ({ ...prev, [definition.id]: true }));
+              setOverrides((prev) => ({
+                ...prev,
+                [definition.targetField]: {
+                  value: pinned.value,
+                  active: true,
+                },
+              }));
+            } else {
+              // Only a TEXT row reaches this: its text slot is empty or corrupt,
+              // so there is nothing to restore — pin the CURRENT value instead
+              // of clearing the field with a phantom null.
+              const current = values[definition.targetField] ?? null;
+              await upsertOverride(
+                client,
+                definition.targetObject,
+                definition.targetField,
+                recordId,
+                overrideSlotForKind(slot, current),
+              );
+              setOverrides((prev) => ({
+                ...prev,
+                [definition.targetField]: { value: current, active: true },
+              }));
+            }
           } else {
-            // No prior override row: pin the current value (raw JSON text for a
-            // mirror target, numeric column for an engine target).
+            // No prior override row: pin the current value into the row's own
+            // slot (JSON text for a mirror or TEXT target, the numeric column
+            // for the numeric engine kinds).
             const current = values[definition.targetField] ?? null;
             await upsertOverride(
               client,
               definition.targetObject,
               definition.targetField,
               recordId,
-              mirror
-                ? { text: JSON.stringify(current) }
-                : { numeric: current as number | null },
+              overrideSlotForKind(slot, current),
             );
             setOverrides((prev) => ({
               ...prev,

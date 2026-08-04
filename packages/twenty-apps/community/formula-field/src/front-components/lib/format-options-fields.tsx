@@ -121,6 +121,13 @@ export const FormatOptionsFields = ({
   const patch = (partial: Partial<FormatOptions>) =>
     onChange({ ...options, ...partial });
 
+  // TEXT has no display options in v1 — return BEFORE the DATE/DATE_TIME
+  // fall-through below, which would otherwise offer a date display format on a
+  // text field.
+  if (definition.fieldType === 'TEXT') {
+    return null;
+  }
+
   if (definition.fieldType === 'NUMBER') {
     const isShort = options.numberDisplayType === 'shortNumber';
     return (

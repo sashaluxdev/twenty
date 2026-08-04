@@ -61,6 +61,8 @@ const formatKeyForType = (
       return 'date';
     case 'DATE_TIME':
       return 'datetime';
+    case 'TEXT':
+      return 'text';
     default:
       return isOutputFormat(outputFormat) &&
         getOutputFormat(outputFormat).fieldType === 'NUMBER'
