@@ -280,6 +280,24 @@ export const updateFormulaBookkeeping = async (
 // (display/diagnostic only). A nullish value -> null text. The JSON encoding is
 // the convention deployed mirror rows already store, so it must not change.
 const MIRROR_VALUE_TEXT_MAX = 500;
+
+// JSON-encodes a string so the ENVELOPE fits the budget, shrinking the slice
+// until it does. The encoded length is not simply the raw length + 2 quotes —
+// a quote, a backslash or a control character expands under escaping — so the
+// slice is re-encoded rather than sized by a guessed safe ratio.
+const encodeTextWithinBudget = (value: string): string => {
+  let end = Math.min(value.length, MIRROR_VALUE_TEXT_MAX);
+  let encoded = JSON.stringify(value.slice(0, end));
+  while (encoded.length > MIRROR_VALUE_TEXT_MAX && end > 0) {
+    // Rescale by the observed expansion ratio (a string of quotes doubles), and
+    // always drop at least one character so the loop cannot stall.
+    const rescaled = Math.floor((end * MIRROR_VALUE_TEXT_MAX) / encoded.length);
+    end = Math.max(Math.min(rescaled, end - 1), 0);
+    encoded = JSON.stringify(value.slice(0, end));
+  }
+  return encoded;
+};
+
 const mirrorValueText = (rawValue: unknown): string | null => {
   if (rawValue === null || rawValue === undefined) {
     return null;
@@ -293,7 +311,18 @@ const mirrorValueText = (rawValue: unknown): string | null => {
     // heartbeat throw. Truncation still applies below.
     serialized = '[unserializable]';
   }
-  return serialized.slice(0, MIRROR_VALUE_TEXT_MAX);
+  if (serialized.length <= MIRROR_VALUE_TEXT_MAX) {
+    return serialized;
+  }
+  // Over budget: truncate the VALUE and re-encode, never the encoded text.
+  // Slicing the envelope cuts mid-string and stores unterminated JSON, which
+  // every reader (displayHeartbeatValue) fails to parse — so a long text result
+  // showed a permanent dash instead of a preview. A non-string value degrades to
+  // a JSON string holding a preview of its encoding: this column is
+  // display/diagnostic only, and a readable preview beats an unparseable blob.
+  return encodeTextWithinBudget(
+    typeof rawValue === 'string' ? rawValue : serialized,
+  );
 };
 
 // Write-avoidance is handled by the caller (it only calls this when the cursor

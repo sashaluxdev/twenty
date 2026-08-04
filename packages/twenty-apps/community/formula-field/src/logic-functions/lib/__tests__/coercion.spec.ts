@@ -117,9 +117,28 @@ describe('coerceToEngineValue', () => {
     expect(coerceToEngineValue({ amountMicros: 5_000_000 })).toBe(5_000_000);
   });
 
-  it('should still throw for an impossible date rather than returning it as text', () => {
-    expect(() => coerceToEngineValue('2026-13-45')).toThrowError(
+  it('should resolve a date-SHAPED non-date verbatim instead of throwing', () => {
+    // Date eagerness is validity-gated: a part number, a reference code or a
+    // hyphenated phone number matches the DATE shape without being a calendar
+    // date. Throwing failed every pass of a deployed TEXT mirror over such a
+    // column, freezing its target at the last pre-upgrade value.
+    expect(coerceToEngineValue('2026-13-45')).toBe('2026-13-45');
+    expect(coerceToEngineValue('8801-25-03')).toBe('8801-25-03');
+    expect(coerceToEngineValue('1234-56-78')).toBe('1234-56-78');
+    expect(coerceToEngineValue('2024-07-32')).toBe('2024-07-32');
+    // The same gate on the datetime shape.
+    expect(coerceToEngineValue('2026-07-03T99:99:99Z')).toBe(
+      '2026-07-03T99:99:99Z',
+    );
+  });
+
+  it('should keep coerceToNumber throwing for the same content (numeric contexts)', () => {
+    // The verbatim fallback belongs to the value domain only: a numeric context
+    // genuinely has no answer for date-shaped junk, so nothing about arithmetic
+    // changed.
+    expect(() => coerceToNumber('8801-25-03')).toThrowError(
       /NON_NUMERIC_VALUE|not a valid date/,
     );
+    expect(() => coerceToNumber('2026-13-45')).toThrow();
   });
 });

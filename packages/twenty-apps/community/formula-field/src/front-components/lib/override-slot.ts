@@ -45,8 +45,12 @@ export const pinnedOverrideDisplayValue = (
 // false means there is nothing to write back — the caller pins the CURRENT value
 // instead of clearing the field with a phantom null. Numeric kinds are always
 // restorable: their column IS the pinned value, and a null pin legitimately
-// clears the field. A TEXT pin that decodes to a non-string is normalized to
-// null, exactly as the backend's own read path does (handle-record-update).
+// clears the field. A TEXT pin decoding to a NULL is restorable (the pin really
+// is "empty"), but one decoding to a non-string — a legacy mirror pin over a
+// TEXT column that held dirty data — is NOT: writing it verbatim would put a
+// number in a text field, and normalizing it to null would erase the pinned
+// value while leaving the override active, so recompute could never repair it.
+// Unrestorable hands the decision back to the caller's re-pin branch.
 export const pinnedEngineOverrideValue = (
   slot: OverrideSlotKind,
   row: OverrideValueColumns,
@@ -55,8 +59,8 @@ export const pinnedEngineOverrideValue = (
     return { restorable: true, value: row.overrideValue ?? null };
   }
   const decoded = decodeMirrorOverrideValue(row.overrideValueText);
-  return {
-    restorable: decoded.restorable,
-    value: typeof decoded.value === 'string' ? decoded.value : null,
-  };
+  if (decoded.value !== null && typeof decoded.value !== 'string') {
+    return { restorable: false, value: null };
+  }
+  return { restorable: decoded.restorable, value: decoded.value };
 };

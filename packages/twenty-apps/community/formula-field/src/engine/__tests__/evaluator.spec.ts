@@ -642,6 +642,17 @@ describe('evaluator typed value domain', () => {
     expect(run(`IF(${key} != "2026-01-15", 1, 0)`, { [key]: serial })).toBe(1);
   });
 
+  it('compares a numeric-shaped text value against a NUMBER literal as FALSE (B3)', () => {
+    // Accepted delta B3 (ADR 0026): the field resolves VERBATIM as text now (it
+    // keeps its leading zeros for text output), so typed `=` against a numeric
+    // literal is a string-vs-number mismatch. Before the ADR the single numeric
+    // resolver had already coerced '42' to 42 and this was TRUE — the one delta
+    // that flips a deployed formula's RESULT with no error, so it is pinned in
+    // both directions.
+    expect(run('IF(tier = 42, 1, 0)', { tier: '42' })).toBe(0);
+    expect(run('IF(tier != 42, 1, 0)', { tier: '42' })).toBe(1);
+  });
+
   it('orders text fields by their numeric value at point of use', () => {
     expect(run('IF(a > b, 1, 0)', { a: '10', b: '9' })).toBe(1);
     expect(() => run('IF(a > b, 1, 0)', { a: 'won', b: '9' })).toThrow(

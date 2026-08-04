@@ -121,7 +121,8 @@ export const validateExpressionCore = ({
   //     The MIRRORABLE arm of the condition makes the two sets' membership
   //     authoritative rather than the engine family alone; with TEXT now
   //     engine-only (ADR 0026) a TEXT target skips these checks entirely, so any
-  //     engine expression — `code & "-" & 1` — validates onto it.
+  //     engine expression — `code & "-" & 1` — validates onto it; 1d below keeps
+  //     the one piece of 1c a TEXT target still needs (the bare-ref source kind).
   if (
     targetFieldType != null &&
     targetFieldType !== '' &&
@@ -154,6 +155,36 @@ export const validateExpressionCore = ({
         valid: false,
         error: `Cannot mirror ${sourceKind} field "${sourceField}" onto a ${targetFieldType} field (kinds must match)`,
       };
+    }
+  }
+
+  // 1d. TEXT-target source-kind guard, for the BARE-REF shape only. TEXT left
+  //      MIRRORABLE_KINDS (ADR 0026), so branch 1c no longer runs for it — and
+  //      with it would go the save-time rejection main gave a deployed-mirror
+  //      shape naming a field whose kind cannot hold text: a BOOLEAN source
+  //      writes "1"/"0", a DATE writes a raw serial, a MULTI_SELECT/LINKS fails
+  //      per record with NON_NUMERIC_VALUE. Same message and mechanism as 1c(c),
+  //      so a formula main rejected is still rejected identically. Scoped two
+  //      ways: SELECT is exempt (it holds text, and SELECT -> TEXT is the
+  //      widening ADR 0026 intends), and a non-bare expression — `flag & ""` —
+  //      is exempt because main could not save ANY engine expression onto a TEXT
+  //      target, so constraining it would invent a delta rather than close one.
+  if (targetFieldType === 'TEXT') {
+    const bare = bareReferenceOf(ast);
+    if (bare !== null) {
+      const sourceObject = bare.kind === 'same' ? hostObject : bare.ref.object;
+      const sourceField = bare.kind === 'same' ? bare.field : bare.ref.fieldPath;
+      const sourceKind = fieldKinds?.(sourceObject)?.get(sourceField);
+      if (
+        sourceKind !== undefined &&
+        sourceKind !== 'TEXT' &&
+        sourceKind !== 'SELECT'
+      ) {
+        return {
+          valid: false,
+          error: `Cannot mirror ${sourceKind} field "${sourceField}" onto a TEXT field (kinds must match)`,
+        };
+      }
     }
   }
 

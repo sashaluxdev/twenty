@@ -68,6 +68,56 @@ describe('validateExpressionCore', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('rejects a bare ref to a non-text source kind onto a TEXT target', () => {
+    // The bare-ref shape IS the deployed-mirror shape, and main rejected it at
+    // save time with this exact message. Losing the guard would let a BOOLEAN
+    // source write "1"/"0" (and a MULTI_SELECT fail per record), so it survives
+    // TEXT's move to the engine lane.
+    const result = validateExpressionCore({
+      expression: 'isActive',
+      hostObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'TEXT',
+      fieldKinds: () => new Map([['isActive', 'BOOLEAN']]),
+      otherFormulas: [],
+    });
+
+    expect(result).toEqual({
+      valid: false,
+      error:
+        'Cannot mirror BOOLEAN field "isActive" onto a TEXT field (kinds must match)',
+    });
+  });
+
+  it('accepts a bare TEXT ref onto a TEXT target', () => {
+    const result = validateExpressionCore({
+      expression: 'sourceField',
+      hostObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'TEXT',
+      fieldKinds: () => new Map([['sourceField', 'TEXT']]),
+      otherFormulas: [],
+    });
+
+    expect(result.valid).toBe(true);
+  });
+
+  it('leaves a non-bare expression over a non-text source unrestricted on a TEXT target', () => {
+    // `isActive & ""` was never savable onto a TEXT target on main (the mirror
+    // rule allowed a bare ref only), so the engine lane's general expressions
+    // are a pure widening with no delta to protect.
+    const result = validateExpressionCore({
+      expression: 'isActive & ""',
+      hostObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'TEXT',
+      fieldKinds: () => new Map([['isActive', 'BOOLEAN']]),
+      otherFormulas: [],
+    });
+
+    expect(result.valid).toBe(true);
+  });
+
   // The mirror rule stays intact for the raw kinds it still owns.
   it('rejects a non-bare-ref expression onto a SELECT target with the mirror message', () => {
     const result = validateExpressionCore({

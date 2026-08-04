@@ -727,9 +727,10 @@ const FormulaEditor = () => {
                 },
               }));
             } else {
-              // Only a TEXT row reaches this: its text slot is empty or corrupt,
-              // so there is nothing to restore — pin the CURRENT value instead
-              // of clearing the field with a phantom null.
+              // Only a TEXT row reaches this: its text slot is empty, corrupt or
+              // holds a non-string (a legacy pin over dirty data), so there is
+              // nothing writable to restore — pin the CURRENT value instead of
+              // clearing the field with a phantom null.
               const current = values[definition.targetField] ?? null;
               await upsertOverride(
                 client,

@@ -461,7 +461,10 @@ describe('mirror heartbeat — lastValueText', () => {
     expect(client.get('formulaDefinition', 'f1')!.lastValue ?? null).toBeNull();
   });
 
-  it('truncates lastValueText at 500 characters', async () => {
+  it('truncates lastValueText within 500 characters and keeps it valid JSON', async () => {
+    // Truncating AFTER JSON.stringify cut the envelope open, so every reader
+    // (displayHeartbeatValue) failed to parse it and a long text result showed a
+    // permanent dash. The VALUE is truncated instead; the envelope stays whole.
     const long = 'x'.repeat(600);
     await recordEvaluationHeartbeat(
       client,
@@ -471,7 +474,41 @@ describe('mirror heartbeat — lastValueText', () => {
     );
 
     const text = client.get('formulaDefinition', 'f1')!.lastValueText as string;
-    expect(text).toHaveLength(500);
+    expect(text.length).toBeLessThanOrEqual(500);
+    const decoded = JSON.parse(text) as unknown;
+    expect(typeof decoded).toBe('string');
+    expect(decoded).toBe('x'.repeat((decoded as string).length));
+    expect((decoded as string).length).toBeGreaterThan(400);
+  });
+
+  it('keeps the envelope valid when escaping expands the value', async () => {
+    // A value made of quotes doubles under escaping, so a fixed raw budget would
+    // overflow — the encoder re-encodes until the envelope fits.
+    const quotes = '"'.repeat(600);
+    await recordEvaluationHeartbeat(
+      client,
+      mirrorFormula(),
+      { value: { kind: 'raw', value: quotes }, error: null },
+      false,
+    );
+
+    const text = client.get('formulaDefinition', 'f1')!.lastValueText as string;
+    expect(text.length).toBeLessThanOrEqual(500);
+    expect(JSON.parse(text)).toBe('"'.repeat(249));
+  });
+
+  it('degrades an over-budget non-string value to a parseable preview', async () => {
+    const big = { note: 'y'.repeat(600) };
+    await recordEvaluationHeartbeat(
+      client,
+      mirrorFormula(),
+      { value: { kind: 'raw', value: big }, error: null },
+      false,
+    );
+
+    const text = client.get('formulaDefinition', 'f1')!.lastValueText as string;
+    expect(text.length).toBeLessThanOrEqual(500);
+    expect(JSON.parse(text) as string).toContain('{"note":"yyy');
   });
 
   it('writes null lastValueText for a null source', async () => {

@@ -792,6 +792,33 @@ describe('TEXT target on the engine lane — deployed-mirror write parity', () =
     ]);
   });
 
+  it('copies date-SHAPED content that is not a real date verbatim', async () => {
+    // Part numbers, reference codes and hyphenated phone numbers match the DATE
+    // shape. Parsing them threw, and the throw became an error outcome with
+    // write: null — every pass, forever, so a deployed mirror over such a column
+    // froze at its last pre-upgrade value. Validity-gating restores convergence.
+    client.seed('company', [{ id: 'c1', source: '8801-25-03', mirror: null }]);
+    client.seed('company', [{ id: 'c2', source: '1234-56-78', mirror: null }]);
+
+    const first = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c1',
+    });
+    const second = await recomputeForRecord({
+      client,
+      formula: textMirror(),
+      targetRecordId: 'c2',
+    });
+
+    expect(first.error).toBeNull();
+    expect(second.error).toBeNull();
+    expect(client.writes).toEqual([
+      'company:c1:mirror="8801-25-03"',
+      'company:c2:mirror="1234-56-78"',
+    ]);
+  });
+
   it('coerces date-shaped content to its serial (documented B2 edge)', async () => {
     client.seed('company', [{ id: 'c1', source: '2026-07-04', mirror: null }]);
 
@@ -804,6 +831,40 @@ describe('TEXT target on the engine lane — deployed-mirror write parity', () =
     // 2026-07-04 as whole UTC epoch-days, rendered canonically.
     const serial = String(Date.parse('2026-07-04T00:00:00.000Z') / 86_400_000);
     expect(client.writes).toEqual([`company:c1:mirror=${JSON.stringify(serial)}`]);
+  });
+});
+
+// Accepted delta B6 (ADR 0026), the SAME-RECORD half. Nothing rejects this at
+// save time — the string-comparison rule (validation-core 1b) explicitly permits
+// TEXT and SELECT operands — so it has to be pinned where the real coercion runs.
+// A resolver built from pre-coerced values would bypass the mechanism entirely:
+// the flip happens in buildResolver's coerceToEngineValue call, not the evaluator.
+describe('TEXT target on the engine lane — same-record date-shaped comparison (B6)', () => {
+  it('compares date-shaped TEXT content against a text literal as FALSE', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', { signedOn: 'TEXT', tier: 'TEXT' });
+    client.seed('company', [
+      { id: 'c1', signedOn: '2026-01-15', tier: null },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: {
+        id: 'fb6',
+        targetObject: 'company',
+        targetField: 'tier',
+        targetFieldType: 'TEXT',
+        expression: 'IF(signedOn = "2026-01-15", "match", "other")',
+        enabled: true,
+      },
+      targetRecordId: 'c1',
+    });
+
+    // The content IS a valid date, so it resolves eagerly to its serial and the
+    // typed comparison against the text literal is a number-vs-string mismatch.
+    // v0.1.x compared the raw string here and took the "match" branch.
+    expect(outcome.error).toBeNull();
+    expect(client.writes).toEqual(['company:c1:tier="other"']);
   });
 });
 

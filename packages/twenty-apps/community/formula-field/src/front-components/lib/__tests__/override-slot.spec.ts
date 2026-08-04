@@ -104,13 +104,23 @@ describe('pinnedEngineOverrideValue', () => {
     ).toEqual({ restorable: true, value: null });
   });
 
-  it('normalizes a non-string TEXT pin to null rather than writing a number', () => {
+  it('reports a non-string TEXT pin as unrestorable rather than nulling it', () => {
+    // A legacy pin over a TEXT column that held dirty data decodes to a number.
+    // Restoring it as null would write a phantom blank over the pinned value AND
+    // leave the override active, so recompute could never repair it — the caller
+    // must fall through to its "pin the CURRENT value" branch instead.
     expect(
       pinnedEngineOverrideValue('TEXT', {
         overrideValue: null,
         overrideValueText: '42',
       }),
-    ).toEqual({ restorable: true, value: null });
+    ).toEqual({ restorable: false, value: null });
+    expect(
+      pinnedEngineOverrideValue('TEXT', {
+        overrideValue: null,
+        overrideValueText: '{"primaryLinkUrl":"https://x.dev"}',
+      }),
+    ).toEqual({ restorable: false, value: null });
   });
 
   it('reports an absent or corrupt TEXT pin as unrestorable', () => {
