@@ -1390,6 +1390,25 @@ describe('recomputeAllRecords per-definition static gate', () => {
     expect(client.writes).toEqual(['opportunity:o1:formulaScore=1']);
   });
 
+  it('recomputeForRecord threads the gate-resolved kinds into evaluation when the caller supplies none', async () => {
+    const client = new FakeClient();
+    seedGatedFixture(client);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: gatedFormula(FIXED),
+      targetRecordId: 'o1',
+      // No fieldKindsByObject supplied: the gate's own fallback resolution
+      // must reach evaluation too, or closeDate degrades to 'unknown' and
+      // reads as verbatim text ('2026-01-15' !== the DATE literal's epoch-day
+      // serial), silently producing 0 instead of the correct 1.
+    });
+
+    expect(outcome.error).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'number', value: 1 });
+    expect(client.writes).toEqual(['opportunity:o1:formulaScore=1']);
+  });
+
   it('cast runtime failures still error per record with no write', async () => {
     const client = new FakeClient();
     client.setFieldKinds('opportunity', { name: 'TEXT', formulaScore: 'NUMBER' });

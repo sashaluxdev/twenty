@@ -877,18 +877,24 @@ export const recomputeForRecord = async (
   // An unparseable expression is not gated — evaluation reports the parse error
   // where it always did.
   const compiled = args.compiled ?? safeCompileFormula(formula.expression ?? '');
+  // Resolved once and threaded into planRecomputeForRecord below: the gate and
+  // evaluation must see the same kinds, or a kinds-less caller passes a
+  // kind-aware gate and then evaluates kind-blind, where a DATE column reads
+  // as verbatim text.
+  let gateKindsByObject = args.fieldKindsByObject;
   if (compiled !== undefined) {
     // Every production caller resolves kinds already; the fallback is what keeps
     // a direct caller GATED rather than silently ungated, at one cached
     // metadata call.
-    const gateKindsByObject =
-      args.fieldKindsByObject ??
+    gateKindsByObject =
+      gateKindsByObject ??
       (await resolveKindsForFormula(client, formula, compiled));
+    const resolvedKindsByObject = gateKindsByObject;
     const gateError = strictKindGateError({
       ast: compiled.ast,
       hostObject: formula.targetObject ?? '',
       targetFieldType: formula.targetFieldType,
-      fieldKinds: (object) => gateKindsByObject.get(object),
+      fieldKinds: (object) => resolvedKindsByObject.get(object),
     });
     if (gateError !== null) {
       return {
@@ -903,7 +909,11 @@ export const recomputeForRecord = async (
     }
   }
 
-  const plan = await planRecomputeForRecord({ ...args, compiled });
+  const plan = await planRecomputeForRecord({
+    ...args,
+    compiled,
+    fieldKindsByObject: gateKindsByObject,
+  });
   if (plan.write === null) {
     return plan.outcome;
   }
