@@ -1,4 +1,7 @@
-import { usesToday } from 'src/engine/dependencies';
+import {
+  type CrossRecordDependency,
+  usesToday,
+} from 'src/engine/dependencies';
 import {
   loadAllEnabledFormulas,
   recordEvaluationHeartbeat,
@@ -96,6 +99,24 @@ const sameRecordAffected = (
   return dependencyFields.some((field) => updatedFields.includes(field));
 };
 
+// True if THIS record is one the formula cross-references, on a field the update
+// touched (Case 2 below). Shared with the affected-definitions pre-pass so the
+// two can never disagree about which definitions an event engages.
+const crossRecordAffected = (
+  crossRecordRefs: CrossRecordDependency[],
+  objectName: string,
+  recordId: string,
+  updatedFields: string[] | undefined,
+): boolean =>
+  crossRecordRefs.some(
+    (ref) =>
+      ref.object === objectName &&
+      ref.recordId === recordId &&
+      (!updatedFields ||
+        updatedFields.length === 0 ||
+        updatedFields.includes(ref.field)),
+  );
+
 export type HandleRecordUpdateArgs = {
   client: FormulaClient;
   objectName: string;
@@ -137,16 +158,62 @@ export const handleRecordUpdate = async ({
     }
   }
 
-  // One kind map for the whole event, eagerly built (spec D5: the lazy variant
-  // optimizes a path that does not exist yet). Kinds are needed only by
-  // engine-lane formulas TARGETING this object — a cross-impacted formula runs
-  // a full pass, which resolves its own. The map is object-keyed, so the union
-  // across formulas is a merge, never a leak between them.
-  const eventKindObjects = new Set<string>();
-  for (const formula of formulas) {
+  // The definitions this event can actually engage, decided BEFORE any metadata
+  // read from the already-compiled dependencies alone (no IO, no extra AST
+  // walk). An event that touches no enabled formula — the common case on a busy
+  // object — must pay neither the kind resolution nor the gate walks below.
+  // Only definitions targeting THIS object qualify: a cross-object formula has
+  // no kinds in the event map by construction, so gate-walking it here could
+  // only ever infer 'unknown' (skip); it is handled by Case 2 below, which runs
+  // a full pass that resolves and gates with the kinds it actually needs.
+  const eventAffectedFormulas = formulas.filter((formula) => {
     if (formula.targetObject !== objectName) {
-      continue;
+      return false;
     }
+    // OFFLINE and unparseable definitions never made it into the compile map,
+    // and both event loops skip them anyway.
+    const compiled = compiledByFormulaId.get(formula.id);
+    if (compiled === undefined) {
+      return false;
+    }
+    // Override detection engages a definition when a human edited its OWN value
+    // field. It runs ahead of the cycle guard, which only fences recompute.
+    if (
+      actorWorkspaceMemberId &&
+      updatedFields !== undefined &&
+      updatedFields.length > 0 &&
+      typeof formula.targetField === 'string' &&
+      updatedFields.includes(formula.targetField)
+    ) {
+      return true;
+    }
+    if (isCyclicTarget(cyclic, formula)) {
+      return false;
+    }
+    // Recompute Case 1 (an input on this record changed) or Case 2 (this record
+    // is one the definition cross-references) — both gated below.
+    return (
+      sameRecordAffected(
+        compiled.dependencies.sameRecordFields,
+        updatedFields,
+      ) ||
+      crossRecordAffected(
+        compiled.dependencies.crossRecordRefs,
+        objectName,
+        recordId,
+        updatedFields,
+      )
+    );
+  });
+
+  // One kind map for the whole event, built over the affected definitions only.
+  // Kinds are needed only by engine-lane formulas TARGETING this object — a
+  // cross-impacted formula runs a full pass, which resolves its own. The map is
+  // object-keyed, so the union across formulas is a merge, never a leak between
+  // them. An empty union resolves nothing: resolveKindsForObjects makes zero
+  // client calls for an empty set.
+  const eventKindObjects = new Set<string>();
+  for (const formula of eventAffectedFormulas) {
     const compiled = compiledByFormulaId.get(formula.id);
     if (compiled === undefined) {
       continue;
@@ -173,11 +240,10 @@ export const handleRecordUpdate = async ({
   // by both loops below. A definition whose kinds do not check has no correct
   // value for any record, so neither loop may act on it — and skipping it here
   // also removes the per-event fetch+evaluate cost it would otherwise pay.
-  // A formula targeting ANOTHER object has no kinds in this map, so it infers
-  // 'unknown' and is skipped-never-rejected here; its own recomputeAllRecords
-  // pass gates it with the kinds it actually needs.
+  // Walked over the affected definitions only: every definition either loop can
+  // act on is in that set, and an unaffected one is never consulted.
   const gateErrorByFormulaId = new Map<string, string>();
-  for (const formula of formulas) {
+  for (const formula of eventAffectedFormulas) {
     const compiled = compiledByFormulaId.get(formula.id);
     if (compiled === undefined) {
       continue;
@@ -345,7 +411,9 @@ export const handleRecordUpdate = async ({
 
     // Gate-failing: no correct value exists for any record, so recomputing
     // would write a silently-wrong one. The sweep records the error on the
-    // definition row; the event path just declines to act.
+    // definition row; the event path just declines to act. Only definitions
+    // targeting this object carry an entry — a cross-object one reaches Case 2,
+    // whose recomputeAllRecords gates it with its own resolved kinds.
     if (gateErrorByFormulaId.has(formula.id)) {
       continue;
     }
@@ -419,16 +487,14 @@ export const handleRecordUpdate = async ({
     }
 
     // Case 2: a record this formula cross-references changed on a field it reads.
-    const crossImpacted = dependencies.crossRecordRefs.some(
-      (ref) =>
-        ref.object === objectName &&
-        ref.recordId === recordId &&
-        (!updatedFields ||
-          updatedFields.length === 0 ||
-          updatedFields.includes(ref.field)),
-    );
-
-    if (crossImpacted) {
+    if (
+      crossRecordAffected(
+        dependencies.crossRecordRefs,
+        objectName,
+        recordId,
+        updatedFields,
+      )
+    ) {
       outcomes.push(...(await recomputeAllRecords(client, formula)));
     }
   }

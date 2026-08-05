@@ -1459,6 +1459,35 @@ describe('handleRecordUpdate hoisted compilation and kinds (once per event)', ()
     expect(calls).toBe(1);
   });
 
+  it('resolves nothing when the event affects no formula at all', async () => {
+    // Final-review efficiency finding: the kind resolution and the per-event
+    // gate walks used to run on EVERY event for this object, even one touching
+    // a field no definition reads and no definition targets. Both are now
+    // decided from the compiled dependencies first, so this event pays neither.
+    const client = new FakeClient();
+    seedTwoFormulas(client);
+    const real = client.fieldKinds;
+    let calls = 0;
+    client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
+      calls += 1;
+      return real(object);
+    };
+
+    const outcomes = await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      // `description` is neither an input of either formula nor a value field.
+      after: { id: 'o1', amount: 5, scoreA: null, scoreB: null },
+      updatedFields: ['description'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    expect(calls).toBe(0);
+    expect(outcomes).toHaveLength(0);
+    expect(client.writes).toHaveLength(0);
+  });
+
   it('shares one kind map between the override path and the recompute loop', async () => {
     // Both loops engage: a human edited the value field AND an input changed.
     // Before the hoist that cost 4 resolutions (one per formula per loop); now
