@@ -1,4 +1,5 @@
 import {
+  type AstNode,
   type BareReference,
   bareReferenceOf,
   compileFormula,
@@ -66,6 +67,24 @@ import { isRetryable, withRetry } from 'src/logic-functions/lib/with-retry';
 // existing `import { pluralize } from '...recompute'` working unchanged.
 export { pluralize } from 'src/logic-functions/lib/plural';
 
+// A parsed expression plus its dependency set. A formula's program is a property
+// of the DEFINITION, not of a record, so callers that touch many records compile
+// it once and thread this everywhere the expression would otherwise be reparsed.
+export type CompiledFormula = { ast: AstNode; dependencies: FormulaDependencies };
+
+// Compiles without throwing. `undefined` means the expression does not parse —
+// every consumer below then falls back to its own compile, which reproduces the
+// parse error where that consumer already reports errors.
+export const safeCompileFormula = (
+  expression: string,
+): CompiledFormula | undefined => {
+  try {
+    return compileFormula(expression);
+  } catch {
+    return undefined;
+  }
+};
+
 const crossKey = (object: string, recordId: string): string =>
   `${object}:${recordId}`;
 
@@ -84,7 +103,13 @@ const crossCacheKey = (
 // Safe usesToday() over a possibly-invalid expression, for the heartbeat
 // carve-out (ADR 0015). A formula that fails to parse has no TODAY()
 // dependency to track — evaluation surfaces the parse error elsewhere.
-const expressionUsesTodayOf = (formula: FormulaDefinitionRecord): boolean => {
+const expressionUsesTodayOf = (
+  formula: FormulaDefinitionRecord,
+  compiled?: CompiledFormula,
+): boolean => {
+  if (compiled !== undefined) {
+    return usesToday(compiled.ast);
+  }
   try {
     return usesToday(compileFormula(formula.expression ?? '').ast);
   } catch {
@@ -299,9 +324,15 @@ const valuesEqual = (a: EngineValue, b: EngineValue): boolean => a === b;
 // engine-family target (isMirrorDefinition ANDs the same predicate), which keeps
 // the parse off the per-record hot path for NUMBER/CURRENCY/DATE/DATE_TIME and —
 // since the lane switch — TEXT (finding M1).
-const isMirrorFormula = (formula: FormulaDefinitionRecord): boolean => {
+const isMirrorFormula = (
+  formula: FormulaDefinitionRecord,
+  compiled?: CompiledFormula,
+): boolean => {
   if (!isMirrorTargetKind(formula.targetFieldType ?? '')) {
     return false;
+  }
+  if (compiled !== undefined) {
+    return isMirrorDefinition(compiled.ast, formula.targetFieldType);
   }
   try {
     return isMirrorDefinition(
@@ -342,38 +373,46 @@ export type RecomputeArgs = {
   // 'unknown' — degradation, not an error, but a DATE column then reads as
   // text. Build it with resolveKindsForFormula.
   fieldKindsByObject?: Map<string, Map<string, string>>;
+  // The formula's program, compiled ONCE by the caller. Without it every entry
+  // point below reparses the expression per record. Absent -> each compiles its
+  // own, the backstop that keeps direct callers working unchanged.
+  compiled?: CompiledFormula;
 };
 
-// The kind maps a formula needs to resolve its references: the host object plus
-// every object it cross-references. Each `resolveFieldKinds` call goes through
-// the client's own per-workspace cache, so this is cheap to call per formula and
-// Task 5 hoists it to once per pass/event.
-export const resolveKindsForFormula = async (
-  client: FormulaClient,
+// Every object a formula reads: its host object plus each cross-referenced one.
+export const kindObjectsForFormula = (
   formula: FormulaDefinitionRecord,
-  compiled?: { dependencies: FormulaDependencies },
-): Promise<Map<string, Map<string, string>>> => {
+  compiled?: CompiledFormula,
+): Set<string> => {
   const objects = new Set<string>();
   const hostObject = formula.targetObject ?? '';
   if (hostObject !== '') {
     objects.add(hostObject);
   }
-  let dependencies = compiled?.dependencies;
-  if (dependencies === undefined) {
-    try {
-      dependencies = compileFormula(formula.expression ?? '').dependencies;
-    } catch {
-      // Unparseable: the host object's kinds are all there is to resolve, and
-      // evaluation surfaces the parse error anyway.
-      dependencies = undefined;
-    }
-  }
+  // Unparseable with no program supplied: the host object's kinds are all there
+  // is to resolve, and evaluation surfaces the parse error anyway.
+  const dependencies =
+    compiled?.dependencies ??
+    safeCompileFormula(formula.expression ?? '')?.dependencies;
   for (const ref of dependencies?.crossRecordRefs ?? []) {
     objects.add(ref.object);
   }
+  return objects;
+};
 
+// Field-type maps for a set of objects, keyed by object name. Object-keyed and
+// therefore shareable: one map can serve several formulas at once (the event
+// path builds the union across every formula an event matched) without one
+// formula's kinds ever leaking into another's resolution.
+export const resolveKindsForObjects = async (
+  client: FormulaClient,
+  objects: Iterable<string>,
+): Promise<Map<string, Map<string, string>>> => {
   const kindsByObject = new Map<string, Map<string, string>>();
   for (const object of objects) {
+    if (kindsByObject.has(object)) {
+      continue;
+    }
     try {
       kindsByObject.set(object, await resolveFieldKinds(client, object));
     } catch {
@@ -386,6 +425,17 @@ export const resolveKindsForFormula = async (
   }
   return kindsByObject;
 };
+
+// The kind maps a formula needs to resolve its references. Each
+// `resolveFieldKinds` call goes through the client's own per-workspace cache,
+// but the call itself is rent: the pass path and the event path each resolve
+// this ONCE and thread the result.
+export const resolveKindsForFormula = async (
+  client: FormulaClient,
+  formula: FormulaDefinitionRecord,
+  compiled?: CompiledFormula,
+): Promise<Map<string, Map<string, string>>> =>
+  resolveKindsForObjects(client, kindObjectsForFormula(formula, compiled));
 
 // Evaluates a formula for a record WITHOUT writing. Returns the computed value
 // (and the record it read, so callers can compare against the stored value).
@@ -405,15 +455,16 @@ export const computeFormulaValueForRecord = async ({
   prefetchedRecord,
   crossRecordCache,
   fieldKindsByObject,
+  compiled: hoistedProgram,
 }: Omit<RecomputeArgs, 'overriddenRecordIds'>): Promise<ComputeResult> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
   const expression = formula.expression ?? '';
 
   let dependencies: FormulaDependencies;
-  let compiled: ReturnType<typeof compileFormula>;
+  let compiled: CompiledFormula;
   try {
-    compiled = compileFormula(expression);
+    compiled = hoistedProgram ?? compileFormula(expression);
     dependencies = compiled.dependencies;
   } catch (error) {
     return {
@@ -528,6 +579,7 @@ export const computeMirrorValueForRecord = async ({
   targetRecordId,
   prefetchedRecord,
   crossRecordCache,
+  compiled,
 }: Omit<RecomputeArgs, 'overriddenRecordIds'>): Promise<ComputeMirrorResult> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -535,7 +587,9 @@ export const computeMirrorValueForRecord = async ({
 
   let bare: BareReference | null;
   try {
-    bare = bareReferenceOf(compileFormula(formula.expression ?? '').ast);
+    bare = bareReferenceOf(
+      (compiled ?? compileFormula(formula.expression ?? '')).ast,
+    );
   } catch (error) {
     return {
       rawValue: null,
@@ -675,6 +729,7 @@ export const planRecomputeForRecord = async ({
   overriddenRecordIds,
   crossRecordCache,
   fieldKindsByObject,
+  compiled,
 }: RecomputeArgs): Promise<RecomputePlan> => {
   const targetField = formula.targetField ?? '';
 
@@ -682,7 +737,7 @@ export const planRecomputeForRecord = async ({
   // typed RAW passthrough — write the source value verbatim, bypassing
   // normalizeComputedValue / normalizeStoredValue / buildTargetWriteData
   // entirely. Engine formulas fall through to the unchanged path below.
-  const isMirror = isMirrorFormula(formula);
+  const isMirror = isMirrorFormula(formula, compiled);
 
   const base: RecomputeOutcome = {
     formulaId: formula.id,
@@ -704,6 +759,7 @@ export const planRecomputeForRecord = async ({
       targetRecordId,
       prefetchedRecord,
       crossRecordCache,
+      compiled,
     });
     if (mirror.error !== null || mirror.sameRecord === null) {
       return {
@@ -743,6 +799,7 @@ export const planRecomputeForRecord = async ({
     prefetchedRecord,
     crossRecordCache,
     fieldKindsByObject,
+    compiled,
   });
   if (computed.error !== null || computed.sameRecord === null) {
     return {
@@ -868,13 +925,23 @@ export const recomputeAllRecords = async (
   const targetField = formula.targetField ?? '';
   const pluralName = pluralize(targetObject);
   const outcomes: RecomputeOutcome[] = [];
+  // The program is a property of the DEFINITION, not of a record: parsed once
+  // for the whole pass and threaded into the lane check, the scan selection,
+  // every per-record plan and the heartbeat's TODAY() check — one parse per
+  // pass instead of one per record. `undefined` when the expression does not
+  // parse; each consumer then reparses and reports the error where it always did.
+  const compiled = safeCompileFormula(formula.expression ?? '');
+  const isMirror = isMirrorFormula(formula, compiled);
   // Kinds are a property of the SCHEMA, not of a record: resolved once for the
   // whole pass and threaded into every plan, so the resolver never performs a
-  // per-record metadata lookup. (Task 5 hoists the compile alongside it.)
-  const fieldKindsByObject = await resolveKindsForFormula(client, formula);
+  // per-record metadata lookup. Skipped entirely on the mirror lane, which
+  // resolves its source field's kind itself and never reads this map.
+  const fieldKindsByObject = isMirror
+    ? undefined
+    : await resolveKindsForFormula(client, formula, compiled);
   // The lane is a property of the definition, not of a record, so it is resolved
   // once per pass and reused for every value-less outcome below.
-  const emptyValue = emptyComputedValue(formula, isMirrorFormula(formula));
+  const emptyValue = emptyComputedValue(formula, isMirror);
 
   // Load the overridden record ids once so pinned records are skipped (#2).
   const overriddenRecordIds = await loadOverriddenRecordIds(
@@ -892,7 +959,7 @@ export const recomputeAllRecords = async (
   // prefetch check skips its per-record read. Null -> id-only scan.
   let scanSelection: ScanSelection | null = null;
   try {
-    scanSelection = await buildScanSelection(client, formula);
+    scanSelection = await buildScanSelection(client, formula, compiled);
   } catch {
     // Building the selection needs a metadata read. Before the prefetch that
     // read happened per record and a failure became one error outcome; hoisted
@@ -998,6 +1065,7 @@ export const recomputeAllRecords = async (
           overriddenRecordIds,
           crossRecordCache,
           fieldKindsByObject,
+          compiled,
         });
         pageOutcomes.push(plan.outcome);
         if (plan.write !== null) {
@@ -1080,7 +1148,7 @@ export const recomputeAllRecords = async (
       client,
       formula,
       { value: sampleValue, error: firstError },
-      expressionUsesTodayOf(formula),
+      expressionUsesTodayOf(formula, compiled),
     );
   }
 

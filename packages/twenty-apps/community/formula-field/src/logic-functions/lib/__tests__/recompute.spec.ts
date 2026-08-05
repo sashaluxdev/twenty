@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { compileFormula } from 'src/engine';
+import { parse } from 'src/engine/parser';
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
 import {
   planRecomputeForRecord,
@@ -8,6 +10,14 @@ import {
 } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+
+// Parse-count seam: compileFormula binds `parse` from src/engine/parser
+// directly, so spying on the src/engine barrel records nothing. A pass-through
+// spy on the parser module is the only place the real call count is observable.
+vi.mock('src/engine/parser', async (importActual) => {
+  const actual = await importActual<typeof import('src/engine/parser')>();
+  return { ...actual, parse: vi.fn(actual.parse) };
+});
 
 const formula = (
   overrides: Partial<FormulaDefinitionRecord> = {},
@@ -1101,5 +1111,131 @@ describe('recomputeAllRecords shouldContinue (ADR 0023)', () => {
     // rather than converging every record.
     expect(client.writes).toHaveLength(1);
     expect(outcomes).toHaveLength(1);
+  });
+});
+
+// Task 5: parse and metadata work are properties of the DEFINITION, so they must
+// be paid once per pass. These are behavioral call-count pins, not timings.
+describe('recomputeAllRecords hoisted compilation (once per pass)', () => {
+  const seedEngineLane = (client: FakeClient, count: number): void => {
+    client.setFieldKinds('opportunity', {
+      formulaInputA: 'NUMBER',
+      formulaInputB: 'NUMBER',
+      formulaScore: 'NUMBER',
+    });
+    client.seed(
+      'opportunity',
+      Array.from({ length: count }, (_unused, index) => ({
+        id: `o${String(index + 1).padStart(3, '0')}`,
+        formulaInputA: index + 1,
+        formulaInputB: 1,
+        formulaScore: null,
+      })),
+    );
+  };
+
+  const fieldKindsCallCount = (client: FakeClient): { count: () => number } => {
+    const real = client.fieldKinds;
+    let calls = 0;
+    client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
+      calls += 1;
+      return real(object);
+    };
+    return { count: () => calls };
+  };
+
+  beforeEach(() => {
+    vi.mocked(parse).mockClear();
+  });
+
+  it('compiles once per pass, not per record', async () => {
+    const client = new FakeClient();
+    seedEngineLane(client, 3);
+
+    await recomputeAllRecords(
+      client,
+      formula({ targetFieldType: 'NUMBER' }),
+    );
+
+    expect(vi.mocked(parse)).toHaveBeenCalledTimes(1);
+  });
+
+  it('compiles once per pass on the mirror lane too', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.seed('company', [
+      { id: 'c1', source: 'ACTIVE', mirror: null },
+      { id: 'c2', source: 'CHURNED', mirror: null },
+      { id: 'c3', source: 'ACTIVE', mirror: null },
+    ]);
+
+    await recomputeAllRecords(client, {
+      id: 'fm',
+      targetObject: 'company',
+      targetField: 'mirror',
+      targetFieldType: 'SELECT',
+      expression: 'source',
+      enabled: true,
+    });
+
+    expect(vi.mocked(parse)).toHaveBeenCalledTimes(1);
+    expect(client.get('company', 'c2')!.mirror).toBe('CHURNED');
+  });
+
+  it('resolves field kinds a constant number of times regardless of record count', async () => {
+    const smallClient = new FakeClient();
+    seedEngineLane(smallClient, 3);
+    const smallCalls = fieldKindsCallCount(smallClient);
+    await recomputeAllRecords(smallClient, formula({ targetFieldType: 'NUMBER' }));
+
+    const largeClient = new FakeClient();
+    seedEngineLane(largeClient, 12);
+    const largeCalls = fieldKindsCallCount(largeClient);
+    await recomputeAllRecords(largeClient, formula({ targetFieldType: 'NUMBER' }));
+
+    expect(largeCalls.count()).toBe(smallCalls.count());
+    // Host object only: one resolution for the resolver's kind map, one for the
+    // scan selection (which keeps its OWN failure semantics — see scan-prefetch).
+    expect(smallCalls.count()).toBe(2);
+  });
+
+  it('resolves no kind map at all on the mirror lane', async () => {
+    // The mirror lane never consults fieldKindsByObject: computeMirrorValueForRecord
+    // resolves the source field's kind itself. Resolving the resolver's map here
+    // would be rent paid for nothing.
+    const client = new FakeClient();
+    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: null }]);
+    const calls = fieldKindsCallCount(client);
+
+    await recomputeAllRecords(client, {
+      id: 'fm',
+      targetObject: 'company',
+      targetField: 'mirror',
+      targetFieldType: 'SELECT',
+      expression: 'source',
+      enabled: true,
+    });
+
+    // Scan selection (source kind) + the one per-record mirror source resolution.
+    expect(calls.count()).toBe(2);
+  });
+
+  it('planRecomputeForRecord uses the provided compiled program', async () => {
+    // Sentinel: the definition says "2", the precompiled program says "1". A
+    // recompile inside planRecomputeForRecord would yield 2.
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', { formulaScore: 'NUMBER' });
+    client.seed('opportunity', [{ id: 'o1', formulaScore: null }]);
+
+    const plan = await planRecomputeForRecord({
+      client,
+      formula: formula({ expression: '2', targetFieldType: 'NUMBER' }),
+      targetRecordId: 'o1',
+      compiled: compileFormula('1'),
+    });
+
+    expect(plan.outcome.error).toBeNull();
+    expect(plan.outcome.value).toEqual({ kind: 'number', value: 1 });
   });
 });

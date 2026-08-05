@@ -593,18 +593,30 @@ describe('recomputeAllRecords per-record fault isolation', () => {
       },
     ]);
 
-    // The mirror path resolves the source field kind exactly once per record,
-    // after the TWO resolutions recomputeAllRecords spends up front: the
-    // once-per-pass kind map for the resolver, then the scan's page selection.
-    // So resolution 1 and 2 are setup, 3 is c1, 4 is c2 — throwing on the 4th
-    // poisons the 2nd record mid-sweep, standing in for a RangeError escaping
-    // recomputeForRecord.
+    // The mirror path resolves the source field kind exactly once PER RECORD.
+    // Derive which resolution that is instead of pinning a literal index:
+    // every up-front resolution recomputeAllRecords spends (the scan selection,
+    // and whatever a later hoist adds) happens before the first page query, so
+    // counting only resolutions after that boundary makes #1 = c1 and #2 = c2.
+    // Throwing on #2 poisons the 2nd record mid-sweep, standing in for a
+    // RangeError escaping recomputeForRecord.
+    const realQuery = client.query.bind(client);
+    let scanStarted = false;
+    client.query = async (selection: Record<string, unknown>) => {
+      const result = await realQuery(selection);
+      if (selection.companies !== undefined) {
+        scanStarted = true;
+      }
+      return result;
+    };
     const realFieldKinds = client.fieldKinds;
-    let resolveCount = 0;
+    let perRecordResolveCount = 0;
     client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
-      resolveCount += 1;
-      if (resolveCount === 4) {
-        throw new RangeError('Maximum call stack size exceeded');
+      if (scanStarted) {
+        perRecordResolveCount += 1;
+        if (perRecordResolveCount === 2) {
+          throw new RangeError('Maximum call stack size exceeded');
+        }
       }
       return realFieldKinds(object);
     };

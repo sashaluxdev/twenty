@@ -4,6 +4,7 @@ import {
   selectionEntryForMirrorKind,
 } from 'src/logic-functions/lib/mirror-kinds';
 import {
+  type CompiledFormula,
   dependencySelectionOverrides,
   fieldSelection,
   resolveFieldKinds,
@@ -26,9 +27,13 @@ export type ScanSelection = {
 // definition is not fully configured. Guessing a selection shape here would
 // hand the mirror comparison a wrongly-projected value, which reads as a real
 // difference and writes.
+// `hoistedProgram` is the pass's single compile: a scan already parsed the
+// expression to decide its lane, so parsing it again here would double the
+// per-pass parse count. Absent -> compile locally (direct callers unchanged).
 export const buildScanSelection = async (
   client: FormulaClient,
   formula: FormulaDefinitionRecord,
+  hoistedProgram?: CompiledFormula,
 ): Promise<ScanSelection | null> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -37,11 +42,15 @@ export const buildScanSelection = async (
     return null;
   }
 
-  let compiled: ReturnType<typeof compileFormula>;
-  try {
-    compiled = compileFormula(formula.expression ?? '');
-  } catch {
-    return null;
+  let compiled: CompiledFormula;
+  if (hoistedProgram !== undefined) {
+    compiled = hoistedProgram;
+  } else {
+    try {
+      compiled = compileFormula(formula.expression ?? '');
+    } catch {
+      return null;
+    }
   }
 
   if (isMirrorDefinition(compiled.ast, targetKind)) {

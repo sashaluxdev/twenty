@@ -1,15 +1,17 @@
-import { compileFormula } from 'src/engine';
 import { usesToday } from 'src/engine/dependencies';
 import {
   loadAllEnabledFormulas,
   recordEvaluationHeartbeat,
 } from 'src/logic-functions/lib/formula-repository';
 import {
+  type CompiledFormula,
   computeFormulaValueForRecord,
   computeMirrorValueForRecord,
+  kindObjectsForFormula,
   recomputeAllRecords,
   recomputeForRecord,
-  resolveKindsForFormula,
+  resolveKindsForObjects,
+  safeCompileFormula,
 } from 'src/logic-functions/lib/recompute';
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
 import {
@@ -81,16 +83,6 @@ const pinnedOverrideValue = (
   return typeof decoded === 'string' ? decoded : null;
 };
 
-// Parses once and returns both the AST and its dependency set — the AST feeds
-// usesToday() for the heartbeat carve-out (ADR 0015) without a second parse.
-const safeCompile = (expression: string) => {
-  try {
-    return compileFormula(expression);
-  } catch {
-    return null;
-  }
-};
-
 // True if the update touched at least one field the formula reads on the same
 // record. When updatedFields is unknown/empty we recompute to stay safe.
 const sameRecordAffected = (
@@ -129,6 +121,53 @@ export const handleRecordUpdate = async ({
   const cyclic = findCyclicTargets(formulas);
   const outcomes: RecomputeOutcome[] = [];
 
+  // One parse per DEFINITION for the whole event. Both loops below (override
+  // detection and recompute) read the same program, and recomputeForRecord no
+  // longer parses again inside. OFFLINE definitions are skipped by both loops,
+  // so compiling them would be rent for nothing.
+  const compiledByFormulaId = new Map<string, CompiledFormula>();
+  for (const formula of formulas) {
+    if (formula.status === 'OFFLINE') {
+      continue;
+    }
+    const compiled = safeCompileFormula(formula.expression ?? '');
+    if (compiled !== undefined) {
+      compiledByFormulaId.set(formula.id, compiled);
+    }
+  }
+
+  // One kind map for the whole event, eagerly built (spec D5: the lazy variant
+  // optimizes a path that does not exist yet). Kinds are needed only by
+  // engine-lane formulas TARGETING this object — a cross-impacted formula runs
+  // a full pass, which resolves its own. The map is object-keyed, so the union
+  // across formulas is a merge, never a leak between them.
+  const eventKindObjects = new Set<string>();
+  for (const formula of formulas) {
+    if (formula.targetObject !== objectName) {
+      continue;
+    }
+    const compiled = compiledByFormulaId.get(formula.id);
+    if (compiled === undefined) {
+      continue;
+    }
+    // The kind is checked first so the mirror test costs no AST walk for every
+    // engine-family target (finding M1). A mirror resolves its source field's
+    // kind inside computeMirrorValueForRecord and never reads this map.
+    if (
+      isMirrorTargetKind(formula.targetFieldType ?? '') &&
+      isMirrorDefinition(compiled.ast, formula.targetFieldType)
+    ) {
+      continue;
+    }
+    for (const object of kindObjectsForFormula(formula, compiled)) {
+      eventKindObjects.add(object);
+    }
+  }
+  const eventFieldKindsByObject = await resolveKindsForObjects(
+    client,
+    eventKindObjects,
+  );
+
   // Manual override detection (#2). A value field changed on this record. We
   // must tell a genuine human edit apart from the app's OWN recompute write —
   // and the actor alone is not enough, because a recompute triggered by a user's
@@ -146,6 +185,7 @@ export const handleRecordUpdate = async ({
       // OFFLINE: inputs are unfetchable, so "what would the formula say?" has
       // no answer — never turn edits into overrides while broken.
       if (formula.status === 'OFFLINE') continue;
+      const compiled = compiledByFormulaId.get(formula.id);
 
       // Mirror fork: a mirror target stores non-numeric raw values, so the
       // funnel below cannot decide it. Same compare-value-not-actor rule as the
@@ -155,17 +195,10 @@ export const handleRecordUpdate = async ({
       // strings strictly and overrideSlotForKind pins the JSON text column.
       // The kind is checked first so the parse is skipped for every
       // engine-family target (finding M1).
-      let formulaIsMirror = false;
-      if (isMirrorTargetKind(formula.targetFieldType ?? '')) {
-        try {
-          formulaIsMirror = isMirrorDefinition(
-            compileFormula(formula.expression ?? '').ast,
-            formula.targetFieldType,
-          );
-        } catch {
-          formulaIsMirror = false;
-        }
-      }
+      const formulaIsMirror =
+        compiled !== undefined &&
+        isMirrorTargetKind(formula.targetFieldType ?? '') &&
+        isMirrorDefinition(compiled.ast, formula.targetFieldType);
 
       if (formulaIsMirror) {
         // The event value written on this field (its raw form; NOT
@@ -179,6 +212,7 @@ export const handleRecordUpdate = async ({
           client,
           formula,
           targetRecordId: recordId,
+          compiled,
         });
         // Can't compute (record vanished / load error) -> never risk a false pin.
         if (mirror.error !== null || mirror.sameRecord === null) continue;
@@ -222,9 +256,10 @@ export const handleRecordUpdate = async ({
         // Kind-directed resolution: without these a DATE input resolves as text
         // and `closeDate + 30` becomes a NON_NUMERIC_VALUE error, which would
         // read as "cannot compute" and silently suppress every override
-        // decision on date formulas. Per formula for now; Task 5 hoists it to
-        // once per event.
-        fieldKindsByObject: await resolveKindsForFormula(client, formula),
+        // decision on date formulas. Shared with the recompute loop below —
+        // resolved once for the whole event.
+        fieldKindsByObject: eventFieldKindsByObject,
+        compiled,
       });
       // Can't compute (record vanished / load error) -> never risk a false pin.
       if (fresh.error !== null || fresh.sameRecord === null) continue;
@@ -279,8 +314,8 @@ export const handleRecordUpdate = async ({
       continue;
     }
 
-    const compiled = safeCompile(formula.expression ?? '');
-    if (!compiled) {
+    const compiled = compiledByFormulaId.get(formula.id);
+    if (compiled === undefined) {
       continue;
     }
     const dependencies = compiled.dependencies;
@@ -332,13 +367,10 @@ export const handleRecordUpdate = async ({
         targetRecordId: recordId,
         prefetchedRecord: isMirror ? undefined : after ?? undefined,
         // The event path prefetches, so nothing else on it would resolve kinds:
-        // without them a DATE input on this record reads as text. Reuses the
-        // dependency set already compiled above; Task 5 hoists it per event.
-        fieldKindsByObject: await resolveKindsForFormula(
-          client,
-          formula,
-          compiled,
-        ),
+        // without them a DATE input on this record reads as text. Object-keyed
+        // and resolved once for the whole event, above.
+        fieldKindsByObject: eventFieldKindsByObject,
+        compiled,
       });
       outcomes.push(outcome);
       await recordEvaluationHeartbeat(

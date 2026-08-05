@@ -1,8 +1,16 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { parse } from 'src/engine/parser';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+
+// See recompute.spec.ts: compileFormula binds `parse` from the parser module, so
+// the parser module is the only seam where the real parse count is observable.
+vi.mock('src/engine/parser', async (importActual) => {
+  const actual = await importActual<typeof import('src/engine/parser')>();
+  return { ...actual, parse: vi.fn(actual.parse) };
+});
 
 const FORMULA: FormulaDefinitionRecord = {
   id: 'formula-1',
@@ -209,5 +217,17 @@ describe('recomputeAllRecords page prefetch', () => {
       (selection) => selection.updateOpportunities !== undefined,
     );
     expect(batchWrites).toHaveLength(1);
+  });
+
+  it('parses the expression once for the whole multi-page scan', async () => {
+    // The scan selection, the lane check, every per-record compute and the
+    // heartbeat's TODAY() check all read the SAME program — a 3-page scan must
+    // cost exactly the one compile the pass opens with.
+    seedOpportunities(client, 5);
+    vi.mocked(parse).mockClear();
+
+    await recomputeAllRecords(client, FORMULA, { pageSize: 2 });
+
+    expect(vi.mocked(parse)).toHaveBeenCalledTimes(1);
   });
 });

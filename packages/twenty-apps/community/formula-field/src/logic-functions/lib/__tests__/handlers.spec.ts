@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { parse } from 'src/engine/parser';
 import { handleFormulaChange } from 'src/logic-functions/lib/handle-formula-change';
 import { handleRecordUpdate } from 'src/logic-functions/lib/handle-record-update';
 import { validateFormula } from 'src/logic-functions/lib/save-validation';
@@ -17,6 +18,13 @@ import {
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+
+// See recompute.spec.ts: compileFormula binds `parse` from the parser module, so
+// the parser module is the only seam where the real parse count is observable.
+vi.mock('src/engine/parser', async (importActual) => {
+  const actual = await importActual<typeof import('src/engine/parser')>();
+  return { ...actual, parse: vi.fn(actual.parse) };
+});
 
 describe('handleFormulaChange (save-time validation)', () => {
   let client: FakeClient;
@@ -1363,5 +1371,120 @@ describe('recordEvaluationHeartbeat — text-kind outcome', () => {
     );
 
     expect(client.mutations).toBe(before);
+  });
+});
+
+// Task 5: an event pays for the SCHEMA once, not once per matched formula. The
+// compile stays per definition (each has its own program); the kind map is
+// object-keyed, so one union map serves every formula the event touches.
+describe('handleRecordUpdate hoisted compilation and kinds (once per event)', () => {
+  const seedTwoFormulas = (client: FakeClient): void => {
+    client.seed('formulaDefinition', [
+      {
+        id: 'fa',
+        targetObject: 'opportunity',
+        targetField: 'scoreA',
+        targetFieldType: 'NUMBER',
+        expression: 'amount + 1',
+        enabled: true,
+      },
+      {
+        id: 'fb',
+        targetObject: 'opportunity',
+        targetField: 'scoreB',
+        targetFieldType: 'NUMBER',
+        expression: 'amount * 10',
+        enabled: true,
+      },
+    ]);
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      scoreA: 'NUMBER',
+      scoreB: 'NUMBER',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', amount: 5, scoreA: null, scoreB: null },
+    ]);
+  };
+
+  const amountEvent = (client: FakeClient) =>
+    handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', amount: 5, scoreA: null, scoreB: null },
+      updatedFields: ['amount'],
+    });
+
+  it('keeps two engine-lane formulas isolated when one event matches both', async () => {
+    // A scoping error in the hoist (one `compiled` leaking across the formula
+    // loop) writes formula A's result into formula B's field and surfaces NO
+    // error at all — this pin is the only thing that catches it.
+    const client = new FakeClient();
+    seedTwoFormulas(client);
+
+    await amountEvent(client);
+
+    expect(client.get('opportunity', 'o1')!.scoreA).toBe(6);
+    expect(client.get('opportunity', 'o1')!.scoreB).toBe(50);
+  });
+
+  it('compiles each definition exactly once for the recompute path', async () => {
+    const client = new FakeClient();
+    seedTwoFormulas(client);
+    vi.mocked(parse).mockClear();
+
+    await amountEvent(client);
+
+    // 4 = 2 definitions x (1 for the runtime cycle guard, which builds its own
+    // dependency graph and is not part of this hoist, + 1 for the recompute
+    // path). Before the hoist the recompute path alone paid 2 per definition
+    // (safeCompile, then a second compile inside computeFormulaValueForRecord).
+    expect(vi.mocked(parse)).toHaveBeenCalledTimes(4);
+  });
+
+  it('resolves the field-kind map once per event, not once per formula', async () => {
+    const client = new FakeClient();
+    seedTwoFormulas(client);
+    const real = client.fieldKinds;
+    let calls = 0;
+    client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
+      calls += 1;
+      return real(object);
+    };
+
+    await amountEvent(client);
+
+    // One object (opportunity) across both formulas -> one resolution.
+    expect(calls).toBe(1);
+  });
+
+  it('shares one kind map between the override path and the recompute loop', async () => {
+    // Both loops engage: a human edited the value field AND an input changed.
+    // Before the hoist that cost 4 resolutions (one per formula per loop); now
+    // the union map is resolved once and threaded into both.
+    const client = new FakeClient();
+    seedTwoFormulas(client);
+    const real = client.fieldKinds;
+    let calls = 0;
+    client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
+      calls += 1;
+      return real(object);
+    };
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', amount: 5, scoreA: 3, scoreB: null },
+      updatedFields: ['amount', 'scoreA'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    // 2 = the event's union map + the ONE unprefetched record read the override
+    // path performs, which keeps resolving its own kinds on purpose: that call
+    // THROWING is what turns a metadata failure into a per-record error instead
+    // of a silently-scalar selection on a composite field.
+    expect(calls).toBe(2);
   });
 });
