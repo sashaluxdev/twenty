@@ -26,7 +26,8 @@ across the whole language, not just comparisons.
 
 ### D1 — Kind lattice
 
-Five kinds, assigned statically to every AST node:
+Seven kinds, assigned statically to every AST node — five *lattice* kinds that participate in
+operations, plus two non-lattice kinds added by decision 12:
 
 | Kind | Sources |
 |---|---|
@@ -35,9 +36,17 @@ Five kinds, assigned statically to every AST node:
 | datetime | DATE_TIME fields |
 | text | TEXT and SELECT fields, string literals, `&` results, TEXT() |
 | boolean | BOOLEAN fields, comparison results, AND/OR/NOT, ISBLANK |
+| opaque | KNOWN field types outside the lattice (LINKS, MULTI_SELECT, ADDRESS, RATING, ...) — mismatches every operation, preserving the 1b/1d rejections |
+| unknown | kind not resolvable (metadata absent) — every constraint skipped, never rejected |
 
 date and datetime are distinct kinds; comparing them to each other is a mismatch. CURRENCY keeps
-its current numeric resolution (no semantic change; the implementation plan pins the exact unit).
+its current numeric resolution (no semantic change; the implementation plan pins the exact unit —
+a bare `price` reference is number in micros, and dotted subpaths are ungated).
+
+`boolean` is an unreachable *output* kind: no engine-family target field holds boolean (a BOOLEAN
+target is the mirror lane, which the gate never touches), so the output gate can infer boolean but
+never expect it — a boolean-inferring expression onto any engine-family target is always a
+mismatch.
 
 ### D2 — One rule: kinds must match the operation
 
@@ -68,7 +77,12 @@ its current numeric resolution (no semantic change; the implementation plan pins
 
 - `NUMBER(text)` — parses numeric text to a number; non-numeric content is a per-record eval error.
   Implementation reuses the evaluator's existing `toNumber` unchanged. Cast error messages must be
-  length-bounded before landing in `lastError` (no unbounded record content in messages).
+  length-bounded before landing in `lastError` (no unbounded record content in messages). Scope of
+  that bound: it covers the **evaluator's** arithmetic and `NUMBER()` paths, which funnel through
+  `toNumber`. The resolver-side `coerceToNumber` builds its own unbounded
+  `Field value is not numeric (${JSON.stringify(raw)})` message (`coercion.ts:109`) and reaches
+  `lastError` identically — either bound it the same way or state the claim as evaluator-scoped;
+  the implementation plan (Task 1) picks one.
 - `TEXT(value)` — canonical rendering: numbers as plain decimal, dates as `YYYY-MM-DD`, datetimes
   as ISO 8601, booleans as `true`/`false`. No formatting arguments in this arc. Because the runtime
   domain is `number | string | null`, the evaluator cannot tell a date serial from a number at
@@ -89,7 +103,10 @@ The **resolver** stops inferring kind from value shape — `coerceToEngineValue`
 date-shape regex pair disappears from the per-record hot path, replaced by one kind lookup per
 reference.
 
-Scope guard (efficiency review F1): shape detection is NOT removed from the read/write boundary.
+Scope guard (efficiency-review **F1-scope-guard** — not to be confused with the unrelated
+**F1-empty-string** bug from `verification-reports/T6-verdict.md`, which is a separate arc queued
+after this one; the two share a label only by coincidence of numbering): shape detection is NOT
+removed from the read/write boundary.
 `normalizeStoredValue` already receives the target kind and must parse stored DATE/DATE_TIME
 scalars by calling `date-serial` directly (kind-directed, no pattern branch) — removing that path
 entirely would break `valuesEqual` convergence and put every DATE-target formula into an infinite
@@ -181,6 +198,12 @@ is wrong. One semantics, no second engine.
 ## Not done (named for future arcs)
 
 - `DATE(textExpr)` as a general text→date cast.
+- **datetime↔date bridging.** S8 rejects `syncedAt > TODAY()` and every other date/datetime
+  comparison, and unlike S1/S3/S5 — each of which ships a sanctioned rewrite (`DATE(...)`,
+  `NUMBER(...)`, `TEXT(...)`) — this arc ships none. There is no `DATEVALUE(datetime)` /
+  `DATETIME(date)` bridge, so a user with a legitimate "was this synced after today started?"
+  formula has no expressible form until a future arc adds one. Accepted knowingly: the alternative
+  (implicit widening) is exactly the silent-flip class S1 exists to kill.
 - Formatting arguments to TEXT() (Excel-style format strings).
 - Any truthiness escape hatch or lint-level "warn instead of reject" mode.
 - Migration tooling for legacy definitions (the definition-level gate error + editor explanation
@@ -213,7 +236,8 @@ is wrong. One semantics, no second engine.
 
 v0.3.0. Zero schema changes. After this ships and live-verifies, the held cloud deploy proceeds
 (deploying v0.3.0 semantics directly — the v0.2.0 line never deploys alone, per user ruling).
-Then: F1 empty-string investigation, then the SELECT output arc.
+Then: the F1-empty-string investigation (the T6-verdict bug, distinct from D4's
+F1-scope-guard above), then the SELECT output arc.
 
 ## Decision log (brainstorm, 2026-08-05)
 
