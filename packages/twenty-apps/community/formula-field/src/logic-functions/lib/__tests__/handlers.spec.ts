@@ -1590,6 +1590,43 @@ describe('handleRecordUpdate per-definition static gate', () => {
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(7);
   });
 
+  it('event path renders TEXT(dateField) as a date string, not the epoch-day serial', async () => {
+    // Companion to the recompute-path pins: the event path resolves its own
+    // kinds and runs its own gate walk, which is what stamps `renderAs`. If
+    // that stamp is lost the evaluator silently falls back to 'value' and
+    // writes the serial.
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      closeDate: 'DATE',
+      closeDateLabel: 'TEXT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'ftd',
+        targetObject: 'opportunity',
+        targetField: 'closeDateLabel',
+        targetFieldType: 'TEXT',
+        expression: 'TEXT(closeDate)',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [
+      { id: 'o1', closeDate: '2026-01-15', closeDateLabel: null },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', closeDate: '2026-01-15', closeDateLabel: null },
+      updatedFields: ['closeDate'],
+    });
+
+    const stored = client.get('opportunity', 'o1')!.closeDateLabel;
+    expect(stored).toBe('2026-01-15');
+    expect(stored).not.toMatch(/^\d+$/);
+  });
+
   it('negative control: the same event still recomputes a PASSING definition', async () => {
     const client = new FakeClient();
     client.setFieldKinds('opportunity', {

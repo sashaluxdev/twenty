@@ -1082,6 +1082,94 @@ describe('TEXT target on the engine lane — concatenation end to end', () => {
   });
 });
 
+// The arc's headline behavior, composed end to end: `renderAs` is stamped on
+// the TextCast node as a SIDE EFFECT of the gate's inference walk, and only the
+// evaluator reads it. Nothing else pins the two halves together — drop the
+// stamp and the evaluator silently falls back to 'value', writing the raw
+// epoch-day serial where a human expects a date. These pins fail in exactly
+// that case.
+describe('TEXT(dateField) end to end — gate stamps renderAs, evaluator honours it', () => {
+  const dateTextFormula: FormulaDefinitionRecord = {
+    id: 'ftd',
+    targetObject: 'opportunity',
+    targetField: 'closeDateLabel',
+    targetFieldType: 'TEXT',
+    expression: 'TEXT(closeDate)',
+    enabled: true,
+  };
+
+  const seedDateText = (client: FakeClient): void => {
+    client.setFieldKinds('opportunity', {
+      closeDate: 'DATE',
+      closeDateLabel: 'TEXT',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', closeDate: '2026-01-15', closeDateLabel: null },
+    ]);
+    client.seed('formulaDefinition', [
+      dateTextFormula as Record<string, unknown> & { id: string },
+    ]);
+  };
+
+  it('recomputeAllRecords writes the rendered date, not the epoch-day serial', async () => {
+    const client = new FakeClient();
+    seedDateText(client);
+
+    await recomputeAllRecords(client, dateTextFormula);
+
+    const stored = client.get('opportunity', 'o1')!.closeDateLabel;
+    expect(stored).toBe('2026-01-15');
+    // Unstamped, the value slot renders the serial (20468) as plain decimal.
+    expect(stored).not.toMatch(/^\d+$/);
+  });
+
+  it('recomputeForRecord writes the rendered date for a single record', async () => {
+    const client = new FakeClient();
+    seedDateText(client);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: dateTextFormula,
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.value).toEqual({ kind: 'text', value: '2026-01-15' });
+    expect(client.get('opportunity', 'o1')!.closeDateLabel).toBe('2026-01-15');
+  });
+
+  it('renders a DATE_TIME operand as ISO 8601, not as a fractional serial', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      signedAt: 'DATE_TIME',
+      signedAtLabel: 'TEXT',
+    });
+    client.seed('opportunity', [
+      {
+        id: 'o1',
+        signedAt: '2026-01-15T09:30:00.000Z',
+        signedAtLabel: null,
+      },
+    ]);
+    const dateTimeFormula: FormulaDefinitionRecord = {
+      id: 'ftdt',
+      targetObject: 'opportunity',
+      targetField: 'signedAtLabel',
+      targetFieldType: 'TEXT',
+      expression: 'TEXT(signedAt)',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [
+      dateTimeFormula as Record<string, unknown> & { id: string },
+    ]);
+
+    await recomputeAllRecords(client, dateTimeFormula);
+
+    expect(client.get('opportunity', 'o1')!.signedAtLabel).toBe(
+      '2026-01-15T09:30:00.000Z',
+    );
+  });
+});
+
 // ADR 0023: the definition-page sweep passes shouldContinue so an unmount can
 // stop the sweep at the next record boundary instead of running it to
 // completion orphaned. Guarded at the top of both the outer page loop and the
