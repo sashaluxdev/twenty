@@ -231,8 +231,12 @@ const FormulaEditor = () => {
   } | null>(null);
 
   // Host object's field kinds (name -> metadata type), so pre-save validation
-  // rejects a string comparison against a field that can't hold a string —
-  // parity with the server's save-time check, shown inline before Save. Every
+  // rejects a string comparison against a field that can't hold a string, shown
+  // inline before Save. The map is unfiltered (system + inactive fields
+  // included), so for references to the HOST object this is true parity with the
+  // server's save-time check. Cross-object references still diverge by design:
+  // the editor has no kinds for them and skips rather than rejects, so the
+  // server is the backstop (ADR 0027, editor-accepts/server-rejects). Every
   // rendered definition targets the same host object, so one lookup covers all.
   const hostObject = definitions[0]?.targetObject;
   const { kindsByName: hostFieldKinds } = useObjectFields(hostObject);

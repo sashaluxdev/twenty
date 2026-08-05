@@ -141,21 +141,24 @@ const SUGGESTIBLE_FIELD_TYPES = new Set([
 ]);
 
 // The full-object field data: the narrowed suggestible `fields` for the
-// autocomplete dropdown, plus `kindsByName` — the metadata type of EVERY active
-// field pre-filter (name -> type). kindsByName drives the pre-save string-
-// comparison kind check, which must see non-suggestible kinds (e.g. MULTI_SELECT)
-// to reject them, so it cannot be derived from the narrowed `fields`.
+// autocomplete dropdown, plus `kindsByName` — the metadata type of EVERY field
+// pre-filter (name -> type). kindsByName drives the pre-save string-comparison
+// and strict-kind checks, which must see non-suggestible kinds (e.g.
+// MULTI_SELECT) and system/inactive kinds (e.g. createdAt) to reject them, so it
+// cannot be derived from the narrowed `fields`.
 export type ObjectFields = {
   fields: FieldOption[];
   kindsByName: Map<string, string>;
 };
 
 // Pure mapping from the shared metadata catalog to an object's ObjectFields:
-// active + non-system fields; `kindsByName` over ALL active fields (unfiltered
-// by suggestibility — the validate-expression kind check needs the true kind of
-// fields it will never suggest, e.g. MULTI_SELECT, to reject string comparisons
-// against them); `fields` narrowed to SUGGESTIBLE_FIELD_TYPES with option sets
-// mapped to {value,label} pairs, label falling back to name, sorted by label.
+// `kindsByName` over ALL fields of the object, unfiltered — same population the
+// server's kinds provider (dynamic-client loadFieldKinds) exposes. Filtering it
+// would make the editor infer `unknown` (skip-never-reject) for a reference the
+// server types for real, so the editor would accept an expression the server
+// then rejects at save. `fields` stays narrowed to active + non-system +
+// SUGGESTIBLE_FIELD_TYPES with option sets mapped to {value,label} pairs, label
+// falling back to name, sorted by label.
 // Missing `label`/`options` (older fixtures) degrade to label←name / no options.
 // Extracted from the old useObjectFields body so it is unit-testable without React.
 export const deriveObjectFields = (
@@ -171,12 +174,8 @@ export const deriveObjectFields = (
     return { fields: [], kindsByName: new Map() };
   }
 
-  const activeFields = object.fields.filter(
-    (field) => field.isActive && !field.isSystem,
-  );
-
   const kindsByName = new Map<string, string>(
-    activeFields
+    object.fields
       .filter(
         (field) =>
           typeof field.name === 'string' && typeof field.type === 'string',
@@ -184,7 +183,11 @@ export const deriveObjectFields = (
       .map((field) => [field.name, field.type]),
   );
 
-  const fields: FieldOption[] = activeFields
+  const suggestibleFields = object.fields.filter(
+    (field) => field.isActive && !field.isSystem,
+  );
+
+  const fields: FieldOption[] = suggestibleFields
     .filter((field) => SUGGESTIBLE_FIELD_TYPES.has(field.type))
     .map((field) => {
       const rawOptions = Array.isArray(field.options) ? field.options : [];

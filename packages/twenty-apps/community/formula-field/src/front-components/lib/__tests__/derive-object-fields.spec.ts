@@ -5,8 +5,9 @@ import { type MetadataObjectInfo } from 'src/logic-functions/lib/metadata-object
 
 // deriveObjectFields is the pure mapping the old useObjectFields hook body did
 // inline: from the shared catalog it produces the suggestible `fields` for the
-// autocomplete dropdown plus `kindsByName` over EVERY active field (unfiltered by
-// suggestibility — the pre-save kind check needs non-suggestible kinds too).
+// autocomplete dropdown plus `kindsByName` over EVERY field of the object,
+// unfiltered — the pre-save kind check needs non-suggestible kinds AND
+// system/inactive kinds, matching the server's kinds provider exactly.
 
 const opportunity: MetadataObjectInfo = {
   id: 'obj-opportunity',
@@ -44,7 +45,8 @@ const opportunity: MetadataObjectInfo = {
       isSystem: false,
       label: 'Tags',
     },
-    // isSystem — excluded from both fields and kindsByName.
+    // isSystem — never suggested, but present in kindsByName because the server
+    // types it for real and would reject a bad reference at save.
     {
       id: 'f-createdby',
       name: 'createdBy',
@@ -53,7 +55,15 @@ const opportunity: MetadataObjectInfo = {
       isSystem: true,
       label: 'Created By',
     },
-    // inactive — excluded from both.
+    {
+      id: 'f-createdat',
+      name: 'createdAt',
+      type: 'DATE_TIME',
+      isActive: true,
+      isSystem: true,
+      label: 'Creation date',
+    },
+    // inactive — likewise excluded from suggestions, present in kindsByName.
     {
       id: 'f-legacy',
       name: 'legacy',
@@ -83,15 +93,22 @@ describe('deriveObjectFields', () => {
     expect(fields.map((field) => field.name)).toEqual(['amount', 'stage']);
   });
 
-  it('builds kindsByName over every active non-system field, including non-suggestible kinds', () => {
+  it('builds kindsByName over every field, including non-suggestible kinds', () => {
     const { kindsByName } = deriveObjectFields([opportunity], 'opportunity');
     // MULTI_SELECT is present so the pre-save kind check can reject it.
     expect(kindsByName.get('tags')).toBe('MULTI_SELECT');
     expect(kindsByName.get('amount')).toBe('NUMBER');
     expect(kindsByName.get('stage')).toBe('SELECT');
-    // System and inactive fields are excluded.
-    expect(kindsByName.has('createdBy')).toBe(false);
-    expect(kindsByName.has('legacy')).toBe(false);
+  });
+
+  it('includes system and inactive fields in kindsByName, matching the server kinds provider', () => {
+    // The server's loadFieldKinds does not filter; if the editor filtered here
+    // it would infer `unknown` (skip-never-reject) for these references and
+    // silently accept an expression the server rejects at save.
+    const { kindsByName } = deriveObjectFields([opportunity], 'opportunity');
+    expect(kindsByName.get('createdBy')).toBe('TEXT');
+    expect(kindsByName.get('createdAt')).toBe('DATE_TIME');
+    expect(kindsByName.get('legacy')).toBe('TEXT');
   });
 
   it('maps SELECT options to {value,label} pairs, label falling back to value', () => {
