@@ -872,8 +872,10 @@ export const recomputeForRecord = async (
   // Per-definition static gate, placed at the single point every single-record
   // caller funnels through: the editor's override toggle-off and the widget's
   // per-record TODAY refresh would otherwise write the silently-wrong value the
-  // sweep refuses to write. handleRecordUpdate's per-event gate short-circuits
-  // before reaching here, so the event path never pays for it twice.
+  // sweep refuses to write. The event path gates first and only reaches here
+  // with a definition that PASSED, so this walk re-confirms rather than
+  // duplicating work — and it costs no metadata read there, because that caller
+  // threads its already-resolved kinds in.
   // An unparseable expression is not gated — evaluation reports the parse error
   // where it always did.
   const compiled = args.compiled ?? safeCompileFormula(formula.expression ?? '');
@@ -991,9 +993,12 @@ export const recomputeAllRecords = async (
 
   // Per-definition static gate, BEFORE any record work. Kinds are a property of
   // the definition, so a definition whose kinds do not check can never produce a
-  // correct value for ANY record — it must cost zero queries and zero metadata
-  // reads per pass, not one silently-wrong write per record. Placed ahead of
-  // loadOverriddenRecordIds and buildScanSelection for exactly that reason.
+  // correct value for ANY record — it must cost zero record queries per pass,
+  // not one silently-wrong write per record. It still pays the one
+  // resolveKindsForFormula metadata read above (the gate needs the kinds it
+  // judges), which is once per definition per pass and usually cache-served.
+  // Placed ahead of loadOverriddenRecordIds and buildScanSelection for exactly
+  // that reason.
   // An unparseable expression is not gated: each consumer below reports the
   // parse error where it always did.
   const gateError =

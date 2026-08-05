@@ -107,7 +107,7 @@ Three new functions in the language: **NUMBER**, **TEXT**, **DATE**.
   trailing `…`) before landing in `lastError` — this bound covers the
   **evaluator's** arithmetic and `NUMBER()` paths (`toNumber`, evaluator.ts)
   and, applied identically in Task 4, the resolver's `coerceToNumber`
-  (`coercion.ts:109`), which built the same class of unbounded message on a
+  (`coercion.ts:101`), which built the same class of unbounded message on a
   separate path.
 - `TEXT(value)` — canonical rendering: numbers as plain decimal, dates as
   `YYYY-MM-DD`, datetimes as ISO 8601, booleans as `true`/`false`. No
@@ -344,10 +344,11 @@ explains exactly what is wrong. One semantics, no second engine.
   formula whose computed value equals the stored value perform zero writes
   across two consecutive passes (the anti-rewrite-loop test, guarding the
   fractional-day float-identity edge for DATE_TIME specifically).
-- Hot-path pins: `validateExpressionCore`/`validateFormula` are never called
-  from the recompute paths (a static grep assertion); compilation and kind
-  resolution happen once per definition per pass (call-count pins, not
-  timings).
+- Hot-path pins: compilation and kind resolution happen once per definition
+  per pass, and an event affecting no definition resolves nothing (call-count
+  pins, not timings). That `validateExpressionCore`/`validateFormula` are
+  never called from the recompute paths was confirmed by a manually-run grep
+  audit in Task 9, not by a suite assertion.
 - Pre-deploy blast-radius audit (read-only, zero writes):
   `scripts/audit-strict-gate.ts` runs the inference offline over every
   enabled deployed definition and produces the list of gate failures, so the

@@ -423,9 +423,10 @@ save is rejected with a message naming both kinds.
 - `NUMBER(text)` parses numeric text to a number; non-numeric content is a
   per-record `NON_NUMERIC_VALUE` error, not a save-time rejection (statics
   cannot know a text field's runtime content).
-- `TEXT(value)` renders any kind canonically: numbers as plain decimal, dates
-  as `YYYY-MM-DD`, datetimes as ISO 8601, booleans as `true`/`false`. No
-  format-string arguments in this version.
+- `TEXT(value)` renders any kind except `opaque` canonically: numbers as plain
+  decimal, dates as `YYYY-MM-DD`, datetimes as ISO 8601, booleans as
+  `true`/`false`. An opaque operand is rejected at save (`TEXT() cannot render
+  a LINKS field`). No format-string arguments in this version.
 - `DATE("YYYY-MM-DD")` is a **fixed-date literal only** — the argument must
   be a literal string, checked at save; it is not a general text→date cast
   (there is no `DATE(someTextField)`).
