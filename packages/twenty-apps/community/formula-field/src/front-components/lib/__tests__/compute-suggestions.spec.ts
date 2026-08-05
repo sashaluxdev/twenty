@@ -123,6 +123,13 @@ describe('computeSuggestions — field completion regressions', () => {
   });
 });
 
+describe('computeSuggestions — new type-casting functions', () => {
+  it.each([['NUM', 'NUMBER'], ['TEX', 'TEXT'], ['DAT', 'DATE']])(
+    'suggests %s -> %s', (typed, name) => {
+      expect(computeSuggestions(typed, typed.length, []).map((option) => option.name)).toContain(name);
+    });
+});
+
 describe('computeInsertRange — replace-range for option accept', () => {
   const qualified: FieldOption = {
     name: 'QUALIFIED',

@@ -98,6 +98,24 @@ const FUNCTION_SUGGESTIONS: FieldOption[] = [
     type: 'function',
     insertText: 'ISBLANK(',
   },
+  {
+    name: 'NUMBER',
+    label: 'NUMBER(text) — cast numeric text',
+    type: 'function',
+    insertText: 'NUMBER(',
+  },
+  {
+    name: 'TEXT',
+    label: 'TEXT(value) — render as text',
+    type: 'function',
+    insertText: 'TEXT(',
+  },
+  {
+    name: 'DATE',
+    label: 'DATE("YYYY-MM-DD") — fixed date',
+    type: 'function',
+    insertText: 'DATE("',
+  },
 ];
 
 // Field types worth suggesting. The numeric-coercible set (see coercion.ts;
