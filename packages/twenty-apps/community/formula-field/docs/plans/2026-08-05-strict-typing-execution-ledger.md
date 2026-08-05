@@ -19,15 +19,17 @@ green, oxlint 0/0.
 | 7 | `242d6cdddf`..`068361c6f7` | Editor autocomplete entries for `NUMBER`/`TEXT`/`DATE` in `FUNCTION_SUGGESTIONS`. Review clean, no fix round. |
 | 8 | `068361c6f7`..`6553959df0` | Read-only pre-deploy blast-radius audit script, `scripts/audit-strict-gate.ts` — compiles every enabled formula, resolves kinds per referenced object, runs `strictKindGateError`, prints a PASS/GATED/PARSE table, exits 0 always. Live dev-remote run: **4 enabled formulas, 3 PASS / 1 GATED** (a BOOLEAN concatenated into a TEXT target via `&`; two additional T5 fixture rows expected as GATED were excluded because they are `enabled: false`, correctly out of the audit's scope). Review clean, no fix round. |
 | 9 | `6553959df0`..`3634082686` | Reversal sweep: whole-suite run found zero remaining failures (Tasks 3-6 had already re-pinned everything they broke); whole-tree grep-audit (not the globstar-collapsed `src/**/__tests__/` glob) found no stale B2/B6/truthiness/lazy-coercion doctrine left uncorrected; deleted the now-dead `isDateOnlyString`/`isIsoDateTimeString`/`ISO_DATETIME_PATTERN` exports plus the newly-orphaned `DATE_ONLY_PATTERN` (scope extension, justified in the task report) and their stale doc comment. Static grep confirmed the recompute paths never call `validateExpressionCore`/`validateFormula`. Final: **1178 tests / 67 files green**, `tsc --noEmit` delta zero vs the pre-existing 23-error baseline, oxlint 0/0. Review clean, no fix round. |
-| 10 | (this commit) | ADR 0027, ADR 0026 status-header amendment, ADR README index, README language-reference update (casts, typed date arithmetic, strict rules, kind-directed resolution, legacy gate, editor/server divergence), this ledger, `package.json` version bump to 0.3.0. |
+| 10 | `3634082686`..`148cf5d134` | ADR 0027, ADR 0026 status-header amendment, ADR README index, README language-reference update (casts, typed date arithmetic, strict rules, kind-directed resolution, legacy gate, editor/server divergence), this ledger, `package.json` version bump to 0.3.0. Docs commit `fa30237f02`; task review found three README inaccuracies (NUMBER()'s argument kind stated backwards, an implied default `&`-rendering path that D2 actually save-rejects, a TEXT output-gate bullet contradicting the gate itself) — fixed in `148cf5d134`. This row's own hash update lands in a small follow-up commit, out of range above (ledger-only, no doc content). |
 
 ## Notes carried from `progress.md` (not task-scoped)
 
 - Setup: worktree dependencies installed; `twenty-client-sdk` + `twenty-sdk`
   built fresh (a new worktree lacks `dist`). Baseline 1084/66 green confirmed
   at `3e2be6f670` before Task 1 began.
-- All ten task reviews landed clean by the end of their (at most one) fix
-  round; no task required a second fix round.
+- Tasks 1-9's reviews landed clean by the end of their (at most one) fix
+  round; no task required a second fix round. Task 10's review found three
+  README inaccuracies and a placeholder ledger hash after the initial docs
+  commit; both were corrected in one fix round (see the Task 10 row above).
 - No deploy, no push, and no formulahelp edits occurred anywhere in this arc
   — all three remain separately gated on user approval per the plan's Global
   Constraints and the "Post-plan gates" section.
