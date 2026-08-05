@@ -9,6 +9,7 @@ import {
   computeMirrorValueForRecord,
   recomputeAllRecords,
   recomputeForRecord,
+  resolveKindsForFormula,
 } from 'src/logic-functions/lib/recompute';
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
 import {
@@ -218,6 +219,12 @@ export const handleRecordUpdate = async ({
         client,
         formula,
         targetRecordId: recordId,
+        // Kind-directed resolution: without these a DATE input resolves as text
+        // and `closeDate + 30` becomes a NON_NUMERIC_VALUE error, which would
+        // read as "cannot compute" and silently suppress every override
+        // decision on date formulas. Per formula for now; Task 5 hoists it to
+        // once per event.
+        fieldKindsByObject: await resolveKindsForFormula(client, formula),
       });
       // Can't compute (record vanished / load error) -> never risk a false pin.
       if (fresh.error !== null || fresh.sameRecord === null) continue;
@@ -324,6 +331,14 @@ export const handleRecordUpdate = async ({
         formula,
         targetRecordId: recordId,
         prefetchedRecord: isMirror ? undefined : after ?? undefined,
+        // The event path prefetches, so nothing else on it would resolve kinds:
+        // without them a DATE input on this record reads as text. Reuses the
+        // dependency set already compiled above; Task 5 hoists it per event.
+        fieldKindsByObject: await resolveKindsForFormula(
+          client,
+          formula,
+          compiled,
+        ),
       });
       outcomes.push(outcome);
       await recordEvaluationHeartbeat(

@@ -594,15 +594,16 @@ describe('recomputeAllRecords per-record fault isolation', () => {
     ]);
 
     // The mirror path resolves the source field kind exactly once per record,
-    // after the one resolution recomputeAllRecords spends up front building the
-    // scan's page selection. Resolution 1 is that setup, 2 is c1, 3 is c2 — so
-    // throwing on the 3rd poisons the 2nd record mid-sweep, standing in for a
-    // RangeError escaping recomputeForRecord.
+    // after the TWO resolutions recomputeAllRecords spends up front: the
+    // once-per-pass kind map for the resolver, then the scan's page selection.
+    // So resolution 1 and 2 are setup, 3 is c1, 4 is c2 — throwing on the 4th
+    // poisons the 2nd record mid-sweep, standing in for a RangeError escaping
+    // recomputeForRecord.
     const realFieldKinds = client.fieldKinds;
     let resolveCount = 0;
     client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
       resolveCount += 1;
-      if (resolveCount === 3) {
+      if (resolveCount === 4) {
         throw new RangeError('Maximum call stack size exceeded');
       }
       return realFieldKinds(object);

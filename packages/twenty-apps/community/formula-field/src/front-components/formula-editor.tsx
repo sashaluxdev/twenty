@@ -62,7 +62,10 @@ import {
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { convergeTrashedDefinitionLayout } from 'src/logic-functions/lib/fx-status-field';
 import { loadTrashedFormulas } from 'src/logic-functions/lib/formula-repository';
-import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
+import {
+  recomputeForRecord,
+  resolveKindsForFormula,
+} from 'src/logic-functions/lib/recompute';
 import {
   buildTargetWriteData,
   normalizeStoredValue,
@@ -779,18 +782,27 @@ const FormulaEditor = () => {
               },
             };
           });
+          const handedBackFormula = {
+            id: definition.id,
+            targetObject: definition.targetObject,
+            targetField: definition.targetField,
+            targetFieldType: definition.targetFieldType,
+            currencyCode: definition.currencyCode,
+            expression: definition.expression,
+            enabled: definition.enabled,
+          };
           await recomputeForRecord({
             client,
-            formula: {
-              id: definition.id,
-              targetObject: definition.targetObject,
-              targetField: definition.targetField,
-              targetFieldType: definition.targetFieldType,
-              currencyCode: definition.currencyCode,
-              expression: definition.expression,
-              enabled: definition.enabled,
-            },
+            formula: handedBackFormula,
             targetRecordId: recordId,
+            // Per user click, and the client's field-kind map is cached — but
+            // without it a DATE input resolves as text here and the record
+            // would be handed back to a formula that errors instead of
+            // computing.
+            fieldKindsByObject: await resolveKindsForFormula(
+              client,
+              handedBackFormula,
+            ),
           });
         }
       } finally {

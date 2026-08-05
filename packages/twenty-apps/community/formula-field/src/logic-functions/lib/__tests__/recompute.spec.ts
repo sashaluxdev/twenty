@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { recordEvaluationHeartbeat } from 'src/logic-functions/lib/formula-repository';
 import {
+  planRecomputeForRecord,
   recomputeAllRecords,
   recomputeForRecord,
 } from 'src/logic-functions/lib/recompute';
@@ -819,33 +820,40 @@ describe('TEXT target on the engine lane — deployed-mirror write parity', () =
     ]);
   });
 
-  it('coerces date-shaped content to its serial (documented B2 edge)', async () => {
+  it('copies date-shaped TEXT content verbatim (B2 reversed)', async () => {
+    // REVERSAL (B2): this wrote the epoch-day serial ("20638"), because the
+    // resolver sniffed the string's SHAPE. `source` is a TEXT field, so with
+    // its kind supplied the resolver copies the bytes — a TEXT mirror over a
+    // column of ISO-looking codes keeps them intact.
     client.seed('company', [{ id: 'c1', source: '2026-07-04', mirror: null }]);
 
     await recomputeForRecord({
       client,
       formula: textMirror(),
       targetRecordId: 'c1',
+      fieldKindsByObject: new Map([
+        ['company', new Map([['source', 'TEXT'], ['mirror', 'TEXT']])],
+      ]),
     });
 
-    // 2026-07-04 as whole UTC epoch-days, rendered canonically.
-    const serial = String(Date.parse('2026-07-04T00:00:00.000Z') / 86_400_000);
-    expect(client.writes).toEqual([`company:c1:mirror=${JSON.stringify(serial)}`]);
+    expect(client.writes).toEqual(['company:c1:mirror="2026-07-04"']);
   });
 });
 
-// Accepted delta B6 (ADR 0026), the SAME-RECORD half. Nothing rejects this at
-// save time — the string-comparison rule (validation-core 1b) explicitly permits
-// TEXT and SELECT operands — so it has to be pinned where the real coercion runs.
-// A resolver built from pre-coerced values would bypass the mechanism entirely:
-// the flip happens in buildResolver's coerceToEngineValue call, not the evaluator.
-describe('TEXT target on the engine lane — same-record date-shaped comparison (B6)', () => {
-  it('compares date-shaped TEXT content against a text literal as FALSE', async () => {
+// B6 RETIRED (strict typing). B6 was the accepted delta where a date-shaped
+// string in a TEXT column silently became a serial and flipped an `=`
+// comparison. Two changes killed it at the root:
+//   - the save gate (Task 3, validation-core) REJECTS `dateField = "literal"`
+//     before such a definition can exist, so the delta has no live shape; and
+//   - the resolver reads by KIND (this task), so TEXT content is text and a
+//     comparison against a text literal means what it says.
+// What is left to pin at runtime is the positive case: a real DATE column
+// compared to a real DATE literal resolves TRUE.
+describe('kind-directed resolution — DATE column vs DATE literal (B6 retired)', () => {
+  it('compares a stored date against DATE("...") as TRUE when they match', async () => {
     const client = new FakeClient();
-    client.setFieldKinds('company', { signedOn: 'TEXT', tier: 'TEXT' });
-    client.seed('company', [
-      { id: 'c1', signedOn: '2026-01-15', tier: null },
-    ]);
+    client.setFieldKinds('company', { signedOn: 'DATE', tier: 'TEXT' });
+    client.seed('company', [{ id: 'c1', signedOn: '2026-01-15', tier: null }]);
 
     const outcome = await recomputeForRecord({
       client,
@@ -854,17 +862,171 @@ describe('TEXT target on the engine lane — same-record date-shaped comparison 
         targetObject: 'company',
         targetField: 'tier',
         targetFieldType: 'TEXT',
-        expression: 'IF(signedOn = "2026-01-15", "match", "other")',
+        expression: 'IF(signedOn = DATE("2026-01-15"), "match", "other")',
         enabled: true,
       },
       targetRecordId: 'c1',
+      fieldKindsByObject: new Map([
+        ['company', new Map([['signedOn', 'DATE'], ['tier', 'TEXT']])],
+      ]),
     });
 
-    // The content IS a valid date, so it resolves eagerly to its serial and the
-    // typed comparison against the text literal is a number-vs-string mismatch.
-    // v0.1.x compared the raw string here and took the "match" branch.
     expect(outcome.error).toBeNull();
-    expect(client.writes).toEqual(['company:c1:tier="other"']);
+    expect(client.writes).toEqual(['company:c1:tier="match"']);
+  });
+
+  it('resolves the SAME stored bytes as text when the column is TEXT', async () => {
+    // Same bytes, different column kind, different meaning — this is the whole
+    // point of retiring shape-sniffing.
+    const client = new FakeClient();
+    client.setFieldKinds('company', { signedOn: 'TEXT', tier: 'TEXT' });
+    client.seed('company', [{ id: 'c1', signedOn: '2026-01-15', tier: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: {
+        id: 'fb6b',
+        targetObject: 'company',
+        targetField: 'tier',
+        targetFieldType: 'TEXT',
+        expression: 'signedOn',
+        enabled: true,
+      },
+      targetRecordId: 'c1',
+      fieldKindsByObject: new Map([
+        ['company', new Map([['signedOn', 'TEXT'], ['tier', 'TEXT']])],
+      ]),
+    });
+
+    expect(outcome.error).toBeNull();
+    expect(client.writes).toEqual(['company:c1:tier="2026-01-15"']);
+  });
+});
+
+// F1 guard (ADR 0022's catastrophic mode): a converged definition must perform
+// ZERO writes on every subsequent pass. The loop closes only if the value the
+// write boundary serializes parses back to the BIT-IDENTICAL float — valuesEqual
+// compares with `===`, so 20468.5 !== 20468.499999 would rewrite forever.
+describe('F1 convergence guard — date targets perform zero writes when unchanged', () => {
+  it('DATE-target formula whose value is unchanged performs zero writes across two passes', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', { closeDate: 'DATE', dueDate: 'DATE' });
+    client.seed('opportunity', [
+      { id: 'o1', closeDate: '2026-01-15', dueDate: '2026-01-15' },
+    ]);
+    const kinds = new Map([
+      [
+        'opportunity',
+        new Map([['closeDate', 'DATE'], ['dueDate', 'DATE']]),
+      ],
+    ]);
+    const dateFormula: FormulaDefinitionRecord = {
+      id: 'fd1',
+      targetObject: 'opportunity',
+      targetField: 'dueDate',
+      targetFieldType: 'DATE',
+      expression: 'closeDate',
+      enabled: true,
+    };
+
+    for (const pass of [1, 2]) {
+      const plan = await planRecomputeForRecord({
+        client,
+        formula: dateFormula,
+        targetRecordId: 'o1',
+        fieldKindsByObject: kinds,
+      });
+      expect(plan.outcome.error, `pass ${pass}`).toBeNull();
+      expect(plan.write, `pass ${pass}`).toBeNull();
+    }
+    expect(client.writes).toEqual([]);
+  });
+
+  it('DATE_TIME-target formula whose value is unchanged performs zero writes across two passes', async () => {
+    // Round trip is serial -> ISO string -> store -> re-read -> parse -> serial;
+    // the re-parsed float must be bit-identical. Fractional-day precision is the
+    // likeliest place for the rewrite loop to open.
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      syncedAt: 'DATE_TIME',
+      mirroredAt: 'DATE_TIME',
+    });
+    client.seed('opportunity', [
+      {
+        id: 'o1',
+        syncedAt: '2026-01-15T12:00:00.000Z',
+        mirroredAt: '2026-01-15T12:00:00.000Z',
+      },
+    ]);
+    const kinds = new Map([
+      [
+        'opportunity',
+        new Map([
+          ['syncedAt', 'DATE_TIME'],
+          ['mirroredAt', 'DATE_TIME'],
+        ]),
+      ],
+    ]);
+    const dateTimeFormula: FormulaDefinitionRecord = {
+      id: 'fd2',
+      targetObject: 'opportunity',
+      targetField: 'mirroredAt',
+      targetFieldType: 'DATE_TIME',
+      expression: 'syncedAt',
+      enabled: true,
+    };
+
+    for (const pass of [1, 2]) {
+      const plan = await planRecomputeForRecord({
+        client,
+        formula: dateTimeFormula,
+        targetRecordId: 'o1',
+        fieldKindsByObject: kinds,
+      });
+      expect(plan.outcome.error, `pass ${pass}`).toBeNull();
+      expect(plan.write, `pass ${pass}`).toBeNull();
+    }
+    expect(client.writes).toEqual([]);
+  });
+
+  it('converges after ONE write when the date target starts out stale', async () => {
+    // The negative control for the two pins above: a real change writes once,
+    // and the pass immediately after it is silent.
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', { closeDate: 'DATE', dueDate: 'DATE' });
+    client.seed('opportunity', [
+      { id: 'o1', closeDate: '2026-01-15', dueDate: null },
+    ]);
+    const kinds = new Map([
+      ['opportunity', new Map([['closeDate', 'DATE'], ['dueDate', 'DATE']])],
+    ]);
+    const dateFormula: FormulaDefinitionRecord = {
+      id: 'fd3',
+      targetObject: 'opportunity',
+      targetField: 'dueDate',
+      targetFieldType: 'DATE',
+      expression: 'closeDate + 30',
+      enabled: true,
+    };
+
+    const first = await recomputeForRecord({
+      client,
+      formula: dateFormula,
+      targetRecordId: 'o1',
+      fieldKindsByObject: kinds,
+    });
+    expect(first.error).toBeNull();
+    expect(client.writes).toEqual(['opportunity:o1:dueDate="2026-02-14"']);
+
+    const second = await recomputeForRecord({
+      client,
+      formula: dateFormula,
+      targetRecordId: 'o1',
+      fieldKindsByObject: kinds,
+    });
+    expect(second.error).toBeNull();
+    expect(second.changed).toBe(false);
+    expect(client.writes).toHaveLength(1);
   });
 });
 

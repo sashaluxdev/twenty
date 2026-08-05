@@ -23,9 +23,15 @@ import {
   type VariableResolver,
 } from 'src/engine/evaluator';
 import {
+  coerceToDateSerial,
   coerceToEngineValue,
+  coerceToNumber,
   navigatePath,
 } from 'src/logic-functions/lib/coercion';
+import {
+  type ExpressionKind,
+  fieldTypeToKind,
+} from 'src/logic-functions/lib/kind-inference';
 import { currentEpochDay } from 'src/logic-functions/lib/current-epoch-day';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import {
@@ -191,9 +197,59 @@ const fetchCrossRecords = async (
   return results;
 };
 
+// Field-type maps for every object a formula reads, keyed by object name.
+// PREBUILT by the caller: buildResolver performs no client calls, so resolving
+// a reference costs a root-split plus two map lookups, never a metadata read.
+export type KindContext = {
+  hostObject: string;
+  kindsByObject: Map<string, Map<string, string>>;
+};
+
+// A reference's kind. Same rule as kind-inference's rawFieldType (Task 2): a
+// DOTTED subpath always resolves to 'unknown', because the metadata map holds
+// the COMPOSITE's type, not the leaf's — `price` is CURRENCY, but
+// `price.currencyCode` holds text. Wrong in the SAFE direction: 'unknown'
+// degrades, it never mis-types.
+const referenceKind = (
+  objectName: string,
+  path: string,
+  kindContext: KindContext | undefined,
+): ExpressionKind => {
+  if (kindContext === undefined || path.includes('.')) {
+    return 'unknown';
+  }
+  return fieldTypeToKind(kindContext.kindsByObject.get(objectName)?.get(path));
+};
+
+// Interprets a stored value in the domain its FIELD declares — the storage
+// boundary of strict typing. Nothing here inspects the content's shape:
+// "2026-01-15" is a serial in a DATE column and the literal text in a TEXT one.
+const resolveByKind = (raw: unknown, kind: ExpressionKind): EngineValue => {
+  switch (kind) {
+    case 'date':
+    case 'datetime':
+      return coerceToDateSerial(raw, kind);
+    case 'text':
+      // A TEXT/SELECT scalar is its own bytes. Anything else in the column is
+      // dirty data (a composite, a legacy number) — hand it to the degradation
+      // path rather than inventing a rendering here.
+      return typeof raw === 'string' ? raw : coerceToEngineValue(raw);
+    case 'number':
+    case 'boolean':
+      return coerceToNumber(raw);
+    default:
+      // 'unknown' (no metadata / dotted subpath) and 'opaque' (a field type
+      // outside the lattice): JS-type-directed, no transforms. An opaque value
+      // that cannot be a number still throws NON_NUMERIC_VALUE exactly as
+      // before — the save gate rejects those definitions up front.
+      return coerceToEngineValue(raw);
+  }
+};
+
 const buildResolver = (
   sameRecord: Record<string, unknown>,
   crossRecords: Map<string, Record<string, unknown> | null>,
+  kindContext?: KindContext,
 ): VariableResolver => {
   return (reference) => {
     if (reference.kind === 'same') {
@@ -201,7 +257,14 @@ const buildResolver = (
       if (raw === undefined) {
         return undefined;
       }
-      return coerceToEngineValue(raw);
+      return resolveByKind(
+        raw,
+        referenceKind(
+          kindContext?.hostObject ?? '',
+          reference.path,
+          kindContext,
+        ),
+      );
     }
 
     const record = crossRecords.get(
@@ -217,7 +280,10 @@ const buildResolver = (
     if (raw === undefined) {
       return undefined;
     }
-    return coerceToEngineValue(raw);
+    return resolveByKind(
+      raw,
+      referenceKind(reference.ref.object, reference.ref.fieldPath, kindContext),
+    );
   };
 };
 
@@ -271,6 +337,54 @@ export type RecomputeArgs = {
   // Shared across one recomputeAllRecords pass so a fixed cross-reference is
   // fetched once, not once per target record.
   crossRecordCache?: CrossRecordCache;
+  // Field-type maps for the host object and every cross-referenced object,
+  // resolved ONCE by the caller. Without it every reference resolves as
+  // 'unknown' — degradation, not an error, but a DATE column then reads as
+  // text. Build it with resolveKindsForFormula.
+  fieldKindsByObject?: Map<string, Map<string, string>>;
+};
+
+// The kind maps a formula needs to resolve its references: the host object plus
+// every object it cross-references. Each `resolveFieldKinds` call goes through
+// the client's own per-workspace cache, so this is cheap to call per formula and
+// Task 5 hoists it to once per pass/event.
+export const resolveKindsForFormula = async (
+  client: FormulaClient,
+  formula: FormulaDefinitionRecord,
+  compiled?: { dependencies: FormulaDependencies },
+): Promise<Map<string, Map<string, string>>> => {
+  const objects = new Set<string>();
+  const hostObject = formula.targetObject ?? '';
+  if (hostObject !== '') {
+    objects.add(hostObject);
+  }
+  let dependencies = compiled?.dependencies;
+  if (dependencies === undefined) {
+    try {
+      dependencies = compileFormula(formula.expression ?? '').dependencies;
+    } catch {
+      // Unparseable: the host object's kinds are all there is to resolve, and
+      // evaluation surfaces the parse error anyway.
+      dependencies = undefined;
+    }
+  }
+  for (const ref of dependencies?.crossRecordRefs ?? []) {
+    objects.add(ref.object);
+  }
+
+  const kindsByObject = new Map<string, Map<string, string>>();
+  for (const object of objects) {
+    try {
+      kindsByObject.set(object, await resolveFieldKinds(client, object));
+    } catch {
+      // Metadata unavailable -> that object's references degrade to 'unknown'
+      // (verbatim resolution), never an aborted pass. Same posture as
+      // buildScanSelection's fallback to the id-only scan: a metadata blip
+      // must not take every remaining formula in the sweep down with it.
+      kindsByObject.set(object, new Map());
+    }
+  }
+  return kindsByObject;
 };
 
 // Evaluates a formula for a record WITHOUT writing. Returns the computed value
@@ -290,6 +404,7 @@ export const computeFormulaValueForRecord = async ({
   targetRecordId,
   prefetchedRecord,
   crossRecordCache,
+  fieldKindsByObject,
 }: Omit<RecomputeArgs, 'overriddenRecordIds'>): Promise<ComputeResult> => {
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -365,7 +480,15 @@ export const computeFormulaValueForRecord = async ({
   try {
     const value = evaluate(
       compiled.ast,
-      buildResolver(sameRecord, crossRecords),
+      // No kinds supplied -> every reference degrades to 'unknown' rather than
+      // erroring, so a direct caller that predates the threading still computes.
+      buildResolver(
+        sameRecord,
+        crossRecords,
+        fieldKindsByObject === undefined
+          ? undefined
+          : { hostObject: targetObject, kindsByObject: fieldKindsByObject },
+      ),
       {
         // Runtime evaluation-depth ceiling — second line of defence behind
         // save-time cycle detection (ADR 0004/0005). Sourced from the engine's
@@ -551,6 +674,7 @@ export const planRecomputeForRecord = async ({
   prefetchedRecord,
   overriddenRecordIds,
   crossRecordCache,
+  fieldKindsByObject,
 }: RecomputeArgs): Promise<RecomputePlan> => {
   const targetField = formula.targetField ?? '';
 
@@ -618,6 +742,7 @@ export const planRecomputeForRecord = async ({
     targetRecordId,
     prefetchedRecord,
     crossRecordCache,
+    fieldKindsByObject,
   });
   if (computed.error !== null || computed.sameRecord === null) {
     return {
@@ -743,6 +868,10 @@ export const recomputeAllRecords = async (
   const targetField = formula.targetField ?? '';
   const pluralName = pluralize(targetObject);
   const outcomes: RecomputeOutcome[] = [];
+  // Kinds are a property of the SCHEMA, not of a record: resolved once for the
+  // whole pass and threaded into every plan, so the resolver never performs a
+  // per-record metadata lookup. (Task 5 hoists the compile alongside it.)
+  const fieldKindsByObject = await resolveKindsForFormula(client, formula);
   // The lane is a property of the definition, not of a record, so it is resolved
   // once per pass and reused for every value-less outcome below.
   const emptyValue = emptyComputedValue(formula, isMirrorFormula(formula));
@@ -868,6 +997,7 @@ export const recomputeAllRecords = async (
           prefetchedRecord: scanSelection !== null ? node : undefined,
           overriddenRecordIds,
           crossRecordCache,
+          fieldKindsByObject,
         });
         pageOutcomes.push(plan.outcome);
         if (plan.write !== null) {

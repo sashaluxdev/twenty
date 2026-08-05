@@ -17,6 +17,22 @@ import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 const epochDay = (year: number, monthIndex: number, day: number): number =>
   Date.UTC(year, monthIndex, day) / MS_PER_DAY;
 
+// Field kinds for the company object, supplied to every recompute below.
+// Strict typing (this arc) reads a stored value in the domain its FIELD
+// declares, so a DATE input is a serial ONLY when its kind says so — the
+// content's shape is no longer consulted anywhere.
+const COMPANY_FIELD_KINDS: Record<string, string> = {
+  signedDate: 'DATE',
+  closeDate: 'DATE',
+  renewDate: 'DATE',
+  latest: 'DATE',
+  startAt: 'DATE_TIME',
+  endAt: 'DATE_TIME',
+};
+
+const companyKinds = (): Map<string, Map<string, string>> =>
+  new Map([['company', new Map(Object.entries(COMPANY_FIELD_KINDS))]]);
+
 const dateFormula = (
   overrides: Partial<FormulaDefinitionRecord> = {},
 ): FormulaDefinitionRecord => ({
@@ -46,6 +62,7 @@ describe('recomputeForRecord with a DATE target field', () => {
       client,
       formula: dateFormula(),
       targetRecordId: 'c1',
+      fieldKindsByObject: companyKinds(),
     }).then((outcome) => {
       expect(outcome.changed).toBe(true);
       // 2026-07-03 + 30 days = 2026-08-02.
@@ -63,6 +80,7 @@ describe('recomputeForRecord with a DATE target field', () => {
       client,
       formula: dateFormula(),
       targetRecordId: 'c1',
+      fieldKindsByObject: companyKinds(),
     });
 
     expect(outcome.changed).toBe(false);
@@ -84,6 +102,7 @@ describe('recomputeForRecord with a DATE target field', () => {
       client,
       formula: dateFormula(),
       targetRecordId: 'c1',
+      fieldKindsByObject: companyKinds(),
     });
 
     expect(outcome.changed).toBe(false);
@@ -99,6 +118,7 @@ describe('recomputeForRecord with a DATE target field', () => {
       client,
       formula: dateFormula(),
       targetRecordId: 'c1',
+      fieldKindsByObject: companyKinds(),
     });
 
     expect(outcome.changed).toBe(true);
@@ -129,6 +149,7 @@ describe('recomputeForRecord with a DATE_TIME target field', () => {
       client,
       formula,
       targetRecordId: 'c1',
+      fieldKindsByObject: companyKinds(),
     });
     expect(first.changed).toBe(true);
     expect(client.get('company', 'c1')!.endAt).toBe('2026-07-03T06:00:00.000Z');
@@ -138,6 +159,7 @@ describe('recomputeForRecord with a DATE_TIME target field', () => {
       client,
       formula,
       targetRecordId: 'c1',
+      fieldKindsByObject: companyKinds(),
     });
     expect(second.changed).toBe(false);
     expect(client.writes).toHaveLength(1);
@@ -149,6 +171,9 @@ describe('manual override detection on a DATE value field', () => {
 
   beforeEach(() => {
     client = new FakeClient();
+    // The event path resolves kinds through the client, not through an
+    // argument, so the fake has to carry the same map.
+    client.setFieldKinds('company', COMPANY_FIELD_KINDS);
     client.seed('formulaDefinition', [
       dateFormula() as Record<string, unknown> & { id: string },
     ]);
@@ -221,6 +246,7 @@ describe('IF over date dependencies (dates compare as numbers)', () => {
         expression: 'IF(signedDate > closeDate, signedDate, closeDate)',
       }),
       targetRecordId: 'c1',
+      fieldKindsByObject: companyKinds(),
     });
 
     expect(outcome.changed).toBe(true);

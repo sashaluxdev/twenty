@@ -1,6 +1,9 @@
 import { type EngineValue } from 'src/engine/evaluator';
 import { formatNumberAsText } from 'src/engine/text-format';
-import { coerceToNumber } from 'src/logic-functions/lib/coercion';
+import {
+  coerceToDateSerial,
+  coerceToNumber,
+} from 'src/logic-functions/lib/coercion';
 import {
   epochDaysToDateString,
   epochDaysToIsoDateTime,
@@ -15,9 +18,9 @@ import { type ComputedValue } from 'src/logic-functions/lib/types';
 // end-to-end, ADR 0003), so reads and writes go through amountMicros.
 // DATE / DATE_TIME fields are the Excel serial-date model (ADR 0011): the
 // numeric domain is epoch-days; writes serialize back to the "yyyy-MM-dd" /
-// ISO-UTC scalar, and reads parse the scalar back (via coerceToNumber in
-// normalizeStoredValue) so stored and computed values always compare in one
-// representation.
+// ISO-UTC scalar, and reads parse the scalar back (via coerceToDateSerial in
+// normalizeStoredValue, selected by the KIND) so stored and computed values
+// always compare in one representation.
 
 // The engine's value family — the SINGLE source of truth (FM Task 1 rider).
 // targetFieldKind derives its family membership from this array, and
@@ -55,12 +58,18 @@ export const selectionEntryForFieldKind = (
     : true;
 
 // Normalizes a raw stored/written value into the target kind's own domain.
-// Numeric kinds: plain numbers, numeric strings (bigint columns serialise as
+// NUMBER/CURRENCY: plain numbers, numeric strings (bigint columns serialise as
 // strings) and currency composites (-> amountMicros); anything non-numeric
-// normalizes to null. TEXT: the stored string verbatim (an empty string is a
-// real value, not a null), anything else null. The kind is REQUIRED because the
-// two domains disagree about the same bytes — "042" is 42 to a NUMBER target and
-// "042" to a TEXT one.
+// normalizes to null. DATE/DATE_TIME: the stored scalar parses back to
+// epoch-days by KIND (ADR 0011), never by the string's shape. TEXT: the stored
+// string verbatim (an empty string is a real value, not a null), anything else
+// null. The kind is REQUIRED because the domains disagree about the same bytes —
+// "042" is 42 to a NUMBER target and "042" to a TEXT one, and "2026-01-15" is a
+// serial to a DATE target and non-numeric content to a NUMBER one.
+//
+// This is the READ half of the convergence loop (F1): what buildTargetWriteData
+// serialized must parse back BIT-IDENTICALLY here, or recompute's `===`
+// comparison never matches and the definition rewrites the same value forever.
 export const normalizeStoredValue = (
   raw: unknown,
   kind: TargetFieldKind,
@@ -70,6 +79,9 @@ export const normalizeStoredValue = (
   }
   if (kind === 'TEXT') {
     return typeof raw === 'string' ? raw : null;
+  }
+  if (kind === 'DATE' || kind === 'DATE_TIME') {
+    return coerceToDateSerial(raw, kind === 'DATE' ? 'date' : 'datetime');
   }
   try {
     return coerceToNumber(raw);

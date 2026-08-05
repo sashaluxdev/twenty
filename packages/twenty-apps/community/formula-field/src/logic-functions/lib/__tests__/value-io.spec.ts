@@ -4,6 +4,7 @@ import {
   buildTargetWriteData,
   normalizeComputedValue,
   normalizeStoredValue,
+  type TargetFieldKind,
   targetFieldKind,
   selectionEntryForFieldKind,
 } from 'src/logic-functions/lib/value-io';
@@ -73,6 +74,26 @@ describe('normalizeStoredValue', () => {
   it('normalizes garbage to null instead of throwing', () => {
     expect(normalizeStoredValue('not a number', 'NUMBER')).toBeNull();
     expect(normalizeStoredValue({ foo: 'bar' }, 'NUMBER')).toBeNull();
+  });
+
+  // F1 guard: the read side of the convergence loop. The stored scalar is
+  // parsed by the TARGET KIND (not by its shape), so what recompute wrote is
+  // exactly what recompute reads back — the `===` in valuesEqual has to agree
+  // or the definition rewrites the same value forever (ADR 0022).
+  it.each([
+    ['2026-01-15', 'DATE', 20468],
+    ['2026-01-15T00:00:00.000Z', 'DATE', 20468],
+    ['2026-01-15T12:00:00.000Z', 'DATE_TIME', 20468.5],
+    ['8801-25-03', 'DATE', null], // dirty stored value degrades to null, never throws
+    [20468, 'DATE', 20468],
+  ])('normalizeStoredValue(%j, %s) -> %j', (raw, kind, expected) => {
+    expect(normalizeStoredValue(raw, kind as TargetFieldKind)).toBe(expected);
+  });
+
+  it('reads a NUMBER column strictly: a date-shaped string is not a serial', () => {
+    // REVERSAL (B2): coerceToNumber used to sniff this shape, so a date-shaped
+    // string in a NUMBER column read back as an epoch-day serial.
+    expect(normalizeStoredValue('2026-01-15', 'NUMBER')).toBeNull();
   });
 });
 

@@ -1,8 +1,6 @@
 import { FormulaError } from 'src/engine/errors';
-import { type EngineValue } from 'src/engine/evaluator';
+import { type EngineValue, excerptForError } from 'src/engine/evaluator';
 import {
-  isDateOnlyString,
-  isIsoDateTimeString,
   parseDateOnlyToEpochDays,
   parseIsoDateTimeToEpochDays,
 } from 'src/engine/date-serial';
@@ -85,21 +83,12 @@ export const coerceToNumber = (raw: unknown): number | null => {
   }
 
   if (typeof raw === 'string' && raw.trim() !== '') {
-    const trimmed = raw.trim();
-    // Excel serial-date model (ADR 0011): dates ARE numbers. A DATE scalar
-    // ("yyyy-MM-dd") becomes whole UTC epoch-days; an ISO 8601 datetime becomes
-    // fractional epoch-days. Matched by pattern (kind-agnostic, mirroring the
-    // existing leniency where a numeric string already parses), so a formula can
-    // do `closeDate + 30` regardless of whether the ref is typed DATE. An
-    // impossible date (2026-13-45) throws NON_NUMERIC_VALUE rather than NaN.
-    if (isDateOnlyString(trimmed)) {
-      return parseDateOnlyToEpochDays(trimmed);
-    }
-    if (isIsoDateTimeString(trimmed)) {
-      return parseIsoDateTimeToEpochDays(trimmed);
-    }
     // Numeric strings (the NUMERIC field type can serialise as a string).
-    const parsed = Number(trimmed);
+    // Nothing here inspects the string's SHAPE beyond that: a DATE column
+    // reaches the engine through coerceToDateSerial, driven by the field's
+    // metadata kind, so a date-LOOKING string in a NUMBER column is exactly
+    // what it appears to be — non-numeric content.
+    const parsed = Number(raw.trim());
     if (Number.isFinite(parsed)) {
       return parsed;
     }
@@ -107,43 +96,52 @@ export const coerceToNumber = (raw: unknown): number | null => {
 
   throw new FormulaError(
     'NON_NUMERIC_VALUE',
-    `Field value is not numeric (${JSON.stringify(raw)})`,
+    // Bounded like the evaluator's own numeric chokepoint: this message lands
+    // in FormulaDefinition.lastError, which must not carry a whole TEXT column.
+    `Field value is not numeric (${excerptForError(JSON.stringify(raw))})`,
   );
 };
 
-// Coerces a resolved raw value into the engine's number | string | null domain
-// (ADR 0026). Semi-eager by design: VALID DATE/DATE_TIME strings still become
-// serials at resolve time, so deployed date comparisons and `closeDate + 30` are
-// untouched, while every other string resolves VERBATIM — a numeric-shaped
+// Parses a stored DATE / DATE_TIME scalar into the Excel serial-date domain
+// (ADR 0011: epoch-days), driven by the field's KIND rather than by the
+// content's shape. The kind picks which parser runs FIRST, not the only one —
+// a DATE column holding an ISO datetime, and a DATE_TIME column holding a bare
+// date, both occur in real data and both must resolve.
+//
+// Dirty content degrades to null instead of throwing. A throw here would fail
+// every pass of a deployed formula forever (ADR 0022's frozen-target mode); a
+// null propagates and the formula simply computes nothing for that record.
+export const coerceToDateSerial = (
+  raw: unknown,
+  kind: 'date' | 'datetime',
+): number | null => {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null;
+  }
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return null;
+  }
+  const trimmed = raw.trim();
+  const parsers =
+    kind === 'date'
+      ? [parseDateOnlyToEpochDays, parseIsoDateTimeToEpochDays]
+      : [parseIsoDateTimeToEpochDays, parseDateOnlyToEpochDays];
+  for (const parse of parsers) {
+    try {
+      return parse(trimmed);
+    } catch {
+      // Try the other spelling, then degrade.
+    }
+  }
+  return null;
+};
+
+// The DEGRADATION coercion into the engine's number | string | null domain
+// (ADR 0026), used when a reference's kind could not be resolved at all (no
+// metadata, or a dotted subpath). Purely JS-type-directed: no transforms, no
+// shape inspection, and never a hard error for a string — a numeric-shaped
 // string keeps its leading zeros for text output, and an empty one is text
 // rather than a NON_NUMERIC_VALUE error. Numeric contexts coerce text at point
 // of use inside the evaluator instead.
-export const coerceToEngineValue = (raw: unknown): EngineValue => {
-  if (typeof raw !== 'string') {
-    return coerceToNumber(raw);
-  }
-
-  const trimmed = raw.trim();
-  if (trimmed === '') {
-    return raw;
-  }
-
-  // Date eagerness is gated on SHAPE **and** VALIDITY. A part number
-  // ("8801-25-03"), a reference code ("1234-56-78") or a hyphenated phone number
-  // matches the DATE shape without being a calendar date; throwing there would
-  // fail every pass of a deployed TEXT mirror over such a column and freeze its
-  // target forever. A parse failure therefore falls back to the ADR 0026 rule
-  // for every non-date string: resolve VERBATIM as text. coerceToNumber keeps
-  // throwing — a numeric context genuinely has no answer for that content.
-  if (isDateOnlyString(trimmed) || isIsoDateTimeString(trimmed)) {
-    try {
-      return isDateOnlyString(trimmed)
-        ? parseDateOnlyToEpochDays(trimmed)
-        : parseIsoDateTimeToEpochDays(trimmed);
-    } catch {
-      return raw;
-    }
-  }
-
-  return raw;
-};
+export const coerceToEngineValue = (raw: unknown): EngineValue =>
+  typeof raw === 'string' ? raw : coerceToNumber(raw);
