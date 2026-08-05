@@ -84,7 +84,7 @@ expression   := term (('+' | '-') term)*
 term         := unary (('*' | '/' | '%') unary)*
 unary        := ('+' | '-') unary | primary
 primary      := NUMBER | STRING | FIELD | CROSSREF | IF | TODAY | SUM | IFBLANK
-              | IFS | SWITCH | '(' concat ')'
+              | IFS | SWITCH | NUMBERCAST | TEXTCAST | DATELITERAL | '(' concat ')'
 IF           := 'IF' '(' condition ',' concat ',' concat ')'
 TODAY        := 'TODAY' '(' ')'
 SUM          := 'SUM' '(' concat (',' concat)* ')'
@@ -93,6 +93,9 @@ IFS          := 'IFS' '(' condition ',' concat
                     (',' condition ',' concat)* (',' concat)? ')'
 SWITCH       := 'SWITCH' '(' concat (',' concat ',' concat)+
                     (',' concat)? ')'
+NUMBERCAST   := 'NUMBER' '(' concat ')'
+TEXTCAST     := 'TEXT' '(' concat ')'
+DATELITERAL  := 'DATE' '(' STRING ')'          // literal only, constant-folds at parse
 condition    := boolFunction | concat (compareOp concat)?
 boolFunction := 'AND' '(' condition (',' condition)+ ')'
               | 'OR'  '(' condition (',' condition)+ ')'
@@ -111,8 +114,13 @@ ident    := (letter | '_') (letter | digit | '_')*
 non-null arguments (ADR 0016), `IFBLANK(value, fallback)` substitutes a fallback
 for a blank value (ADR 0017, widened by ADR 0026), `AND`/`OR`/`NOT`/`ISBLANK` are
 condition-only combinators (ADR 0017), and `IFS`/`SWITCH` (ADR 0018) are readable
-multi-rung ladders that desugar into nested IFs at parse time. All are reserved
-words (see below).
+multi-rung ladders that desugar into nested IFs at parse time.
+`NUMBER`/`TEXT`/`DATE` (ADR 0027) are the three explicit-cast functions — see
+"Strict kind typing" below. IF, TODAY, SUM, IFBLANK, IFS, SWITCH, AND, OR, NOT,
+and ISBLANK are hard-reserved words regardless of context; NUMBER, TEXT, and
+DATE are reserved **only when immediately followed by `(`** — a bare `date`,
+`text`, or `number` still parses as an ordinary field reference, so fields
+already using those names keep working.
 
 Binary operators are left-associative; `*` `/` `%` bind tighter than `+` `-`;
 unary `+`/`-` bind tighter than binary but looser than parentheses. Arithmetic
@@ -131,7 +139,7 @@ amount.amountMicros * 1.1                   dotted path into a CURRENCY composit
 [company:6a1b…-uuid:employees] * 1000       cross-record ref by record id
 amount.amountMicros + [company:…:budget]    mixing same- and cross-record
 IF(probability > 50, amount.amountMicros, 0)    conditional on a threshold
-IF(discount, price - discount, price)       numeric condition (0 = false)
+IF(discount != 0, price - discount, price)  explicit comparison (truthiness removed, ADR 0027)
 IF(a >= 10, 1, IF(a >= 5, 0.5, 0))          nested IF (tiering)
 IF(stage = "won", amount.amountMicros, 0)   double-quoted string equality
 TODAY() - startDate                          days elapsed since a date field
@@ -144,6 +152,10 @@ SWITCH(stage, "lead", 1, "won", 3, 0)        map a SELECT field to a number
 "INV-" & customerCode & "-" & invoiceNumber  concatenation (TEXT output)
 IF(amount > 50000, "Hot", "Cold")            branches may return text
 sourceField                                   one-term formula = a TEXT mirror
+NUMBER(zip) * 1000                            explicit text→number cast (ADR 0027)
+TEXT(amount) & " units"                       explicit number→text cast
+closeDate = DATE("2026-01-15")                fixed-date literal comparison
+closeDate + 30                                typed date arithmetic (date ± number → date)
 ```
 
 A same-record path like `amount.amountMicros` reaches into a composite field;
@@ -163,9 +175,12 @@ case-insensitive (`IF` / `if` / `If`). Rules:
   inside a parenthesised comparison operand — is a parse error. Formulas produce
   `number | string | null` (ADR 0026), never a boolean.
 - **Chained comparisons** (`a > b > c`) are a parse error.
-- **Truthiness (Excel-style).** A comparison yields true/false; a plain numeric
-  condition is allowed with `0` = false and any nonzero value (including
-  negatives) = true.
+- **Conditions are strictly boolean (ADR 0027).** A condition must infer the
+  `boolean` kind — a comparison, or AND/OR/NOT/ISBLANK. The old Excel-style
+  truthiness fallback (`0` = false, nonzero = true for a bare numeric
+  condition) is **removed**: `IF(numField, …)` no longer parses as "is this
+  nonzero" — write `IF(numField != 0, …)`. This is checked statically at
+  save time, not at eval time.
 - **Null rules (ADR 0003 consistency).** A null condition, or a null in either
   comparison operand, makes the **entire IF result null**. This deliberately
   deviates from Excel (where a blank cell compares as 0) to match the app's
@@ -174,8 +189,11 @@ case-insensitive (`IF` / `if` / `If`). Rules:
   legal in a condition operand (`IF(stage = "won", …)`), in a branch
   (`IF(x > 1, "Hot", "Cold")`), and in any other value slot. Strings still
   compare for equality only — an ordering operator with a literal operand
-  (`a > "b"`) is a parse error. Equality is **typed and non-coercing**:
-  `42 = "42"` is false. Single quotes are always rejected.
+  (`a > "b"`) is a parse error. Equality is **typed, non-coercing, and kind-
+  checked at save (ADR 0027)**: both operands of `=`/`!=` must infer the same
+  kind, or the save is rejected outright — `42 = "42"` no longer merely
+  evaluates to false, it fails to save (`Cannot compare number with text
+  using "=" (kinds must match)`). Single quotes are always rejected.
 - **Lazy evaluation.** Only the taken branch is evaluated: an error in the
   untaken branch (e.g. division by zero) never fires. The condition is always
   evaluated.
@@ -284,29 +302,37 @@ firstName & " " & lastName                     null parts contribute nothing
 sourceField                                    a one-term formula copies a field
 ```
 
-- **How a field resolves.** A DATE / DATE_TIME value — and any string whose
-  content is a **valid** date (`"2026-01-15"`, ISO datetime) — still becomes its
-  epoch-day serial at resolve time, so deployed date arithmetic and comparisons
-  are untouched. Every other string resolves **verbatim**: `"042"` keeps its
-  leading zero, a blank field is `""` rather than an error, and date-*shaped*
-  content that is not a real date (a part number like `8801-25-03`) stays text.
-- **Numeric contexts coerce at point of use.** `zip + 1`, ordering, `SUM`, and
-  condition truthiness parse numeric-shaped text as before; non-numeric text in
-  one of those slots is a `NON_NUMERIC_VALUE` error. `&` is not a numeric
-  context, so the two directions stay visibly distinct: `zip & 1` is `"01234 1"`
-  without the leading zero being lost.
+- **How a field resolves (reversed by ADR 0027 — read this bullet as current).**
+  A field resolves purely by its declared metadata **kind**, never by
+  inspecting the value's shape: a DATE / DATE_TIME field always becomes its
+  epoch-day serial, and a TEXT (or SELECT) field always resolves **verbatim**,
+  even when its content happens to be date-shaped (`"2026-01-15"`) or
+  numeric-shaped (`"042"`) — no regex, no sniffing. `"042"` keeps its leading
+  zero, a blank field is `""` rather than an error. This replaced an earlier
+  (v0.2.0) rule where date-*shaped-and-valid* TEXT content was eagerly parsed
+  as a serial in every context; that rule proved surprising enough that the
+  user rejected it before deploy — see ADR 0027.
+- **Numeric contexts require the `number` kind, statically (ADR 0027).**
+  `zip + 1` over a TEXT field is no longer accepted with implicit numeric
+  coercion — arithmetic, ordering, SUM, and NUMBER()'s own argument all
+  require the `number` kind at save time, so a TEXT operand needs an explicit
+  `NUMBER(zip) + 1`. `&` is not a numeric context and never was: `&` requires
+  `text` operands, so numbers need `TEXT(amount) & "x"`.
 - **`&` semantics.** Numbers render canonically (integers bare, up to 15
   significant digits, float dust trimmed); `null` contributes the empty string
   (the ONE place null does not propagate — a template must not blank out because
   one part is empty), so an all-null concat is `""`; dates render as their raw
-  serial numbers (no `TEXT()` formatting function ships in this version).
+  serial numbers by default, or via `TEXT(dateField)` for `YYYY-MM-DD`
+  formatting (ADR 0027).
 - **`TEXT_TOO_LONG`.** The running result of a `&` chain is capped at 10 000
   characters, checked after each part. The cap is concat-only: a long TEXT field
   flowing through a one-term formula or an IF branch is never capped, which is
   what keeps a TEXT passthrough at parity with its source field.
-- **Equality is typed.** `=`/`!=` compare without coercion, so a number never
-  equals its text form and two text values compare directly. Ordering
-  (`< <= > >=`) remains numeric-only.
+- **Equality is typed and kind-checked at save (ADR 0027).** `=`/`!=` compare
+  without coercion, and both operands must infer the same kind or the save is
+  rejected — a number can never equal its text form, even by accident.
+  Ordering (`< <= > >=`) remains restricted to number/date/datetime, and both
+  sides must share that kind too.
 - **TEXT targets.** A Text-format definition writes the computed string verbatim;
   a number result renders through the same canonical rendering `&` uses. A
   one-term formula naming another TEXT (or SELECT) field is the sanctioned way to
@@ -327,13 +353,16 @@ IF(signedDate > closeDate,        dates compare as numbers, so ordering
    signedDate, closeDate)         works in an IF condition — picks the later
 ```
 
-- **Reading.** A `DATE` field (`"yyyy-MM-dd"`) parses to whole epoch-days; a
-  `DATE_TIME` field (ISO UTC) parses to fractional epoch-days. Parsing is by
-  pattern, so a date-shaped value is understood regardless of its declared type.
-  An impossible date (`2026-13-45`) is never a silent NaN: in a numeric context
-  it is a `NON_NUMERIC_VALUE` error, and in the value domain it resolves as
-  ordinary text (ADR 0026), since date-shaped strings that are not dates are
-  usually part numbers or reference codes.
+- **Reading, kind-directed (reversed by ADR 0027 — read this bullet as
+  current).** A `DATE` field (`"yyyy-MM-dd"`) parses to whole epoch-days; a
+  `DATE_TIME` field (ISO UTC) parses to fractional epoch-days. Parsing is now
+  driven by the field's **declared metadata kind**, not by pattern-sniffing
+  the value — a TEXT field holding date-shaped content (`"2026-01-15"`)
+  is **never** parsed as a date any more, in any context; it resolves
+  verbatim as text (see "Text values and concatenation" above). Content that
+  fails to parse against its own declared DATE/DATE_TIME kind (which should
+  not normally occur, since Twenty's own field validation guards it)
+  degrades to `null` rather than erroring.
 - **Writing.** A `DATE` **target floors to the whole UTC day** (a date has no
   time) and serializes to `"yyyy-MM-dd"`; a `DATE_TIME` target rounds to the
   whole millisecond and serializes to ISO UTC. So `closeDate + 0.5` on a DATE
@@ -344,20 +373,91 @@ IF(signedDate > closeDate,        dates compare as numbers, so ordering
   this can surprise: `2026-07-03T23:30:00Z` and `2026-07-04T01:30:00+02:00` are
   the **same instant** and floor to the same DATE (the 3rd), even though one
   local wall-clock date reads as the 4th.
-- **Silently-wrong types (the honest tradeoff).** Because a date is just a
-  number, nonsensical operations are *not* rejected: `birthDate * 2` computes a
-  meaningless serial number and, on a DATE target, writes it as some far-future
-  date. There is no type system to catch this — the identical tradeoff Excel
-  makes, and the price of keeping dates in the number domain (a date inside `&`
-  renders as its serial for the same reason).
+- **Typed date arithmetic (ADR 0027), narrower than plain numbers.** Dates
+  are still represented as numbers internally, but arithmetic on them is no
+  longer unrestricted: only four signatures are legal —
+  `date ± number → date`, `datetime ± number → datetime`,
+  `date − date → number` (days), `datetime − datetime → number` (fractional
+  days). `birthDate * 2` — meaningless under any date semantics — is now
+  **rejected at save** (multiplication is not one of the four signatures),
+  where the pre-0027 engine would have silently computed a meaningless
+  far-future serial. The residual honest tradeoff: `closeDate - probability`
+  type-checks fine (`date − number → date`) even though subtracting a
+  percentage from a date is semantically dubious — the type system checks
+  **kind**, not domain meaning, exactly as Excel's does.
+
+### Strict kind typing (ADR 0027)
+
+Every expression is statically typed at save time — not just comparisons.
+Seven kinds: `number`, `date`, `datetime`, `text`, `boolean` (the five that
+participate in operations), plus `opaque` (a known-but-uninvolved field type
+— LINKS, MULTI_SELECT, ADDRESS, RATING, …, which mismatches everything) and
+`unknown` (kind unresolvable — skipped, never rejected). The rule is uniform:
+**an operation's operands must share the kind the operation expects**, or the
+save is rejected with a message naming both kinds.
+
+- `=`/`!=` — same kind, any kind.
+- `< <= > >=` — same kind, and only number/date/datetime.
+- `+ - * /`, unary, SUM — number, plus the four typed date-arithmetic
+  signatures above.
+- `&` — text only.
+- IF/IFS conditions, AND/OR/NOT operands — boolean only (no truthiness
+  fallback).
+- IF/IFS/SWITCH branches and IFBLANK's two arguments — must unify to one
+  kind.
+- The **output gate**: the whole expression's inferred kind must match the
+  target field's kind — a Text-format definition must infer `text` (use
+  `TEXT(...)` to emit a number as text), a NUMBER/CURRENCY target must infer
+  `number`, and so on.
+
+**Casts are the only crossings** — three functions, `NUMBER`/`TEXT`/`DATE`
+(grammar above):
+
+- `NUMBER(text)` parses numeric text to a number; non-numeric content is a
+  per-record `NON_NUMERIC_VALUE` error, not a save-time rejection (statics
+  cannot know a text field's runtime content).
+- `TEXT(value)` renders any kind canonically: numbers as plain decimal, dates
+  as `YYYY-MM-DD`, datetimes as ISO 8601, booleans as `true`/`false`. No
+  format-string arguments in this version.
+- `DATE("YYYY-MM-DD")` is a **fixed-date literal only** — the argument must
+  be a literal string, checked at save; it is not a general text→date cast
+  (there is no `DATE(someTextField)`).
+
+**Legacy definitions are gated, not migrated.** A definition saved before
+this redesign whose expression violates a new rule is neither auto-disabled
+nor grandfathered: the recompute sweep runs one static check per definition
+per pass and, on failure, records the error on the definition row and skips
+scanning that definition's records entirely — no per-record evaluation, no
+writes. Opening the editor shows exactly what is wrong; fixing and re-saving
+is the only way out. A pre-deploy audit script
+(`scripts/audit-strict-gate.ts`) reports every enabled definition's verdict
+(PASS / GATED / PARSE) against a live remote without writing anything, so a
+deploy ships with a known population of gated definitions rather than a
+guessed one.
+
+**Editor-accepts / server-rejects for cross-record operands.** The editor's
+live validation only has the *host* object's field kinds loaded; the server
+preloads kinds for every object a formula's cross-record references touch.
+Same-record kind mismatches are always caught identically in both places.
+A cross-record mismatch, however, can pass the editor's live check and still
+fail the real save — the same pre-existing client/server divergence posture
+the app has always had for other server-only checks, now reachable through a
+new rule, since this is the first version that types cross-record operands
+at all.
 
 ### Value & error semantics (ADR 0003)
 
-- **Field kinds coerce into `number | string | null`** (`coercion.ts`, ADR 0026):
-  numbers pass through; booleans → 0/1; a CURRENCY composite referenced without a
-  sub-path → its `amountMicros`; valid DATE / DATE_TIME strings parse to
-  epoch-days (Excel serial model, ADR 0011); every other string resolves verbatim
-  as text, and numeric contexts coerce it at point of use instead.
+- **Field kinds coerce into `number | string | null`, by declared kind, never
+  by value shape** (`coercion.ts`, ADR 0026, kind-directed since ADR 0027):
+  numbers pass through; booleans → 0/1; a CURRENCY composite referenced
+  without a sub-path → its `amountMicros`; DATE / DATE_TIME fields parse to
+  epoch-days (Excel serial model, ADR 0011) because their **metadata kind**
+  says so, not because their content looks date-shaped; every TEXT/SELECT
+  field resolves verbatim as text, unconditionally — no runtime coercion
+  happens outside an explicit `NUMBER(...)`/`TEXT(...)` cast or one of the
+  typed date-arithmetic signatures, since numeric and text contexts now
+  require their kind statically at save (ADR 0027) rather than coercing
+  whatever shows up at point of use.
 - **Null propagates.** A field that exists but is empty resolves to `null`; any
   sub-expression touching a null yields null, and the whole result is null (the
   value field is cleared). This distinguishes "empty input" from "computed 0".

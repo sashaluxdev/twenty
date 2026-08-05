@@ -5,6 +5,14 @@ Design doc: `docs/plans/2026-07-28-string-output-design.md`. Implementation plan
 `docs/plans/2026-07-31-string-output-implementation.md` (9 tasks; execution
 ledger `docs/plans/2026-07-31-string-output-execution-ledger.md`).
 
+**Superseded in part by ADR 0027 (2026-08-05):** decisions **B2** (eager
+date-coercion of date-shaped text content) and **B6** (silent cross-kind `=`
+flip to false) below are reversed by ADR 0027's strict kind typing, along
+with the lazy numeric coercion **B3** preserved in arithmetic. This ADR's
+body is left as originally written — it is the historical record of what
+shipped in v0.2.0 and why; read it alongside ADR 0027 for the current
+semantics.
+
 ## Context
 
 Formulas could only ever produce a number (or a number-shaped composite —

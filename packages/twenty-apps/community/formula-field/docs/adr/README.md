@@ -31,4 +31,5 @@ is maintainable without re-deriving the reasoning.
 | [0023](0023-contain-mount-triggered-recompute-sweeps.md) | Contain mount-triggered recompute sweeps | Implemented |
 | [0024](0024-widget-cold-open-critical-path.md) | Widget cold-open critical path (v0.1.10) | Implemented |
 | [0025](0025-recompute-scan-efficiency.md) | Full-object recompute scan efficiency — prefetch, batching, and a resumable cursor | Implemented |
-| [0026](0026-string-values-and-concatenation.md) | String values and `&` concatenation | Implemented |
+| [0026](0026-string-values-and-concatenation.md) | String values and `&` concatenation | Implemented (B2/B6 superseded by 0027) |
+| [0027](0027-strict-kind-typing.md) | Strict kind typing — static save-time gate, kind-aware runtime resolution | Implemented |
