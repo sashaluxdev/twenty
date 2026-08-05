@@ -366,6 +366,12 @@ export const recordEvaluationHeartbeat = async (
   outcome: { value: ComputedValue; error: string | null },
   expressionUsesToday: boolean,
 ): Promise<void> => {
+  // Each write below syncs the passed record with EXACTLY the fields that write
+  // carried. The comparisons here read that same in-memory record, and so does
+  // formula-sweep straight after this returns — left stale, both see the
+  // pre-write state and repeat a write that already landed. A blanket
+  // four-field assignment would be worse than none: it would claim fields the
+  // row never received.
   const nextError = outcome.error ?? '';
   const errorChanged = (formula.lastError ?? '') !== nextError;
 
@@ -382,17 +388,23 @@ export const recordEvaluationHeartbeat = async (
     const textChanged = (formula.lastValueText ?? null) !== nextValueText;
     if (!textChanged && !errorChanged) {
       if (expressionUsesToday && heartbeatIsStale(formula.lastEvaluatedAt)) {
+        const evaluatedAt = new Date().toISOString();
         await updateFormulaBookkeeping(client, formula.id, {
-          lastEvaluatedAt: new Date().toISOString(),
+          lastEvaluatedAt: evaluatedAt,
         });
+        formula.lastEvaluatedAt = evaluatedAt;
       }
       return;
     }
+    const evaluatedAt = new Date().toISOString();
     await updateFormulaBookkeeping(client, formula.id, {
       lastValueText: nextValueText,
       lastError: nextError,
-      lastEvaluatedAt: new Date().toISOString(),
+      lastEvaluatedAt: evaluatedAt,
     });
+    formula.lastValueText = nextValueText;
+    formula.lastError = nextError;
+    formula.lastEvaluatedAt = evaluatedAt;
     return;
   }
 
@@ -400,15 +412,21 @@ export const recordEvaluationHeartbeat = async (
   const valueChanged = (formula.lastValue ?? null) !== nextValue;
   if (!valueChanged && !errorChanged) {
     if (expressionUsesToday && heartbeatIsStale(formula.lastEvaluatedAt)) {
+      const evaluatedAt = new Date().toISOString();
       await updateFormulaBookkeeping(client, formula.id, {
-        lastEvaluatedAt: new Date().toISOString(),
+        lastEvaluatedAt: evaluatedAt,
       });
+      formula.lastEvaluatedAt = evaluatedAt;
     }
     return;
   }
+  const evaluatedAt = new Date().toISOString();
   await updateFormulaBookkeeping(client, formula.id, {
     lastValue: nextValue,
     lastError: nextError,
-    lastEvaluatedAt: new Date().toISOString(),
+    lastEvaluatedAt: evaluatedAt,
   });
+  formula.lastValue = nextValue;
+  formula.lastError = nextError;
+  formula.lastEvaluatedAt = evaluatedAt;
 };

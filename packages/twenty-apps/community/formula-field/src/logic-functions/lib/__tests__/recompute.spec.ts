@@ -1239,3 +1239,297 @@ describe('recomputeAllRecords hoisted compilation (once per pass)', () => {
     expect(plan.outcome.value).toEqual({ kind: 'number', value: 1 });
   });
 });
+
+// Task 6: the strict kind gate is a property of the DEFINITION, so a definition
+// whose kinds do not check can never produce a correct value for ANY record —
+// it must cost zero record queries per pass, not one silently-wrong write per
+// record. The fixture is the B6 legacy shape (a DATE column compared to a bare
+// text literal) this arc exists to stop writing.
+describe('recomputeAllRecords per-definition static gate', () => {
+  const seedGatedFixture = (client: FakeClient): void => {
+    client.setFieldKinds('opportunity', {
+      closeDate: 'DATE',
+      formulaScore: 'NUMBER',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', closeDate: '2026-01-15', formulaScore: null },
+      { id: 'o2', closeDate: '2026-02-01', formulaScore: null },
+    ]);
+  };
+
+  // The comparison is wrapped in IF because a BARE comparison computes boolean,
+  // which no engine-family target can hold — the passing control below would be
+  // rejected by the output gate rather than by the kind mismatch under test.
+  const gatedFormula = (expression: string): FormulaDefinitionRecord => ({
+    id: 'fg',
+    targetObject: 'opportunity',
+    targetField: 'formulaScore',
+    targetFieldType: 'NUMBER',
+    expression,
+    enabled: true,
+  });
+
+  const BROKEN = 'IF(closeDate = "2026-01-15", 1, 0)';
+  const FIXED = 'IF(closeDate = DATE("2026-01-15"), 1, 0)';
+
+  it('gate-failing definition: no record scan, one synthetic error outcome', async () => {
+    const client = new FakeClient();
+    seedGatedFixture(client);
+
+    const outcomes = await recomputeAllRecords(client, gatedFormula(BROKEN));
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].error).toMatch(/Cannot compare date with text/);
+    expect(outcomes[0].targetRecordId).toBe('');
+    expect(outcomes[0].changed).toBe(false);
+    // Whole-query assertion, deliberately: loadOverriddenRecordIds queries under
+    // the TOP-LEVEL key `formulaOverrides`, not the target object's plural key,
+    // so a filter on 'opportunities' alone passes even when the gate lands AFTER
+    // loadOverriddenRecordIds — voiding the placement contract this task calls
+    // load-bearing.
+    expect(client.querySelections).toHaveLength(0);
+    expect(client.writes).toHaveLength(0);
+  });
+
+  it('records the gate error on the definition row, then repeats write-avoidantly', async () => {
+    const client = new FakeClient();
+    seedGatedFixture(client);
+    const definition = gatedFormula(BROKEN);
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recomputeAllRecords(client, definition);
+
+    expect(client.get('formulaDefinition', 'fg')!.lastError).toMatch(
+      /Cannot compare date with text/,
+    );
+
+    // Second pass over the SAME in-memory definition: the heartbeat's own
+    // comparisons see the error it just wrote back, so nothing is rewritten.
+    const mutationsAfterFirst = client.mutations;
+    await recomputeAllRecords(client, definition);
+    expect(client.mutations).toBe(mutationsAfterFirst);
+  });
+
+  it('negative control: a PASSING definition still scans normally after the gate lands', async () => {
+    const client = new FakeClient();
+    seedGatedFixture(client);
+
+    const outcomes = await recomputeAllRecords(client, gatedFormula(FIXED));
+
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.every((outcome) => outcome.error === null)).toBe(true);
+    expect(client.querySelections.length).toBeGreaterThan(0);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(1);
+    expect(client.get('opportunity', 'o2')!.formulaScore).toBe(0);
+  });
+
+  // The single-record paths (the editor's override toggle-off and the widget's
+  // per-record TODAY refresh) would otherwise write the silently-wrong value the
+  // sweep refuses to write.
+  it('recomputeForRecord refuses a gate-failing definition and writes nothing', async () => {
+    const client = new FakeClient();
+    seedGatedFixture(client);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: gatedFormula(BROKEN),
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.error).toMatch(/Cannot compare date with text/);
+    expect(outcome.changed).toBe(false);
+    expect(client.writes).toHaveLength(0);
+    expect(client.querySelections).toHaveLength(0);
+  });
+
+  it('recomputeForRecord uses caller-supplied kinds for the gate (no metadata read)', async () => {
+    const client = new FakeClient();
+    seedGatedFixture(client);
+    const real = client.fieldKinds;
+    let calls = 0;
+    client.fieldKinds = async (object: string): Promise<Map<string, string>> => {
+      calls += 1;
+      return real(object);
+    };
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: gatedFormula(BROKEN),
+      targetRecordId: 'o1',
+      fieldKindsByObject: new Map([
+        ['opportunity', new Map([['closeDate', 'DATE'], ['formulaScore', 'NUMBER']])],
+      ]),
+    });
+
+    expect(outcome.error).toMatch(/Cannot compare date with text/);
+    // Both production single-record callers already resolve kinds themselves;
+    // the gate must ride those, not add a resolution of its own.
+    expect(calls).toBe(0);
+  });
+
+  it('recomputeForRecord still recomputes a PASSING definition', async () => {
+    const client = new FakeClient();
+    seedGatedFixture(client);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: gatedFormula(FIXED),
+      targetRecordId: 'o1',
+      // Both production single-record callers supply kinds; the RESOLVER still
+      // needs them (the gate's fallback resolution is for the gate alone), or a
+      // DATE column reads as text and the comparison is false.
+      fieldKindsByObject: new Map([
+        ['opportunity', new Map([['closeDate', 'DATE'], ['formulaScore', 'NUMBER']])],
+      ]),
+    });
+
+    expect(outcome.error).toBeNull();
+    expect(outcome.value).toEqual({ kind: 'number', value: 1 });
+    expect(client.writes).toEqual(['opportunity:o1:formulaScore=1']);
+  });
+
+  it('cast runtime failures still error per record with no write', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', { name: 'TEXT', formulaScore: 'NUMBER' });
+    client.seed('opportunity', [{ id: 'o1', name: 'ACME', formulaScore: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: {
+        id: 'fcast',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        targetFieldType: 'NUMBER',
+        expression: 'NUMBER(name) * 2',
+        enabled: true,
+      },
+      targetRecordId: 'o1',
+    });
+
+    // Statics pass (NUMBER() takes text, and `name` is text), so the gate lets
+    // the definition through; the record's CONTENT is what fails. A runtime
+    // failure stays a per-record error — the gate must not swallow it, and must
+    // not reject the definition for it either.
+    expect(outcome.error).toMatch(/NON_NUMERIC_VALUE/);
+    expect(outcome.changed).toBe(false);
+    expect(client.writes).toHaveLength(0);
+  });
+});
+
+// Task 6: the heartbeat's write-avoidance compares against the IN-MEMORY
+// definition record, and formula-sweep compares against that same object right
+// after. Without syncing the fields it just wrote, every lane paid a second,
+// redundant definition-row write per pass.
+describe('recordEvaluationHeartbeat in-memory sync', () => {
+  const numberFormula = (
+    overrides: Partial<FormulaDefinitionRecord> = {},
+  ): FormulaDefinitionRecord =>
+    formula({ targetFieldType: 'NUMBER', ...overrides });
+
+  it('syncs the number lane and performs zero writes on an identical repeat', async () => {
+    const client = new FakeClient();
+    const definition = numberFormula({
+      lastValue: 1,
+      lastValueText: '"stale-from-another-lane"',
+      lastError: '',
+    });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recordEvaluationHeartbeat(
+      client,
+      definition,
+      { value: { kind: 'number', value: 7 }, error: 'X' },
+      false,
+    );
+
+    expect(definition.lastValue).toBe(7);
+    expect(definition.lastError).toBe('X');
+    expect(definition.lastEvaluatedAt).toBeTruthy();
+    // The number lane's update object carries no lastValueText, so a blanket
+    // four-field assignment would desync memory from the row.
+    expect(definition.lastValueText).toBe('"stale-from-another-lane"');
+
+    const writesBefore = client.mutations;
+    await recordEvaluationHeartbeat(
+      client,
+      definition,
+      { value: { kind: 'number', value: 7 }, error: 'X' },
+      false,
+    );
+    expect(client.mutations).toBe(writesBefore);
+  });
+
+  it('syncs the text lane and leaves lastValue untouched in memory', async () => {
+    const client = new FakeClient();
+    const definition = formula({
+      targetFieldType: 'TEXT',
+      lastValue: 42,
+      lastValueText: null,
+      lastError: '',
+    });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recordEvaluationHeartbeat(
+      client,
+      definition,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      false,
+    );
+
+    expect(definition.lastValueText).toBe(JSON.stringify('OK'));
+    expect(definition.lastError).toBe('');
+    // The text lane never writes lastValue, so memory must still hold the row's.
+    expect(definition.lastValue).toBe(42);
+
+    const writesBefore = client.mutations;
+    await recordEvaluationHeartbeat(
+      client,
+      definition,
+      { value: { kind: 'text', value: 'OK' }, error: null },
+      false,
+    );
+    expect(client.mutations).toBe(writesBefore);
+  });
+
+  it('syncs lastEvaluatedAt ALONE on the TODAY staleness bump', async () => {
+    const client = new FakeClient();
+    const definition = numberFormula({
+      lastValue: 25,
+      lastValueText: '"untouched"',
+      lastError: '',
+      lastEvaluatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recordEvaluationHeartbeat(
+      client,
+      definition,
+      { value: { kind: 'number', value: 25 }, error: null },
+      true,
+    );
+
+    expect(definition.lastEvaluatedAt).toBeTruthy();
+    expect(definition.lastValue).toBe(25);
+    expect(definition.lastValueText).toBe('"untouched"');
+    expect(definition.lastError).toBe('');
+
+    // The bump made the in-memory heartbeat FRESH, so the next no-op pass is
+    // silent instead of bumping again.
+    const writesBefore = client.mutations;
+    await recordEvaluationHeartbeat(
+      client,
+      definition,
+      { value: { kind: 'number', value: 25 }, error: null },
+      true,
+    );
+    expect(client.mutations).toBe(writesBefore);
+  });
+});

@@ -32,6 +32,7 @@ import {
 import {
   type ExpressionKind,
   fieldTypeToKind,
+  strictKindGateError,
 } from 'src/logic-functions/lib/kind-inference';
 import { currentEpochDay } from 'src/logic-functions/lib/current-epoch-day';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
@@ -867,7 +868,42 @@ export const planRecomputeForRecord = async ({
 export const recomputeForRecord = async (
   args: RecomputeArgs,
 ): Promise<RecomputeOutcome> => {
-  const plan = await planRecomputeForRecord(args);
+  const { client, formula, targetRecordId } = args;
+  // Per-definition static gate, placed at the single point every single-record
+  // caller funnels through: the editor's override toggle-off and the widget's
+  // per-record TODAY refresh would otherwise write the silently-wrong value the
+  // sweep refuses to write. handleRecordUpdate's per-event gate short-circuits
+  // before reaching here, so the event path never pays for it twice.
+  // An unparseable expression is not gated — evaluation reports the parse error
+  // where it always did.
+  const compiled = args.compiled ?? safeCompileFormula(formula.expression ?? '');
+  if (compiled !== undefined) {
+    // Every production caller resolves kinds already; the fallback is what keeps
+    // a direct caller GATED rather than silently ungated, at one cached
+    // metadata call.
+    const gateKindsByObject =
+      args.fieldKindsByObject ??
+      (await resolveKindsForFormula(client, formula, compiled));
+    const gateError = strictKindGateError({
+      ast: compiled.ast,
+      hostObject: formula.targetObject ?? '',
+      targetFieldType: formula.targetFieldType,
+      fieldKinds: (object) => gateKindsByObject.get(object),
+    });
+    if (gateError !== null) {
+      return {
+        formulaId: formula.id,
+        targetRecordId,
+        changed: false,
+        // The gate's own predicate skips every non-engine-family target, so a
+        // gate error is only ever raised on the engine lane.
+        value: emptyComputedValue(formula, false),
+        error: gateError,
+      };
+    }
+  }
+
+  const plan = await planRecomputeForRecord({ ...args, compiled });
   if (plan.write === null) {
     return plan.outcome;
   }
@@ -942,6 +978,49 @@ export const recomputeAllRecords = async (
   // The lane is a property of the definition, not of a record, so it is resolved
   // once per pass and reused for every value-less outcome below.
   const emptyValue = emptyComputedValue(formula, isMirror);
+
+  // Per-definition static gate, BEFORE any record work. Kinds are a property of
+  // the definition, so a definition whose kinds do not check can never produce a
+  // correct value for ANY record — it must cost zero queries and zero metadata
+  // reads per pass, not one silently-wrong write per record. Placed ahead of
+  // loadOverriddenRecordIds and buildScanSelection for exactly that reason.
+  // An unparseable expression is not gated: each consumer below reports the
+  // parse error where it always did.
+  const gateError =
+    compiled === undefined
+      ? null
+      : strictKindGateError({
+          ast: compiled.ast,
+          hostObject: targetObject,
+          targetFieldType: formula.targetFieldType,
+          // Undefined on the mirror lane, where the gate's own predicate skips
+          // every (non-engine-family) mirror target anyway.
+          fieldKinds: (object) => fieldKindsByObject?.get(object),
+        });
+  if (gateError !== null) {
+    // Record the problem on the definition row and skip the work — the cyclic
+    // skip's posture. Write-avoidance is the heartbeat's own: an unchanged error
+    // writes nothing. The flag stays false on purpose, so a broken definition
+    // never claims a fresh "last evaluated" it did not earn.
+    await recordEvaluationHeartbeat(
+      client,
+      formula,
+      { value: emptyValue, error: gateError },
+      false,
+    );
+    // One synthetic outcome carrying the error. Every caller reads only
+    // .length/.changed/.error, so the empty targetRecordId is inert (the sweep's
+    // `evaluated` counter reading 1 for a gated definition is expected).
+    return [
+      {
+        formulaId: formula.id,
+        targetRecordId: '',
+        changed: false,
+        value: emptyValue,
+        error: gateError,
+      },
+    ];
+  }
 
   // Load the overridden record ids once so pinned records are skipped (#2).
   const overriddenRecordIds = await loadOverriddenRecordIds(

@@ -25,6 +25,7 @@ import {
   overrideSlotForKind,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
+import { strictKindGateError } from 'src/logic-functions/lib/kind-inference';
 import {
   findCyclicTargets,
   isCyclicTarget,
@@ -168,6 +169,30 @@ export const handleRecordUpdate = async ({
     eventKindObjects,
   );
 
+  // Per-definition static gate, computed ONCE for the whole event and honoured
+  // by both loops below. A definition whose kinds do not check has no correct
+  // value for any record, so neither loop may act on it — and skipping it here
+  // also removes the per-event fetch+evaluate cost it would otherwise pay.
+  // A formula targeting ANOTHER object has no kinds in this map, so it infers
+  // 'unknown' and is skipped-never-rejected here; its own recomputeAllRecords
+  // pass gates it with the kinds it actually needs.
+  const gateErrorByFormulaId = new Map<string, string>();
+  for (const formula of formulas) {
+    const compiled = compiledByFormulaId.get(formula.id);
+    if (compiled === undefined) {
+      continue;
+    }
+    const gateError = strictKindGateError({
+      ast: compiled.ast,
+      hostObject: formula.targetObject ?? '',
+      targetFieldType: formula.targetFieldType,
+      fieldKinds: (object) => eventFieldKindsByObject.get(object),
+    });
+    if (gateError !== null) {
+      gateErrorByFormulaId.set(formula.id, gateError);
+    }
+  }
+
   // Manual override detection (#2). A value field changed on this record. We
   // must tell a genuine human edit apart from the app's OWN recompute write —
   // and the actor alone is not enough, because a recompute triggered by a user's
@@ -185,6 +210,10 @@ export const handleRecordUpdate = async ({
       // OFFLINE: inputs are unfetchable, so "what would the formula say?" has
       // no answer — never turn edits into overrides while broken.
       if (formula.status === 'OFFLINE') continue;
+      // Gate-failing: same reasoning, statically. A definition whose kinds do
+      // not check cannot answer "what would the formula say?", so a human edit
+      // must never become an override row on its strength.
+      if (gateErrorByFormulaId.has(formula.id)) continue;
       const compiled = compiledByFormulaId.get(formula.id);
 
       // Mirror fork: a mirror target stores non-numeric raw values, so the
@@ -311,6 +340,13 @@ export const handleRecordUpdate = async ({
     // OFFLINE: an input field is deactivated/missing — recompute would only
     // error against unfetchable inputs. UPSTREAM formulas keep computing.
     if (formula.status === 'OFFLINE') {
+      continue;
+    }
+
+    // Gate-failing: no correct value exists for any record, so recomputing
+    // would write a silently-wrong one. The sweep records the error on the
+    // definition row; the event path just declines to act.
+    if (gateErrorByFormulaId.has(formula.id)) {
       continue;
     }
 

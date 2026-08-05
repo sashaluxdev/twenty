@@ -1488,3 +1488,107 @@ describe('handleRecordUpdate hoisted compilation and kinds (once per event)', ()
     expect(calls).toBe(2);
   });
 });
+
+// Task 6: a definition whose kinds do not check is skipped by BOTH event loops.
+// The recompute loop would write a silently-wrong value; the override loop would
+// turn a human edit into a pinned row on the strength of "what would the formula
+// say?" — which has no answer while the definition is broken, exactly the
+// posture the OFFLINE skip already encodes.
+describe('handleRecordUpdate per-definition static gate', () => {
+  const seedGatedDefinition = (client: FakeClient): void => {
+    client.setFieldKinds('opportunity', {
+      closeDate: 'DATE',
+      formulaScore: 'NUMBER',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'fg',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        targetFieldType: 'NUMBER',
+        // The B6 legacy shape: a DATE column compared to a bare text literal.
+        expression: 'IF(closeDate = "2026-01-15", 1, 0)',
+        enabled: true,
+      },
+    ]);
+  };
+
+  it('event path skips gate-failing formulas in BOTH loops: no recompute write, no override row', async () => {
+    const client = new FakeClient();
+    seedGatedDefinition(client);
+    client.seed('opportunity', [
+      { id: 'o1', closeDate: '2026-01-15', formulaScore: 7 },
+    ]);
+
+    // Loop 1: a human edited the value field away from what the (broken)
+    // formula computes — pre-gate this pinned an override row.
+    const outcomes = await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', closeDate: '2026-01-15', formulaScore: 7 },
+      updatedFields: ['formulaScore', 'closeDate'],
+      actorWorkspaceMemberId: 'wm-1',
+    });
+
+    expect(outcomes).toHaveLength(0);
+    // FakeClient.mutations is a scalar counter and cannot be filtered; the
+    // filterable record of what ran is mutationSelections.
+    expect(
+      client.mutationSelections.filter(
+        (selection) => selection.createFormulaOverride !== undefined,
+      ),
+    ).toHaveLength(0);
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+
+    // Loop 2: the app's own input-change event, no actor, so the override loop
+    // does not run at all — pre-gate this wrote formulaScore=0 onto the record.
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', closeDate: '2026-01-15', formulaScore: 7 },
+      updatedFields: ['closeDate'],
+      actorWorkspaceMemberId: null,
+    });
+
+    expect(
+      client.mutationSelections.filter(
+        (selection) => selection.updateOpportunity !== undefined,
+      ),
+    ).toHaveLength(0);
+    expect(client.writes).toHaveLength(0);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(7);
+  });
+
+  it('negative control: the same event still recomputes a PASSING definition', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      closeDate: 'DATE',
+      formulaScore: 'NUMBER',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'fp',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        targetFieldType: 'NUMBER',
+        expression: 'IF(closeDate = DATE("2026-01-15"), 1, 0)',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [
+      { id: 'o1', closeDate: '2026-01-15', formulaScore: null },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', closeDate: '2026-01-15', formulaScore: null },
+      updatedFields: ['closeDate'],
+    });
+
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(1);
+  });
+});

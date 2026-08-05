@@ -29,6 +29,10 @@ describe('scanCursor bookkeeping', () => {
   });
 });
 
+// Every call site spreads this into a FRESH record: the heartbeat syncs the
+// fields it wrote back onto the definition it was passed (so the sweep does not
+// repeat the write), which would otherwise leak one test's bookkeeping into the
+// next through a shared object. Production loads its definitions per pass.
 const RESUME_FORMULA: FormulaDefinitionRecord = {
   id: 'formula-1',
   targetObject: 'opportunity',
@@ -58,7 +62,7 @@ describe('budget-bounded resumable scan', () => {
     seed(client, 6);
 
     // Deadline already passed: exactly one page runs, then the scan yields.
-    const outcomes = await recomputeAllRecords(client, RESUME_FORMULA, {
+    const outcomes = await recomputeAllRecords(client, { ...RESUME_FORMULA }, {
       pageSize: 2,
       deadlineAt: Date.now() - 1,
     });
@@ -177,7 +181,7 @@ describe('budget-bounded resumable scan', () => {
     const client = new FakeClient();
     seed(client, 6);
 
-    await recomputeAllRecords(client, RESUME_FORMULA, { pageSize: 10 });
+    await recomputeAllRecords(client, { ...RESUME_FORMULA }, { pageSize: 10 });
 
     const heartbeatWrites = client.mutationSelections.filter((selection) => {
       const data = selection?.updateFormulaDefinition?.__args?.data as
@@ -206,7 +210,7 @@ describe('measured request counts for a 387-record scan (ADR 0025)', () => {
       })),
     );
 
-    const outcomes = await recomputeAllRecords(client, RESUME_FORMULA, {});
+    const outcomes = await recomputeAllRecords(client, { ...RESUME_FORMULA }, {});
 
     expect(outcomes).toHaveLength(387);
     // 4 page reads (pageSize 100 default: 100+100+100+87) + 1 override-record
