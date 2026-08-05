@@ -95,6 +95,9 @@ describe('refreshStaleTodayFormulas', () => {
       client: fakeClient,
       formula: staleToday,
       targetRecordId: 'rec-1',
+      // fakeClient exposes no fieldKinds, so the map resolves empty — the
+      // reference still degrades rather than erroring.
+      fieldKindsByObject: new Map([['opportunity', new Map()]]),
     });
 
     // When recordId is omitted, recomputeForRecordFn is never called.
@@ -110,6 +113,43 @@ describe('refreshStaleTodayFormulas', () => {
       recomputeAllRecordsFn: recomputeAllRecordsFnAgain,
     });
     expect(recomputeForRecordFnUnused).not.toHaveBeenCalled();
+  });
+
+  // This path processes exactly the TODAY()-using definitions — the most
+  // date-heavy population in the app. Without kinds, `TODAY() - closeDate`
+  // resolves closeDate verbatim as text and fails with NON_NUMERIC_VALUE, which
+  // lands on the definition's lastError. One cached lookup per stale definition
+  // per user visit buys the correct resolution.
+  it('threads resolved field kinds into the per-record recompute', async () => {
+    const staleToday = def({ expression: 'TODAY() - closeDate' });
+    const kindsClient: FormulaClient = {
+      query: async () => ({}),
+      mutation: async () => ({}),
+      fieldKinds: async (object: string) =>
+        object === 'opportunity'
+          ? new Map([['closeDate', 'DATE']])
+          : new Map<string, string>(),
+    };
+    const recomputeForRecordFn = vi.fn().mockResolvedValue({});
+
+    await refreshStaleTodayFormulas({
+      client: kindsClient,
+      definitions: [staleToday],
+      now,
+      state: idleState(),
+      recordId: 'rec-1',
+      sweepAllRecords: false,
+      recomputeForRecordFn,
+    });
+
+    expect(recomputeForRecordFn).toHaveBeenCalledWith({
+      client: kindsClient,
+      formula: staleToday,
+      targetRecordId: 'rec-1',
+      fieldKindsByObject: new Map([
+        ['opportunity', new Map([['closeDate', 'DATE']])],
+      ]),
+    });
   });
 
   it('throttles: does nothing when lastRefreshAt is within 60s of now', async () => {

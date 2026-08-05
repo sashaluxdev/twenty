@@ -2,6 +2,7 @@ import { isStaleTimestamp } from 'src/front-components/lib/format-relative-past'
 import {
   recomputeAllRecords,
   recomputeForRecord,
+  resolveKindsForFormula,
 } from 'src/logic-functions/lib/recompute';
 import {
   type FormulaClient,
@@ -136,6 +137,13 @@ export const refreshStaleTodayFormulas = async ({
             client,
             formula: definition,
             targetRecordId: recordId,
+            // This path processes exactly the TODAY()-using definitions — the
+            // most date-heavy population there is. Without kinds a DATE input
+            // resolves verbatim as text and `TODAY() - closeDate` fails with
+            // NON_NUMERIC_VALUE onto the definition's lastError. One cached
+            // lookup per stale definition per user visit.
+            // (recomputeAllRecordsFn below resolves its own, once per pass.)
+            fieldKindsByObject: await resolveKindsForFormula(client, definition),
           });
         }
         if (sweepAllRecords) {
