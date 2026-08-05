@@ -17,24 +17,6 @@ import { FormulaError } from 'src/engine/errors';
 
 export const MS_PER_DAY = 86_400_000;
 
-// A timezone-free calendar date, e.g. "2026-07-03" (the Twenty DATE scalar).
-const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-// An ISO 8601 datetime, e.g. "2026-07-03T05:00:00.000Z" or with a ±hh:mm offset.
-// Requires the `T` separator (that is what distinguishes it from a bare date)
-// AND an explicit timezone designator: Date.parse treats a designator-less
-// datetime as LOCAL time, which would silently break the UTC-only guarantee.
-// Twenty's DATE_TIME scalar always emits Z-suffixed ISO, so nothing real is
-// excluded; naive datetime strings in text fields stay NON_NUMERIC.
-const ISO_DATETIME_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
-
-export const isDateOnlyString = (value: string): boolean =>
-  DATE_ONLY_PATTERN.test(value);
-
-export const isIsoDateTimeString = (value: string): boolean =>
-  ISO_DATETIME_PATTERN.test(value);
-
 // Parses "yyyy-MM-dd" into whole UTC epoch-days. Rejects impossible dates
 // (e.g. 2026-13-45), which Date.UTC would otherwise silently roll over.
 export const parseDateOnlyToEpochDays = (value: string): number => {
