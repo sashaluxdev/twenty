@@ -43,6 +43,7 @@ export type TextCastNode = { type: 'textcast'; operand: AstNode; renderAs?: Rend
 ```
 
 - `DATE("YYYY-MM-DD")` constant-folds at parse: the parser calls `parseDateOnlyToEpochDays` on the literal; an invalid calendar date or a non-string-literal argument throws `PARSE_ERROR` (message: `DATE() requires a literal "YYYY-MM-DD" date`). The folded node keeps `literal` for error copy. IFS/SWITCH `foldLadder` precedent (parser.ts:549-568).
+- **Lookahead-only reservation (user decision 2026-08-05):** `number`/`text`/`date` dispatch as functions ONLY when the identifier is immediately followed by `LPAREN` (`this.tokens[this.position + 1].type === 'LPAREN'` — one-token lookahead already available). A bare `date` (or `text`, `number`) stays an ordinary field reference — fields with these names keep working. This deliberately differs from the hard-reserved IF/SUM precedent; say so in a short why-comment at the dispatch site. Pin it: `expect(parse('date')).toEqual({ type: 'field', path: 'date' })` and `expect(parse('date + 1')).toMatchObject({ type: 'binary' })`.
 - `renderAs` is OPTIONAL and stamped later by kind inference (Task 2). Evaluator dispatch when absent = `'value'` behavior.
 
 - [ ] **Step 1: Write failing parser tests** in `parser.spec.ts`:
@@ -79,7 +80,9 @@ describe('cast and literal functions', () => {
 (Compute 20468 in-test if preferred: `parseDateOnlyToEpochDays('2026-01-15')` — do not hardcode a wrong serial; verify by import.)
 
 - [ ] **Step 2: Run** `npx vitest run src/engine/__tests__/parser.spec.ts` — expect FAIL (reserved-word `PARSE_ERROR` or shape mismatch).
-- [ ] **Step 3: Implement.** `ast.ts`: add the three types + `RenderKind`, extend the `AstNode` union. `parser.ts`: in `parsePrimary`'s FIELD case add three lower-cased reserved-word checks (`'number'`, `'text'`, `'date'`) with LPAREN lookahead dispatching to `parseNumberCast()`, `parseTextCast()`, `parseDateLiteral()`, each mirroring `parseIfBlank`'s structure (`this.enter()`/`this.leave()`, single argument via `this.parseConcat()`, RPAREN check). `parseDateLiteral` requires the next token to be a STRING literal token (not an expression); on anything else or on `parseDateOnlyToEpochDays` throwing, throw `new FormulaError('PARSE_ERROR', 'DATE() requires a literal "YYYY-MM-DD" date', position)`. Import `parseDateOnlyToEpochDays` — check import direction: `date-serial.ts` lives under `src/logic-functions/lib/`; the engine must not import app-layer code. **Move nothing**: instead duplicate the tiny pure parse in the parser? No — `date-serial.ts` is itself pure and dependency-free; MOVE `date-serial.ts` to `src/engine/date-serial.ts` and update its ~6 importers (it has no app-domain imports; `text-format.ts` precedent already lives in engine and is imported by both layers). Do the move in this task, mechanically, before wiring.
+- [ ] **Step 3: Implement.** `ast.ts`: add the three types + `RenderKind`, extend the `AstNode` union. `src/engine/index.ts`: export `RenderKind`, `DateLiteralNode`, `NumberCastNode`, `TextCastNode`, and `ConcatNode` (tests in Tasks 1-2 import them; today the barrel exports only `AstNode` from ast.ts). `parser.ts`: in `parsePrimary`'s FIELD case add three lower-cased checks (`'number'`, `'text'`, `'date'`) that dispatch to `parseNumberCast()`, `parseTextCast()`, `parseDateLiteral()` ONLY when the next token is LPAREN (lookahead reservation above — otherwise fall through to the field-reference path), each parse method mirroring `parseIfBlank`'s structure (`this.enter()`/`this.leave()`, single argument via `this.parseConcat()`, RPAREN check). `parseDateLiteral` requires the next token to be a STRING literal token (not an expression); on anything else or on `parseDateOnlyToEpochDays` throwing, throw `new FormulaError('PARSE_ERROR', 'DATE() requires a literal "YYYY-MM-DD" date', position)`.
+  Import direction: `date-serial.ts` lives under `src/logic-functions/lib/` and the engine must not import app-layer code. MOVE it to `src/engine/date-serial.ts` — it imports only `src/engine/errors`, so the move is legal (`text-format.ts` precedent: lives in engine, imported by both layers) — EXCEPT `currentEpochDay()`, which reads the system clock; three documented invariants (ast.ts:80-82, evaluator.ts:78-82, date-serial.ts:78-81) say the engine never does that. Leave `currentEpochDay` behind in a new `src/logic-functions/lib/current-epoch-day.ts` (its only importer is `recompute.ts:29`). Update the 7 importers: `coercion.ts:8`, `recompute.ts:29`, `value-io.ts:8`, `front-components/lib/display-value.ts:4`, and 3 spec files (`value-io.spec.ts:10`, `coercion.spec.ts:7`, `date-target.spec.ts:3`). Do the move mechanically, before wiring.
+  Transient note: `dependencies.ts` also contains `walkStringComparisons` (:235-317, deleted in Task 3); do NOT extend it for the new nodes — it returning without descending into cast operands is harmless for the one task it survives.
 - [ ] **Step 4: Run parser tests** — PASS. Run full suite to catch import-path fallout from the move: `npx vitest run` — PASS (1084 + new).
 - [ ] **Step 5: Write failing evaluator tests** in `evaluator.spec.ts`:
 
@@ -112,6 +115,10 @@ describe('cast evaluation', () => {
   });
   it('TEXT propagates null', () => {
     expect(evaluate(parse('TEXT(missing)'), () => null)).toBeNull();
+  });
+  it('TEXT results are never length-capped (only & is)', () => {
+    const long = 'x'.repeat(MAX_COMPUTED_TEXT_LENGTH + 100);
+    expect(evaluate(parse('TEXT(label)'), () => long)).toBe(long);
   });
 });
 ```
@@ -184,7 +191,12 @@ lastRenderedSerial = epochDays; lastRenderedString = rendered;
 - Produces (consumed by Tasks 3, 5, 6):
 
 ```ts
-export type ExpressionKind = 'number' | 'date' | 'datetime' | 'text' | 'boolean' | 'unknown';
+export type ExpressionKind =
+  | 'number' | 'date' | 'datetime' | 'text' | 'boolean'
+  | 'opaque'    // KNOWN field type outside the lattice (LINKS, MULTI_SELECT, ADDRESS, RATING, ...):
+                // mismatches every operation and every known kind — preserves branch 1b/1d's
+                // save-time rejections, which plain 'unknown' would silently loosen
+  | 'unknown';  // kind not resolvable (no metadata) — every constraint skipped, never rejected
 export type KindLookup = (objectName: string) => Map<string, string> | undefined;
 // Maps a Twenty field type to a kind; anything unrecognized -> 'unknown'.
 export const fieldTypeToKind = (fieldType: string | null | undefined): ExpressionKind;
@@ -204,12 +216,12 @@ export const strictKindGateError = (args: {
   ast: AstNode;
   hostObject: string;
   targetFieldType: string | null | undefined;
-  outputFormat: string | null | undefined;
   fieldKinds?: KindLookup;
 }): string | null;
 ```
 
-- `fieldTypeToKind`: `NUMBER`,`CURRENCY`,`RATING` → `number`; `DATE` → `date`; `DATE_TIME` → `datetime`; `TEXT`,`SELECT` → `text`; `BOOLEAN` → `boolean`; else `unknown`.
+- `fieldTypeToKind(fieldType)`: `null`/`undefined` → `unknown`; `NUMBER`,`NUMERIC`,`CURRENCY` → `number`; `DATE` → `date`; `DATE_TIME` → `datetime`; `TEXT`,`SELECT` → `text`; `BOOLEAN` → `boolean`; **any other non-empty type → `opaque`** (RATING included — Twenty stores it as an enum string; it was never resolvable in the engine lane and 1b rejected comparisons on it). Callers pass `undefined` when the field is absent from the map.
+- `opaque` rules: mismatches every operation (arithmetic, comparisons, `&`, conditions, SUM, NUMBER()); in TEXT() it is rejected too (`TEXT() cannot render a ${fieldType} field`) — composites have no canonical text rendering. `opaque` unifies only with `unknown` in branch positions.
 - Node kinds: `number`→number; `string`→text; `null`→unknown; `dateliteral`→date; `today`→date; `field`/`crossref`→`fieldTypeToKind` of the ROOT segment's field type (dotted CURRENCY subpaths stay `number`; kind of missing map/field → `unknown`); comparisons/`and`/`or`/`not`/`isblank`→boolean; `concat`→text; `numbercast`→number; `textcast`→text; `sum`→number; `unary`→number; `if`/`ifblank`→unified branch kind.
 - Rules (mismatch when BOTH sides known; `unknown` always passes):
   - `=`/`!=`: kinds equal. Message: `Cannot compare ${left} with ${right} using "${op}" (kinds must match)`.
@@ -219,7 +231,7 @@ export const strictKindGateError = (args: {
   - `*`,`/`,`%`, unary, SUM args: number. `concat` parts: text (message: `"&" joins text; wrap ${kind} values in TEXT()`).
   - IF/IFS condition: boolean (message: `Condition must be a comparison or boolean field, got ${kind}`). Branch kinds must unify (unknown unifies with anything; two different known kinds → `IF branches disagree: ${a} vs ${b}`). IFBLANK same unification.
   - `numbercast` operand: text (message: `NUMBER() takes text, got ${kind}`). `textcast` operand: any; stamp `renderAs` = operand kind mapped {number→'number', date→'date', datetime→'datetime', boolean→'boolean', text|unknown→'value'}.
-- `strictKindGateError`: returns null immediately for mirror-lane definitions (`!ENGINE_FAMILY_KINDS.has(targetFieldType)` or `targetFieldType` empty — branch 1c owns those). Else run inference; inference error → return it. Else output gate: expected kind from `targetFieldKind(targetFieldType)` mapped {NUMBER|CURRENCY→number, DATE→date, DATE_TIME→datetime, TEXT→text}; inferred ≠ expected and both known → `` `Formula computes ${inferred} but the target field holds ${expected}` `` (suggest `TEXT(...)` when expected is text).
+- `strictKindGateError` exact predicate (NOT identical to branch 1c — blank target is deliberately ungated): `if (targetFieldType == null || targetFieldType === '' || !ENGINE_FAMILY_KINDS.has(targetFieldType)) return null;` (mirror lane and blank targets are branch 1c's/nobody's business — skip-never-reject). Else run inference; inference error → return it. Else output gate: expected kind from `targetFieldKind(targetFieldType)` mapped {NUMBER|CURRENCY→number, DATE→date, DATE_TIME→datetime, TEXT→text}; inferred ≠ expected and inferred not `unknown` → `` `Formula computes ${inferred} but the target field holds ${expected}` `` (suggest `TEXT(...)` when expected is text). An `opaque` inferred result also fails the gate (a bare LINKS ref onto a TEXT target — 1d parity).
 
 - [ ] **Step 1: Write failing tests** — table-driven, no client, kinds map inline:
 
@@ -231,7 +243,15 @@ const kinds = new Map<string, string>([
 const lookup: KindLookup = (object) => (object === 'company' ? kinds : undefined);
 const kindOf = (expression: string): KindInferenceResult =>
   inferExpressionKind(parse(expression), 'company', lookup);
+```
 
+**Grammar constraint (verified empirically):** comparisons and AND/OR/NOT/ISBLANK are only parseable
+INSIDE an IF condition (`parser.ts:136-146` rejects top-level comparisons, `:299-306` rejects
+value-position combinators). Every comparison test below is therefore wrapped in `IF(..., 1, 0)` and
+asserted through the IF's result kind or the rejection message. Do NOT "fix" the parser to allow
+top-level comparisons — the grammar is as designed.
+
+```ts
 describe('inferExpressionKind', () => {
   it.each([
     ['amount + 1', 'number'], ['closeDate + 30', 'date'], ['30 + closeDate', 'date'],
@@ -239,36 +259,37 @@ describe('inferExpressionKind', () => {
     ['syncedAt - syncedAt', 'number'], ['DATE("2026-01-15")', 'date'],
     ['NUMBER(name) * 2', 'number'], ['TEXT(amount) & " units"', 'text'],
     ['IF(isActive, 1, 2)', 'number'], ['IF(amount > 3, name, stage)', 'text'],
-    ['IFBLANK(name, "none")', 'text'], ['ISBLANK(closeDate)', 'boolean'],
+    ['IFBLANK(name, "none")', 'text'], ['IF(ISBLANK(closeDate), 1, 0)', 'number'],
+    ['IF(stage = "Won", 1, 0)', 'number'],                    // SELECT compares as text
   ])('%s infers %s', (expression, expected) => {
     expect(kindOf(expression)).toEqual({ kind: expected, error: null });
   });
   it.each([
-    ['closeDate = "2026-01-15"', /Cannot compare date with text/],
-    ['closeDate = syncedAt', /Cannot compare date with datetime/],
-    ['amount = name', /Cannot compare number with text/],
+    ['IF(closeDate = "2026-01-15", 1, 0)', /Cannot compare date with text/],
+    ['IF(closeDate = syncedAt, 1, 0)', /Cannot compare date with datetime/],
+    ['IF(amount = name, 1, 0)', /Cannot compare number with text/],
     ['closeDate * 2', /Cannot apply "\*"/],
     ['name + 1', /Cannot apply "\+"/],
     ['amount & "x"', /wrap number values in TEXT\(\)/],
     ['IF(amount, 1, 2)', /Condition must be a comparison or boolean field/],
     ['IF("a", 1, 2)', /Condition must be a comparison or boolean field/],
     ['IF(isActive, 1, "a")', /IF branches disagree: number vs text/],
-    ['name < "b"', /Cannot order text values/],
+    ['IF(name < "b", 1, 0)', /Cannot order text values/],
     ['NUMBER(amount)', /NUMBER\(\) takes text, got number/],
+    ['IF(myLinks = "x", 1, 0)', /Cannot compare/],            // opaque kind: 1b parity
+    ['TEXT(myLinks)', /TEXT\(\) cannot render a LINKS field/], // opaque in TEXT()
   ])('%s is rejected: %s', (expression, message) => {
     const result = kindOf(expression);
     expect(result.kind).toBeNull();
     expect(result.error).toMatch(message);
   });
+  // add ['myLinks', 'LINKS'] to the kinds fixture map for the opaque rows
   it('treats unknown kinds as unconstrained (skip, never reject)', () => {
     const noKinds: KindLookup = () => undefined;
-    expect(inferExpressionKind(parse('mystery = "x"'), 'company', noKinds).error).toBeNull();
+    expect(inferExpressionKind(parse('IF(mystery = "x", 1, 0)'), 'company', noKinds).error).toBeNull();
     expect(inferExpressionKind(parse('mystery + 1'), 'company', noKinds)).toEqual(
       { kind: 'unknown', error: null },
     );
-  });
-  it('SELECT compares as text', () => {
-    expect(kindOf('stage = "Won"')).toEqual({ kind: 'boolean', error: null });
   });
   it('stamps renderAs on TEXT nodes from the operand kind', () => {
     const ast = parse('TEXT(closeDate) & TEXT(amount) & TEXT(isActive) & TEXT(name)');
@@ -282,7 +303,7 @@ describe('inferExpressionKind', () => {
 describe('strictKindGateError', () => {
   const gate = (expression: string, targetFieldType: string): string | null =>
     strictKindGateError({ ast: parse(expression), hostObject: 'company',
-      targetFieldType, outputFormat: null, fieldKinds: lookup });
+      targetFieldType, fieldKinds: lookup });
   it('output gate: kind must match the target', () => {
     expect(gate('amount * 2', 'NUMBER')).toBeNull();
     expect(gate('closeDate + 30', 'DATE')).toBeNull();
@@ -293,7 +314,7 @@ describe('strictKindGateError', () => {
   it('mirror-lane and unknown-kind definitions are never gated', () => {
     expect(gate('isActive', 'BOOLEAN')).toBeNull();          // mirror lane, 1c owns it
     expect(strictKindGateError({ ast: parse('mystery'), hostObject: 'company',
-      targetFieldType: 'NUMBER', outputFormat: null, fieldKinds: () => undefined })).toBeNull();
+      targetFieldType: 'NUMBER', fieldKinds: () => undefined })).toBeNull();
   });
 });
 ```
@@ -317,11 +338,26 @@ describe('strictKindGateError', () => {
 - Consumes: `strictKindGateError` (Task 2).
 - Produces: `validateExpressionCore` rejects kind mismatches with the Task 2 messages. Behavior contract: mirror-lane validation (branch 1c) unchanged; H3's bare-BOOLEAN-onto-TEXT rejection now comes from the output gate (boolean ≠ text) — same protection, new message.
 
-- [ ] **Step 1: Write failing tests** (extend `validation-core.spec.ts`; reuse its existing fixture style):
+- [ ] **Step 1: Write failing tests.** `validation-core.spec.ts` calls `validateExpressionCore({...})` inline (see :26-40 for the shape) — define these two local helpers at the top of the new describe, then the cases:
 
 ```ts
+const kinds = new Map<string, string>([
+  ['amount', 'NUMBER'], ['closeDate', 'DATE'], ['name', 'TEXT'],
+  ['isActive', 'BOOLEAN'], ['myLinks', 'LINKS'],
+]);
+const validate = (expression: string, targetFieldType: string) =>
+  validateExpressionCore({
+    expression, hostObject: 'company', targetField: 'result', targetFieldType,
+    fieldKinds: (object) => (object === 'company' ? kinds : undefined), otherFormulas: [],
+  });
+const validateWithoutKinds = (expression: string, targetFieldType: string) =>
+  validateExpressionCore({
+    expression, hostObject: 'company', targetField: 'result', targetFieldType,
+    otherFormulas: [],
+  });
+
 it('rejects a date field compared to a bare text literal at save', () => {
-  const result = validate('closeDate = "2026-01-15"', 'NUMBER');
+  const result = validate('IF(closeDate = "2026-01-15", 1, 0)', 'NUMBER');
   expect(result.valid).toBe(false);
   expect(result.error).toMatch(/Cannot compare date with text/);
 });
@@ -334,15 +370,18 @@ it('rejects a number expression onto a TEXT target without TEXT()', () => {
 it('still rejects a bare BOOLEAN reference onto a TEXT target (H3 parity)', () => {
   expect(validate('isActive', 'TEXT').valid).toBe(false);
 });
+it('still rejects a bare LINKS reference onto a TEXT target (1d parity via opaque)', () => {
+  expect(validate('myLinks', 'TEXT').valid).toBe(false);
+});
 it('skips kind checks when no kinds map is supplied (unknown-kind policy)', () => {
-  expect(validateWithoutKinds('mystery = "x"', 'NUMBER').valid).toBe(true);
+  expect(validateWithoutKinds('IF(mystery = "x", 1, 0)', 'NUMBER').valid).toBe(true);
 });
 ```
 
 Update the existing 1b-pinned tests (string-comparison rejection messages) to the new kind-mismatch copy; the PROTECTION must survive, only the message changes.
 - [ ] **Step 2: Run** — FAIL.
-- [ ] **Step 3: Implement.** In `validateExpressionCore` after the parse step: engine-lane only (same condition branch 1c uses, inverted), call `strictKindGateError({ ast, hostObject, targetFieldType, outputFormat: undefined, fieldKinds })`; non-null → `{ valid: false, error, dependencies }`. Delete branches 1b and 1d and `collectStringComparisonRefs` (function, export, its dependencies.spec tests). `outputFormat` is not currently a validation input — pass `undefined`; gate logic must not need it (mirror detection uses targetFieldType alone, matching 1c's condition).
-  In `handle-formula-change.ts`, replace the bare-ref-only cross preload (:103-110) with:
+- [ ] **Step 3: Implement.** In `validateExpressionCore` after the parse step, call `strictKindGateError({ ast, hostObject, targetFieldType, fieldKinds })` (the helper itself returns null for mirror-lane/blank targets — its predicate is authoritative, Task 2); non-null → `{ valid: false, error, dependencies }`. Keep branch 1c (mirror validation) untouched. Delete branches 1b and 1d and `collectStringComparisonRefs` (function, export, its dependencies.spec tests).
+  In `handle-formula-change.ts` (:95-121), KEEP the host-object preload (`if (after.targetObject) await preloadKinds(after.targetObject)`) and replace only the bare-ref-only cross preload with:
 
 ```ts
 try {
@@ -411,7 +450,8 @@ it('DATE-target formula whose value is unchanged performs zero writes across two
 });
 ```
 
-  (Write the fixture concretely in the style of recompute.spec's existing mock client at :22-45 — stored target `"2026-01-15"`, formula `targetFieldType: 'DATE'`, expression referencing a same-record DATE source with the same serial, `fieldKindsByObject` supplied.)
+  (Fixture: use `FakeClient` from `src/logic-functions/lib/__tests__/fake-client.ts` — it supports `setFieldKinds`, `seed`, `writes`, `mutations`, `querySelections`; the B6 describe at `recompute.spec.ts:843-870` is the exemplar that already combines `setFieldKinds` + `seed` + a full formula literal. Stored target `"2026-01-15"`, formula `targetFieldType: 'DATE'`, expression referencing a same-record DATE source with the same serial, `fieldKindsByObject` supplied.)
+  **Callers that must receive kinds or visibly degrade (do not miss these two):** `handle-record-update.ts:217` (`computeFormulaValueForRecord` inside the override-detection loop) and `front-components/formula-editor.tsx:782` (`recomputeForRecord` behind the widget's recompute-now action). Without kinds, a DATE reference resolves verbatim as text and `closeDate + 30` becomes a NON_NUMERIC_VALUE eval error on those paths. Task 5 threads the event-path map (built BEFORE the override loop); the editor site resolves kinds itself via its client (it is per-user-click — one cached `fieldKinds` call is fine).
 - [ ] **Step 2: Run the three specs** — FAIL (old behavior still present).
 - [ ] **Step 3: Implement** per the interface block above. `buildResolver`'s kind lookup: root segment of `reference.path` / `reference.ref.fieldPath` via `kindContext.kindsByObject.get(objectName)`. No metadata calls anywhere in this file — the maps arrive prebuilt.
 - [ ] **Step 4: Run the three specs, then the full suite** — PASS. Some evaluator/recompute tests that relied on sniffing will fail — update each to supply kinds or to pin the new verbatim behavior; every changed pin is part of the reversal and must be listed in the task report.
@@ -444,16 +484,24 @@ export const resolveKindsForFormula = async (
 ): Promise<Map<string, Map<string, string>>>;
 ```
 
-- `computeFormulaValueForRecord`/`planRecomputeForRecord`/`recomputeForRecord` use `args.compiled` when present, else compile (backstop for direct callers). `recomputeAllRecords` compiles ONCE before the page loop and calls `resolveKindsForFormula` ONCE (host object + every `dependencies.crossRecordRefs` object via the existing `resolveFieldKinds` — all cached pulls), threading both into every `planRecomputeForRecord` call.
-- `handleRecordUpdate`: the existing per-formula `safeCompile` result is passed as `compiled` (stop the second compile inside `recomputeForRecord`); kinds resolved ONCE PER EVENT (union of host + cross objects across matched formulas), threaded to all. Acknowledged new rent (spec D5): one cached `fieldKinds` call per event where the prefetched path had none; cold-invocation cost is one metadata pull — measured in the live pass.
+- `computeFormulaValueForRecord`/`planRecomputeForRecord`/`recomputeForRecord` use `args.compiled` when present, else compile (backstop for direct callers). `recomputeAllRecords` compiles ONCE before the page loop and calls `resolveKindsForFormula` ONCE (host object + every `dependencies.crossRecordRefs` object via the existing `resolveFieldKinds` — all cached pulls), threading both into every `planRecomputeForRecord` call. Also thread the hoisted `compiled` into `buildScanSelection` and `expressionUsesTodayOf` (both currently compile independently — `scan-selection.ts:42`, `recompute.ts:83`), bringing the per-pass parse count to exactly 1 for engine-lane formulas.
+- `handleRecordUpdate`: the existing per-formula `safeCompile` result is passed as `compiled` (stop the second compile inside `recomputeForRecord`); kinds resolved ONCE PER EVENT (union of host + cross objects across matched formulas), built BEFORE the override-detection loop at :137 (it calls `computeFormulaValueForRecord` at :217 and needs the same map — see Task 4) and threaded to both loops. Acknowledged new rent (spec D5): one cached `fieldKinds` call per event where the prefetched path had none; cold-invocation cost is one metadata pull — measured in the live pass.
+- Mirror-lane note: `isMirrorFormula` (recompute.ts:236-248) short-circuits before compiling for engine-family targets but compiles per record for mirror targets — pass `compiled` there too; the mirror-lane call-count pin is a separate test with its own expected count.
 
 - [ ] **Step 1: Write failing call-count pins** (behavioral, not timing):
 
 ```ts
+// SEAM (verified empirically): vi.spyOn on the src/engine barrel records ZERO calls —
+// compileFormula binds parse from src/engine/parser directly. Mock the parser module:
+vi.mock('src/engine/parser', async (importActual) => {
+  const actual = await importActual<typeof import('src/engine/parser')>();
+  return { ...actual, parse: vi.fn(actual.parse) };
+});
+// Baseline today is 5 parses for a 3-record pass (buildScanSelection + 3 per-record +
+// expressionUsesTodayOf). After hoisting + threading, exactly 1.
 it('compiles once per pass, not per record', async () => {
-  const parseSpy = vi.spyOn(engineModule, 'parse');   // via vi.mock of src/engine with importActual
   await recomputeAllRecords(client, formula);          // fixture: 3 records
-  expect(parseSpy).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(parse)).toHaveBeenCalledTimes(1);
 });
 it('resolves field kinds once per pass', async () => {
   // count client.fieldKinds invocations on the mock client: expect per-object memoized,
@@ -465,7 +513,7 @@ it('planRecomputeForRecord uses the provided compiled program', async () => {
 });
 ```
 
-(If `vi.spyOn` on the engine barrel fights the bundler, count via a wrapper: export a `compileFormulaCached` seam in recompute.ts and pin on the mock client's query/field-kinds call counts instead — the observable contract is "metadata and parse work do not scale with record count".)
+(The observable contract is "metadata and parse work do not scale with record count"; if the module mock fights the alias config, fall back to pinning `FakeClient` query/field-kinds call counts only.)
 - [ ] **Step 2: Run** — FAIL (parse currently called per record).
 - [ ] **Step 3: Implement** per the interface block. Keep the try/catch shape at recompute.ts:298-308 for the compile backstop.
 - [ ] **Step 4: Full suite** — PASS.
@@ -483,7 +531,9 @@ it('planRecomputeForRecord uses the provided compiled program', async () => {
 
 **Interfaces:**
 - Consumes: `strictKindGateError` (Task 2), `resolveKindsForFormula` + `CompiledFormula` (Task 5).
-- Produces: contract — `recomputeAllRecords` on a gate-failing definition performs ZERO record queries and returns exactly one synthetic outcome `{ formulaId, targetRecordId: '', changed: false, value: emptyValue, error: gateError }`; the heartbeat then records the error write-avoidantly (existing path). `handleRecordUpdate` `continue`s past gate-failing formulas (no write — the sweep surfaces the error within the hour). After `recordEvaluationHeartbeat` writes, it assigns the written `lastError`/`lastValue`/`lastValueText`/`lastEvaluatedAt` back onto the passed `formula` object so `formula-sweep.ts:89-94`'s comparison sees fresh state and skips its redundant second write.
+- Produces: contract — `recomputeAllRecords` on a gate-failing definition performs ZERO record queries and returns exactly one synthetic outcome `{ formulaId, targetRecordId: '', changed: false, value: emptyValue, error: gateError }`; the heartbeat then records the error write-avoidantly (existing path). **Gate placement in `recomputeAllRecords` is load-bearing:** immediately after `emptyValue` (recompute.ts:748, already in scope for the synthetic outcome) and BEFORE `loadOverriddenRecordIds` (:751) and `buildScanSelection` (:766) — otherwise every gate-failing definition still pays one query + one metadata read per sweep.
+  `handleRecordUpdate` computes `gateErrorByFormulaId` once per event (alongside the Task 5 hoisted kinds, before :137) and `continue`s on it in BOTH loops — the override-detection loop (:137-262) and the formula loop (:264). A gated formula must never turn a human edit into an override row: "what would the formula say?" has no answer while broken, exactly the posture the existing `status === 'OFFLINE'` skip at :147 encodes. This also removes the per-event fetch+evaluate cost for gated definitions.
+  After each `updateFormulaBookkeeping` call inside `recordEvaluationHeartbeat`, assign **exactly the fields in that call's `update` object** back onto the passed `formula` (four write sites, four one-line spreads: text lane writes lastValueText/lastError/lastEvaluatedAt; number lane lastValue/lastError/lastEvaluatedAt; two TODAY-staleness branches lastEvaluatedAt only). A blanket four-field assignment would desync memory from the row. Result: `formula-sweep.ts:89-94`'s comparison sees fresh state and skips its redundant second write in every lane.
 
 - [ ] **Step 1: Write failing tests:**
 
@@ -494,10 +544,14 @@ it('gate-failing definition: no record scan, one synthetic error outcome', async
   const outcomes = await recomputeAllRecords(client, formula);
   expect(outcomes).toHaveLength(1);
   expect(outcomes[0].error).toMatch(/Cannot compare date with text/);
-  expect(recordPageQueries(client)).toBe(0);   // fixture counts target-object queries
+  const recordPageQueries = (fake: FakeClient): number =>
+    fake.querySelections.filter((selection) => Object.keys(selection)[0] === 'opportunities').length;
+  expect(recordPageQueries(client)).toBe(0);   // zero target-object queries: no scan, no overrides load
 });
-it('event path skips gate-failing formulas without writing', async () => {
-  // handleRecordUpdate with the same formula: no mutation calls for the target record
+it('event path skips gate-failing formulas in BOTH loops: no recompute write, no override row', async () => {
+  // handleRecordUpdate with the same gated formula, simulating a human edit to the target field:
+  // expect zero mutations against the target record AND zero formulaOverride creates —
+  // assert on client.mutations (FakeClient) filtered by object
 });
 it('heartbeat write syncs the in-memory record (no sweep double-write)', async () => {
   await recordEvaluationHeartbeat(client, formula, { value, error: 'X' }, false);
@@ -514,7 +568,7 @@ it('cast runtime failures still error per record with write:null', async () => {
 ```
 
 - [ ] **Step 2: Run** — FAIL.
-- [ ] **Step 3: Implement.** In `recomputeAllRecords`, after the Task 5 hoisted compile + kinds: `const gateError = strictKindGateError({ ast: compiled.ast, hostObject: targetObject, targetFieldType: formula.targetFieldType, outputFormat: formula.outputFormat, fieldKinds: (object) => kindsByObject.get(object) }); if (gateError !== null) { const outcome = { formulaId: formula.id, targetRecordId: '', changed: false, value: emptyValue, error: gateError }; await recordEvaluationHeartbeat(client, formula, { value: emptyValue, error: gateError }, false); return [outcome]; }` — mirroring the cyclic-skip's write-avoidance via the heartbeat's existing comparison. Same check in `handleRecordUpdate`'s loop right after `safeCompile` → `continue` on failure. Heartbeat sync: after each `updateFormulaBookkeeping` call inside `recordEvaluationHeartbeat`, assign the written fields onto `formula`.
+- [ ] **Step 3: Implement.** In `recomputeAllRecords`, at the placement pinned above: `const gateError = strictKindGateError({ ast: compiled.ast, hostObject: targetObject, targetFieldType: formula.targetFieldType, fieldKinds: (object) => kindsByObject.get(object) }); if (gateError !== null) { const outcome = { formulaId: formula.id, targetRecordId: '', changed: false, value: emptyValue, error: gateError }; await recordEvaluationHeartbeat(client, formula, { value: emptyValue, error: gateError }, false); return [outcome]; }` — mirroring the cyclic-skip's write-avoidance via the heartbeat's existing comparison. In `handleRecordUpdate`: build `gateErrorByFormulaId` before the override-detection loop and `continue` on it in both loops (contract above). Heartbeat sync: per-branch field assignment (contract above).
 - [ ] **Step 4: Full suite** — PASS.
 - [ ] **Step 5: Commit** `feat(formula-field): per-definition strict gate (no scan for statically-broken defs); heartbeat state sync`
 
@@ -577,7 +631,7 @@ Per enabled formula: compile (parse failure → report as PARSE), resolve kinds 
 
 **Interfaces:** none new. This task exists because Tasks 3-6 each updated the pins they broke; this one proves NOTHING ELSE still encodes the old semantics.
 
-- [ ] **Step 1:** `npx vitest run` — fix every remaining failure by re-pinning to strict semantics. Grep-audit for stale doctrine: `grep -rn "B2\|B6\|date-shaped\|truthiness\|coerces numeric-shaped" src/**/__tests__/` — every hit must either be a reversal pin (new semantics, comment referencing this design doc) or be deleted with justification in the task report.
+- [ ] **Step 1:** `npx vitest run` — fix every remaining failure by re-pinning to strict semantics. Grep-audit for stale doctrine: `grep -rn "B2\|B6\|date-shaped\|truthiness\|coerces numeric-shaped" src/**/__tests__/` — every hit must either be a reversal pin (new semantics, comment referencing this design doc) or be deleted with justification in the task report. Add the design's hot-path assertion as a static check: `grep -rn "validateExpressionCore\|validateFormula" src/logic-functions/lib/recompute.ts src/logic-functions/lib/handle-record-update.ts src/logic-functions/formula-sweep.ts` must return nothing — recompute paths gate via `strictKindGateError` only, never full validation.
 - [ ] **Step 2:** `npx vitest run` green; `npx tsc --noEmit` (or the package's typecheck target) clean; `npx oxlint` (repo lint config) clean.
 - [ ] **Step 3: Commit** `test(formula-field): re-pin suite to strict kind semantics (B2/B6 reversal complete)`
 

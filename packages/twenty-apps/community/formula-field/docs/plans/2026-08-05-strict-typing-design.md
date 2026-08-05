@@ -234,3 +234,12 @@ Then: F1 empty-string investigation, then the SELECT output arc.
     for statically-undecidable failures. Driven by the opus efficiency review (findings F1-F12),
     which also produced the D4 scope guard, hoisted compilation, once-per-pass kind resolution,
     the unknown-kind skip policy, TEXT `renderAs` annotation, and DATE() constant folding.
+11. (Implementation-plan review, user-adjudicated) NUMBER/TEXT/DATE are reserved only when
+    immediately followed by "(" — a bare `date`/`text`/`number` stays a field reference, so
+    fields with those names keep working. Deliberate departure from the hard-reserved IF/SUM
+    precedent.
+12. (Implementation-plan review) The kind lattice gains `opaque` for known-but-non-lattice field
+    types (LINKS, MULTI_SELECT, ADDRESS, RATING, ...): opaque mismatches every operation,
+    preserving the save-time rejections the retired pattern branches 1b/1d provided; `unknown`
+    (metadata unavailable) still skips. Without this, retiring 1b/1d would have silently
+    loosened validation.
