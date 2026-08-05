@@ -1,4 +1,8 @@
 import { type AstNode } from 'src/engine/ast';
+import {
+  epochDaysToDateString,
+  epochDaysToIsoDateTime,
+} from 'src/engine/date-serial';
 import { FormulaError } from 'src/engine/errors';
 import {
   formatNumberAsText,
@@ -82,8 +86,22 @@ export type EvaluateOptions = {
   todayEpochDay?: number;
 };
 
+// Bounds how much of a non-numeric value's content lands in a FormulaError
+// message (and from there, FormulaDefinition.lastError) — a long TEXT field
+// must not dump its entire content into an error record.
+const MAX_ERROR_VALUE_EXCERPT_LENGTH = 80;
+
+const excerptForError = (stringified: string): string =>
+  stringified.length > MAX_ERROR_VALUE_EXCERPT_LENGTH
+    ? `${stringified.slice(0, MAX_ERROR_VALUE_EXCERPT_LENGTH)}…`
+    : stringified;
+
 // Point-of-use numeric coercion for the text domain. Date-shaped strings were
 // already coerced to serials at resolve time, so only Number() applies here.
+// This is the evaluator's ONE choke point for numeric coercion — arithmetic
+// and NUMBER() both funnel through it, so the excerpt bound above covers both.
+// coerceToNumber's own NON_NUMERIC_VALUE message (coercion.ts) is a separate,
+// still-unbounded chokepoint on the resolver side (Task 4).
 const toNumber = (value: number | string): number => {
   if (typeof value === 'number') {
     return value;
@@ -97,7 +115,7 @@ const toNumber = (value: number | string): number => {
   }
   throw new FormulaError(
     'NON_NUMERIC_VALUE',
-    `Text value is not numeric (${JSON.stringify(value)})`,
+    `Text value is not numeric (${excerptForError(JSON.stringify(value))})`,
   );
 };
 
@@ -428,6 +446,40 @@ const evaluateNode = (
       const value = evaluateNode(node.value, resolve, depth + 1, maxDepth, todayEpochDay);
       const fallback = evaluateNode(node.fallback, resolve, depth + 1, maxDepth, todayEpochDay);
       return isBlankValue(value) ? fallback : value;
+    }
+
+    // DATE("YYYY-MM-DD") already constant-folded to its epoch-day serial at
+    // parse time (parser.ts) — evaluation is trivial by construction.
+    case 'dateliteral':
+      return node.value;
+
+    // NUMBER(x) — coerces the operand into the numeric domain via the same
+    // point-of-use coercion arithmetic uses, but as an explicit cast.
+    case 'numbercast': {
+      const value = evaluateNode(node.operand, resolve, depth + 1, maxDepth, todayEpochDay);
+      if (value === null) return null;
+      return typeof value === 'number' ? value : toNumber(value);
+    }
+
+    // TEXT(x) — renders the operand as text. `renderAs` is stamped by kind
+    // inference (Task 2); absent, it behaves as 'value' (canonical decimal
+    // rendering for numbers, verbatim passthrough for text) — the same
+    // rendering `&` already uses, so TEXT(amount) matches `amount & ""`.
+    case 'textcast': {
+      const value = evaluateNode(node.operand, resolve, depth + 1, maxDepth, todayEpochDay);
+      if (value === null) return null;
+      switch (node.renderAs) {
+        case 'date':
+          return typeof value === 'number' ? epochDaysToDateString(value) : value;
+        case 'datetime':
+          return typeof value === 'number' ? epochDaysToIsoDateTime(value) : value;
+        case 'boolean':
+          return typeof value === 'number' ? (value === 0 ? 'false' : 'true') : value;
+        case 'number':
+        case 'value':
+        default:
+          return typeof value === 'number' ? formatNumberAsText(value) : value;
+      }
     }
 
     // ADR 0017: AND/OR/NOT/ISBLANK are transient condition nodes handled inside

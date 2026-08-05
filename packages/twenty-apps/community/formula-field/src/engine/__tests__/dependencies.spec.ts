@@ -195,6 +195,22 @@ describe('dependency extraction', () => {
       },
     ]);
   });
+
+  it('should contribute no dependency for a DATE() literal (parse-time constant)', () => {
+    const deps = extractDependencies('DATE("2026-01-15")');
+    expect(deps.sameRecordFields).toEqual([]);
+    expect(deps.crossRecordRefs).toEqual([]);
+  });
+
+  it('should collect the operand as a dependency for NUMBER() and TEXT()', () => {
+    expect(extractDependencies('NUMBER(code)').sameRecordFields).toEqual(['code']);
+    expect(extractDependencies('TEXT(amount)').sameRecordFields).toEqual(['amount']);
+  });
+
+  it('should collect nested dependencies through a cast operand', () => {
+    const deps = extractDependencies('NUMBER(a + b)');
+    expect(deps.sameRecordFields).toEqual(['a', 'b']);
+  });
 });
 
 describe('usesToday', () => {
@@ -272,6 +288,17 @@ describe('usesToday', () => {
   it('detects TODAY() inside a concatenation operand', () => {
     expect(usesToday(parse('TODAY() & ""'))).toBe(true);
     expect(usesToday(parse('a & "x"'))).toBe(false);
+  });
+
+  it('returns false for a DATE() literal (parse-time constant, no TODAY())', () => {
+    expect(usesToday(parse('DATE("2026-01-15")'))).toBe(false);
+  });
+
+  it('detects TODAY() nested inside a NUMBER()/TEXT() cast operand', () => {
+    expect(usesToday(parse('NUMBER(TODAY())'))).toBe(true);
+    expect(usesToday(parse('TEXT(TODAY())'))).toBe(true);
+    expect(usesToday(parse('NUMBER(a)'))).toBe(false);
+    expect(usesToday(parse('TEXT(a)'))).toBe(false);
   });
 });
 

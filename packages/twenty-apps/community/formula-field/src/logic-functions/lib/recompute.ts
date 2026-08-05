@@ -26,7 +26,7 @@ import {
   coerceToEngineValue,
   navigatePath,
 } from 'src/logic-functions/lib/coercion';
-import { currentEpochDay } from 'src/logic-functions/lib/date-serial';
+import { currentEpochDay } from 'src/logic-functions/lib/current-epoch-day';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import {
   recordEvaluationHeartbeat,

@@ -4,7 +4,7 @@ import {
   coerceToEngineValue,
   coerceToNumber,
 } from 'src/logic-functions/lib/coercion';
-import { MS_PER_DAY } from 'src/logic-functions/lib/date-serial';
+import { MS_PER_DAY } from 'src/engine/date-serial';
 
 // Coercion of raw field values to the engine's number domain, focused on the
 // Excel serial-date model (ADR 0011): DATE/DATE_TIME strings parse to epoch-days

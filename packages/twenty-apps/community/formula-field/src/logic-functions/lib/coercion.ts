@@ -5,7 +5,7 @@ import {
   isIsoDateTimeString,
   parseDateOnlyToEpochDays,
   parseIsoDateTimeToEpochDays,
-} from 'src/logic-functions/lib/date-serial';
+} from 'src/engine/date-serial';
 
 // Turns a raw field value (as returned by the GraphQL API) into the number the
 // interpreter works with, applying the coercion rules from ADR 0003.

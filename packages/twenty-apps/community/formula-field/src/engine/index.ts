@@ -1,7 +1,14 @@
 // Public surface of the pure formula engine. Everything here is I/O-free and
 // unit-tested — the recompute engine and front component build on top of it.
 
-export { type AstNode } from 'src/engine/ast';
+export {
+  type AstNode,
+  type ConcatNode,
+  type DateLiteralNode,
+  type NumberCastNode,
+  type RenderKind,
+  type TextCastNode,
+} from 'src/engine/ast';
 export {
   detectCycle,
   type CycleResult,

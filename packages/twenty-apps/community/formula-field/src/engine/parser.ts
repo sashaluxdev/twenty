@@ -3,6 +3,7 @@ import {
   type BinaryOperator,
   type ComparisonOperator,
 } from 'src/engine/ast';
+import { parseDateOnlyToEpochDays } from 'src/engine/date-serial';
 import { FormulaError } from 'src/engine/errors';
 import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 
@@ -13,7 +14,8 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 //   term         := unary (('*' | '/' | '%') unary)*
 //   unary        := ('+' | '-') unary | primary
 //   primary      := NUMBER | STRING | FIELD | CROSSREF | if | today | sum
-//                 | ifblank | ifs | switch | '(' concat ')'
+//                 | ifblank | ifs | switch | numbercast | textcast
+//                 | dateliteral | '(' concat ')'
 //   if           := IF '(' condition ',' concat ',' concat ')'
 //   today        := TODAY '(' ')'
 //   sum          := SUM '(' concat (',' concat)* ')'
@@ -22,6 +24,9 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 //                       (',' condition ',' concat)* (',' concat)? ')'
 //   switch       := SWITCH '(' concat (',' concat ',' concat)+
 //                       (',' concat)? ')'
+//   numbercast   := NUMBER '(' concat ')'
+//   textcast     := TEXT '(' concat ')'
+//   dateliteral  := DATE '(' STRING ')'
 //   condition    := boolFunction | concat (compareOp concat)?
 //   boolFunction := AND '(' condition (',' condition)+ ')'
 //                 | OR  '(' condition (',' condition)+ ')'
@@ -57,6 +62,12 @@ import { type Token, type TokenType, tokenize } from 'src/engine/tokenizer';
 // into nested IfNodes (a NullNode else when no default is given), so the AST the
 // evaluator, dependency walker, and save-time validator see is just IFs — no
 // IFS/SWITCH node type exists at runtime.
+// `NUMBER`, `TEXT` and `DATE` (strict-typing arc) are reserved ONLY by
+// lookahead (case-insensitive): followed immediately by "(" they dispatch as
+// the cast/literal function; bare, or dotted (`date.x`), they remain ordinary
+// field references — unlike every other reserved word above, which errors on
+// bare use. DATE("YYYY-MM-DD") constant-folds to a DateLiteralNode at parse
+// time; NUMBER(x)/TEXT(x) produce cast nodes resolved at evaluation.
 
 // Guards against pathological input. The recursive-descent parser recurses once
 // per nesting level, so unbounded input could overflow the JS call stack before
@@ -265,6 +276,26 @@ class Parser {
             '"SUM" is a reserved word — expected SUM(expr1, ..., exprN)',
             token.position,
           );
+        }
+        // `number` / `text` / `date` (strict-typing arc) dispatch as functions
+        // ONLY when immediately followed by "(" — a LOOKAHEAD-ONLY reservation,
+        // deliberately different from IF/TODAY/SUM/IFS/SWITCH above, which are
+        // hard-reserved (bare use is always an error). These three names are
+        // common field names in real workspaces (a "date" or "text" field is
+        // unremarkable), so a bare reference falls through to the ordinary
+        // field-reference path below instead of erroring.
+        if (token.fieldPath!.toLowerCase() === 'number') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseNumberCast();
+          }
+        } else if (token.fieldPath!.toLowerCase() === 'text') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseTextCast();
+          }
+        } else if (token.fieldPath!.toLowerCase() === 'date') {
+          if (this.tokens[this.position + 1].type === 'LPAREN') {
+            return this.parseDateLiteral();
+          }
         }
         // `ifs` / `switch` (ADR 0018) are reserved value-context functions,
         // dispatched from parsePrimary exactly like SUM/IFBLANK: a ladder
@@ -484,6 +515,113 @@ class Parser {
 
     this.leave();
     return { type: 'sum', args };
+  }
+
+  // NUMBER(value) — a lookahead-reserved cast (strict-typing arc), single
+  // value-context argument. Mirrors parseIsBlank's single-argument structure.
+  private parseNumberCast(): AstNode {
+    this.enter();
+    this.advance(); // the NUMBER identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    const operand = this.parseConcat();
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      if (closing.type === 'COMMA') {
+        throw new FormulaError(
+          'PARSE_ERROR',
+          'NUMBER requires exactly 1 argument: NUMBER(value)',
+          closing.position,
+        );
+      }
+      if (isComparisonToken(closing)) {
+        throw this.comparisonOutsideConditionError(closing);
+      }
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'Missing closing parenthesis ")" after NUMBER argument',
+        closing.position,
+      );
+    }
+    this.advance();
+
+    this.leave();
+    return { type: 'numbercast', operand };
+  }
+
+  // TEXT(value) — a lookahead-reserved cast (strict-typing arc), single
+  // value-context argument. `renderAs` is left unset here; kind inference
+  // (Task 2) stamps it once the operand's kind is known statically.
+  private parseTextCast(): AstNode {
+    this.enter();
+    this.advance(); // the TEXT identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    const operand = this.parseConcat();
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      if (closing.type === 'COMMA') {
+        throw new FormulaError(
+          'PARSE_ERROR',
+          'TEXT requires exactly 1 argument: TEXT(value)',
+          closing.position,
+        );
+      }
+      if (isComparisonToken(closing)) {
+        throw this.comparisonOutsideConditionError(closing);
+      }
+      throw new FormulaError(
+        'PARSE_ERROR',
+        'Missing closing parenthesis ")" after TEXT argument',
+        closing.position,
+      );
+    }
+    this.advance();
+
+    this.leave();
+    return { type: 'textcast', operand };
+  }
+
+  // DATE("YYYY-MM-DD") — a lookahead-reserved literal (strict-typing arc) that
+  // constant-folds at parse time (IFS/SWITCH foldLadder precedent: as much
+  // semantics as possible is resolved here, not at evaluation). Unlike
+  // NUMBER/TEXT, the argument is not a general expression — it must be a
+  // literal STRING token — so there is nothing to recurse into and no depth
+  // frame to guard (TODAY() precedent).
+  private parseDateLiteral(): AstNode {
+    this.advance(); // the DATE identifier
+    this.advance(); // the '(' (presence checked by the caller)
+
+    const invalidLiteralError = (position?: number): FormulaError =>
+      new FormulaError(
+        'PARSE_ERROR',
+        'DATE() requires a literal "YYYY-MM-DD" date',
+        position,
+      );
+
+    const literalToken = this.peek();
+    if (literalToken.type !== 'STRING') {
+      throw invalidLiteralError(literalToken.position);
+    }
+    this.advance();
+
+    const literal = literalToken.stringValue ?? '';
+    let value: number;
+    try {
+      value = parseDateOnlyToEpochDays(literal);
+    } catch {
+      throw invalidLiteralError(literalToken.position);
+    }
+
+    const closing = this.peek();
+    if (closing.type !== 'RPAREN') {
+      throw invalidLiteralError(closing.position);
+    }
+    this.advance();
+
+    return { type: 'dateliteral', value, literal };
   }
 
   // IFBLANK(value, fallback) — a reserved value-context function (ADR 0017),

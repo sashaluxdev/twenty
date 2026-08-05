@@ -5,7 +5,7 @@ import {
   epochDaysToDateString,
   epochDaysToIsoDateTime,
   MS_PER_DAY,
-} from 'src/logic-functions/lib/date-serial';
+} from 'src/engine/date-serial';
 import { type ComputedValue } from 'src/logic-functions/lib/types';
 
 // Reading and writing a formula's VALUE field, abstracting over the field type.

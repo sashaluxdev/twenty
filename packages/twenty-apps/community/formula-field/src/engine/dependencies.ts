@@ -133,6 +133,16 @@ const walk = (
       walk(node.value, sameRecordFields, crossRecordRefs);
       walk(node.fallback, sameRecordFields, crossRecordRefs);
       return;
+
+    // DATE("YYYY-MM-DD") is a parse-time constant — it reads no field.
+    case 'dateliteral':
+      return;
+
+    // NUMBER(x) / TEXT(x) depend on whatever their operand depends on.
+    case 'numbercast':
+    case 'textcast':
+      walk(node.operand, sameRecordFields, crossRecordRefs);
+      return;
   }
 };
 
@@ -197,6 +207,15 @@ export const usesToday = (node: AstNode): boolean => {
 
     case 'ifblank':
       return usesToday(node.value) || usesToday(node.fallback);
+
+    // DATE("YYYY-MM-DD") is a parse-time constant — never clock-dependent.
+    case 'dateliteral':
+      return false;
+
+    // NUMBER(x) / TEXT(x) are clock-dependent iff their operand is.
+    case 'numbercast':
+    case 'textcast':
+      return usesToday(node.operand);
   }
 };
 

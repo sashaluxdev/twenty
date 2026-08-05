@@ -153,6 +153,39 @@ export type NullNode = {
   type: 'null';
 };
 
+// The engine's public string-rendering shapes for TextCastNode (strict-typing
+// arc). 'value' is the default (canonical decimal / verbatim text); the other
+// four are stamped onto TextCastNode by kind inference (Task 2) when the
+// operand's inferred kind is known. Kept opaque here — the engine dispatches
+// on it but never derives it.
+export type RenderKind = 'number' | 'date' | 'datetime' | 'boolean' | 'value';
+
+// DATE("YYYY-MM-DD") constant-folds at parse time (parser.ts): `value` is the
+// already-computed epoch-day serial, `literal` is the source string kept only
+// for error copy — the evaluator never reparses it.
+export type DateLiteralNode = {
+  type: 'dateliteral';
+  value: number;
+  literal: string;
+};
+
+// NUMBER(x) — coerces its operand to the numeric domain, mirroring the point-
+// of-use coercion arithmetic already does, but as an explicit, chainable cast.
+export type NumberCastNode = {
+  type: 'numbercast';
+  operand: AstNode;
+};
+
+// TEXT(x) — renders its operand as text. `renderAs` is OPTIONAL: absent, the
+// evaluator falls back to 'value' behavior (canonical decimal / verbatim
+// text); kind inference (Task 2) stamps a more specific RenderKind once the
+// operand's kind is known statically.
+export type TextCastNode = {
+  type: 'textcast';
+  operand: AstNode;
+  renderAs?: RenderKind;
+};
+
 export type AstNode =
   | NumberNode
   | NullNode
@@ -170,4 +203,7 @@ export type AstNode =
   | OrNode
   | NotNode
   | IsBlankNode
-  | IfBlankNode;
+  | IfBlankNode
+  | DateLiteralNode
+  | NumberCastNode
+  | TextCastNode;

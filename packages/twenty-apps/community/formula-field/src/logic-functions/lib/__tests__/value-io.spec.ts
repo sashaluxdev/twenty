@@ -7,7 +7,7 @@ import {
   targetFieldKind,
   selectionEntryForFieldKind,
 } from 'src/logic-functions/lib/value-io';
-import { MS_PER_DAY } from 'src/logic-functions/lib/date-serial';
+import { MS_PER_DAY } from 'src/engine/date-serial';
 import { isFormulaError } from 'src/engine/errors';
 
 describe('targetFieldKind', () => {

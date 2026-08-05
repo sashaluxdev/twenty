@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { type AstNode } from 'src/engine/ast';
+import { type AstNode, type RenderKind } from 'src/engine/ast';
 import { FormulaError } from 'src/engine/errors';
 import {
   type EngineValue,
@@ -8,6 +8,7 @@ import {
   type VariableResolver,
 } from 'src/engine/evaluator';
 import { parse } from 'src/engine/parser';
+import { MAX_COMPUTED_TEXT_LENGTH } from 'src/engine/text-format';
 
 const resolverFor =
   (values: Record<string, EngineValue | undefined>): VariableResolver =>
@@ -821,6 +822,64 @@ describe('evaluator exhaustiveness guard (hand-built ASTs)', () => {
           /\(\.\.\.\) is only allowed inside an IF condition/,
         );
       }
+    }
+  });
+});
+
+describe('cast evaluation', () => {
+  const resolve: VariableResolver = (ref) =>
+    ref.kind === 'same'
+      ? ({ amount: 42.5, code: ' 42 ', label: 'ACME', when: 20468, flag: 1 } as
+          Record<string, EngineValue>)[ref.path]
+      : null;
+
+  it('evaluates a dateliteral to its epoch-day serial', () => {
+    expect(
+      evaluate({ type: 'dateliteral', value: 20468, literal: '2026-01-15' }, resolve),
+    ).toBe(20468);
+  });
+
+  it('NUMBER trims and parses numeric text, propagates null, and errors on non-numeric', () => {
+    expect(evaluate(parse('NUMBER(code)'), resolve)).toBe(42);
+    expect(evaluate(parse('NUMBER(missing)'), () => null)).toBeNull();
+    expect(() => evaluate(parse('NUMBER(label)'), resolve)).toThrowError(FormulaError);
+  });
+
+  it('TEXT dispatches on renderAs: date, datetime, boolean, number, value', () => {
+    const textOf = (renderAs: RenderKind, operand: AstNode): EngineValue =>
+      evaluate({ type: 'textcast', operand, renderAs }, resolve);
+    expect(textOf('date', { type: 'field', path: 'when' })).toBe('2026-01-15');
+    expect(textOf('number', { type: 'field', path: 'amount' })).toBe('42.5');
+    expect(textOf('boolean', { type: 'field', path: 'flag' })).toBe('true');
+    expect(textOf('value', { type: 'field', path: 'label' })).toBe('ACME');
+  });
+
+  it('TEXT without renderAs behaves as value: numbers render canonically, text passes through', () => {
+    expect(evaluate(parse('TEXT(amount)'), resolve)).toBe('42.5');
+    expect(evaluate(parse('TEXT(label)'), resolve)).toBe('ACME');
+  });
+
+  it('TEXT propagates null', () => {
+    expect(evaluate(parse('TEXT(missing)'), () => null)).toBeNull();
+  });
+
+  it('TEXT results are never length-capped (only & is)', () => {
+    const long = 'x'.repeat(MAX_COMPUTED_TEXT_LENGTH + 100);
+    expect(evaluate(parse('TEXT(label)'), () => long)).toBe(long);
+  });
+
+  it('bounds non-numeric error messages (no unbounded record content in lastError)', () => {
+    // toThrowError does not accept a predicate function in this vitest
+    // version (it throws unconditionally trying to read it as an Error
+    // class), so assert on the caught error directly — same pattern the
+    // "unknown/future node type" test above uses.
+    const longText = 'x'.repeat(500);
+    try {
+      evaluate(parse('NUMBER(label)'), () => longText);
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FormulaError);
+      expect((error as FormulaError).message.length).toBeLessThan(160);
     }
   });
 });

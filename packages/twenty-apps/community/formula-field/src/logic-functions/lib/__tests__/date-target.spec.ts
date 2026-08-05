@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { MS_PER_DAY } from 'src/logic-functions/lib/date-serial';
+import { MS_PER_DAY } from 'src/engine/date-serial';
 import { handleRecordUpdate } from 'src/logic-functions/lib/handle-record-update';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';

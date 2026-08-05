@@ -6,8 +6,14 @@ import { FormulaError } from 'src/engine/errors';
 // (Date.UTC / getTime), never local-Date math, so results are DST-immune.
 //
 // This module is the single chokepoint for date <-> number conversion, shared by
-// the read path (coercion.ts extends coerceToNumber with these parsers) and the
-// write path (value-io.ts serializes epoch-days back with these formatters).
+// the read path (coercion.ts extends coerceToNumber with these parsers), the
+// write path (value-io.ts serializes epoch-days back with these formatters),
+// and the engine itself (parser.ts folds a DATE("YYYY-MM-DD") literal through
+// parseDateOnlyToEpochDays at parse time — text-format.ts precedent: lives in
+// the engine, imported by both layers). It contains NO system-clock read —
+// that lone exception (currentEpochDay) lives app-side in
+// src/logic-functions/lib/current-epoch-day.ts, so the engine stays a pure
+// function of its inputs.
 
 export const MS_PER_DAY = 86_400_000;
 
@@ -60,24 +66,30 @@ export const parseIsoDateTimeToEpochDays = (value: string): number => {
   return millis / MS_PER_DAY;
 };
 
+// 1-entry cache: a scan repeatedly rendering the same serial (e.g.
+// TEXT(TODAY()) across a multi-hundred-record sweep) hits this one value on
+// every call, so caching just the last render skips the Date construction and
+// padding for the whole run.
+let lastRenderedSerial: number | null = null;
+let lastRenderedString = '';
+
 // Serializes epoch-days back to the DATE scalar "yyyy-MM-dd", flooring to the
 // whole UTC day first (a DATE has no time component).
 export const epochDaysToDateString = (epochDays: number): string => {
+  if (epochDays === lastRenderedSerial) {
+    return lastRenderedString;
+  }
   const date = new Date(Math.floor(epochDays) * MS_PER_DAY);
   const year = String(date.getUTCFullYear()).padStart(4, '0');
   const month = String(date.getUTCMonth() + 1).padStart(2, '0');
   const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const rendered = `${year}-${month}-${day}`;
+  lastRenderedSerial = epochDays;
+  lastRenderedString = rendered;
+  return rendered;
 };
 
 // Serializes epoch-days back to an ISO UTC datetime string, rounding to the
 // whole millisecond (the DATE_TIME scalar's resolution).
 export const epochDaysToIsoDateTime = (epochDays: number): string =>
   new Date(Math.round(epochDays * MS_PER_DAY)).toISOString();
-
-// The ONE place the engine's ambient "current date" (TODAY(), ADR 0012) reads
-// the system clock — a whole UTC epoch-day, floored like a DATE target. Callers
-// (recompute.ts) read this once per evaluation and pass it into
-// EvaluateOptions.todayEpochDay; the engine itself never calls Date.now().
-export const currentEpochDay = (): number =>
-  Math.floor(Date.now() / MS_PER_DAY);

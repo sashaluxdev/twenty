@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { type AstNode, type ConcatNode } from 'src/engine/ast';
+import { parseDateOnlyToEpochDays } from 'src/engine/date-serial';
 import { FormulaError } from 'src/engine/errors';
 import { parse } from 'src/engine/parser';
 
@@ -1137,5 +1138,46 @@ describe('parser concat parse-depth boundary (pinned)', () => {
 
     const rejected = 'IF(1,'.repeat(66) + '1' + ',0)'.repeat(66);
     expect(() => parse(rejected)).toThrowError(/max depth/);
+  });
+});
+
+describe('cast and literal functions', () => {
+  it('folds DATE("2026-01-15") to a dateliteral node at parse time', () => {
+    const ast = parse('DATE("2026-01-15")');
+    expect(ast).toEqual({
+      type: 'dateliteral',
+      value: parseDateOnlyToEpochDays('2026-01-15'),
+      literal: '2026-01-15',
+    });
+  });
+  it('rejects DATE with an invalid calendar date at parse', () => {
+    expect(() => parse('DATE("2026-13-40")')).toThrowError(
+      /DATE\(\) requires a literal/,
+    );
+  });
+  it('rejects DATE with a non-literal argument at parse', () => {
+    expect(() => parse('DATE(someField)')).toThrowError(
+      /DATE\(\) requires a literal/,
+    );
+  });
+  it('parses NUMBER(field) into a numbercast node', () => {
+    expect(parse('NUMBER(code)')).toEqual({
+      type: 'numbercast',
+      operand: { type: 'field', path: 'code' },
+    });
+  });
+  it('parses TEXT(amount) into a textcast node without renderAs', () => {
+    expect(parse('TEXT(amount)')).toEqual({
+      type: 'textcast',
+      operand: { type: 'field', path: 'amount' },
+    });
+  });
+  it('enforces arity: NUMBER() and TEXT(a, b) are parse errors', () => {
+    expect(() => parse('NUMBER()')).toThrowError();
+    expect(() => parse('TEXT(a, b)')).toThrowError();
+  });
+  it('keeps a bare field named "date" (or "number"/"text") as an ordinary field reference', () => {
+    expect(parse('date')).toEqual({ type: 'field', path: 'date' });
+    expect(parse('date + 1')).toMatchObject({ type: 'binary' });
   });
 });

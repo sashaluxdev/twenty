@@ -1,7 +1,7 @@
 import {
   epochDaysToDateString,
   epochDaysToIsoDateTime,
-} from 'src/logic-functions/lib/date-serial';
+} from 'src/engine/date-serial';
 import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
 import { decodeMirrorOverrideValue } from 'src/logic-functions/lib/override-repository';
 
