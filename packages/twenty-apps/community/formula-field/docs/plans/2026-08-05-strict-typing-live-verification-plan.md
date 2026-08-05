@@ -311,8 +311,10 @@ State as of 2026-08-05 end of planning session:
 
 - Worktree: `/home/sasha_shin/twenty/.claude/worktrees/strict-typing` (enter via EnterWorktree
   `path:`), branch `strict-typing`; suite 1184/67 green at the plan commit.
-- Postgres/Redis: RUNNING (left up). Server/worker/front: STOPPED — start all three from the
-  worktree (`npx nx start twenty-server`, `npx nx run twenty-server:worker`,
+- Postgres/Redis: systemd system services on this WSL host (auto-start with WSL). First step
+  of any session: `bash packages/twenty-utils/setup-dev-env.sh` (idempotent — ensures
+  services + databases). Server/worker/front: STOPPED — start all three from the worktree
+  (`npx nx start twenty-server`, `npx nx run twenty-server:worker`,
   `npx nx start twenty-front`); `.env` files already in place (copied from the main checkout);
   server healthz on `:3000`.
 - SDK client: already generated in the worktree `node_modules` (gitignored; survives on disk).
