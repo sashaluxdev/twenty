@@ -314,16 +314,20 @@ sourceField                                    a one-term formula copies a field
   user rejected it before deploy — see ADR 0027.
 - **Numeric contexts require the `number` kind, statically (ADR 0027).**
   `zip + 1` over a TEXT field is no longer accepted with implicit numeric
-  coercion — arithmetic, ordering, SUM, and NUMBER()'s own argument all
-  require the `number` kind at save time, so a TEXT operand needs an explicit
-  `NUMBER(zip) + 1`. `&` is not a numeric context and never was: `&` requires
-  `text` operands, so numbers need `TEXT(amount) & "x"`.
-- **`&` semantics.** Numbers render canonically (integers bare, up to 15
-  significant digits, float dust trimmed); `null` contributes the empty string
-  (the ONE place null does not propagate — a template must not blank out because
-  one part is empty), so an all-null concat is `""`; dates render as their raw
-  serial numbers by default, or via `TEXT(dateField)` for `YYYY-MM-DD`
-  formatting (ADR 0027).
+  coercion — arithmetic, ordering, and SUM all require `number` operands at
+  save time, so a TEXT operand needs an explicit `NUMBER(zip) + 1`. NUMBER()
+  goes the other direction: its own argument requires `text`
+  (`NUMBER(numericField)` is itself a save-time rejection — NUMBER() casts
+  text to a number, it does not accept a number). `&` is not a numeric
+  context and never was: `&` requires `text` operands, so numbers need
+  `TEXT(amount) & "x"`.
+- **`&` semantics.** `&` requires every operand to already be `text` (ADR
+  0027) — a number or a date reaching `&` must be wrapped in `TEXT(...)`
+  first; there is no implicit rendering path any more. `TEXT(...)` renders
+  numbers canonically (integers bare, up to 15 significant digits, float
+  dust trimmed) and dates as `YYYY-MM-DD`. `null` contributes the empty
+  string (the ONE place null does not propagate — a template must not blank
+  out because one part is empty), so an all-null concat is `""`.
 - **`TEXT_TOO_LONG`.** The running result of a `&` chain is capped at 10 000
   characters, checked after each part. The cap is concat-only: a long TEXT field
   flowing through a one-term formula or an IF branch is never capped, which is
@@ -333,10 +337,13 @@ sourceField                                    a one-term formula copies a field
   rejected — a number can never equal its text form, even by accident.
   Ordering (`< <= > >=`) remains restricted to number/date/datetime, and both
   sides must share that kind too.
-- **TEXT targets.** A Text-format definition writes the computed string verbatim;
-  a number result renders through the same canonical rendering `&` uses. A
-  one-term formula naming another TEXT (or SELECT) field is the sanctioned way to
-  mirror it; a bare reference to a field of any other kind is rejected at save.
+- **TEXT targets.** A Text-format definition's expression must itself infer
+  `text` (the output gate, ADR 0027) — it writes the computed string
+  verbatim. A bare number- (or date-, or boolean-) inferring expression is
+  **rejected at save**, not silently rendered; wrap it in `TEXT(...)` to
+  produce text explicitly (`TEXT(amount)`, not `amount`). A one-term formula
+  naming another TEXT (or SELECT) field is the sanctioned way to mirror it;
+  a bare reference to a field of any other kind is rejected at save.
 
 ### Dates (Excel serial model, ADR 0011)
 
