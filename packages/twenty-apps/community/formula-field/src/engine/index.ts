@@ -16,14 +16,12 @@ export {
 } from 'src/engine/cycle-detection';
 export {
   bareReferenceOf,
-  collectStringComparisonRefs,
   extractDependencies,
   extractDependenciesFromAst,
   usesToday,
   type BareReference,
   type CrossRecordDependency,
   type FormulaDependencies,
-  type StringComparisonRefs,
 } from 'src/engine/dependencies';
 export { FormulaError, isFormulaError, type FormulaErrorCode } from 'src/engine/errors';
 export {

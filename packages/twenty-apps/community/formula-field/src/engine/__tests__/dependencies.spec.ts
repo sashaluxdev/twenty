@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   bareReferenceOf,
-  collectStringComparisonRefs,
   extractDependencies,
   usesToday,
 } from 'src/engine/dependencies';
@@ -299,116 +298,6 @@ describe('usesToday', () => {
     expect(usesToday(parse('TEXT(TODAY())'))).toBe(true);
     expect(usesToday(parse('NUMBER(a)'))).toBe(false);
     expect(usesToday(parse('TEXT(a)'))).toBe(false);
-  });
-});
-
-describe('collectStringComparisonRefs', () => {
-  it('collects a same-record field compared against a string literal', () => {
-    const refs = collectStringComparisonRefs(parse('IF(status = "active", 1, 0)'));
-    expect(refs.sameRecordPaths).toEqual(['status']);
-    expect(refs.crossRefs).toEqual([]);
-  });
-
-  it('collects a cross-record ref compared against a string literal', () => {
-    const refs = collectStringComparisonRefs(
-      parse(`IF([company:${UUID}:name] = "Acme", 1, 0)`),
-    );
-    expect(refs.sameRecordPaths).toEqual([]);
-    expect(refs.crossRefs).toEqual([
-      { object: 'company', recordId: UUID, fieldPath: 'name' },
-    ]);
-  });
-
-  it('ignores two string literals compared directly (no field operand)', () => {
-    const refs = collectStringComparisonRefs(parse('IF("A" = "B", 1, 0)'));
-    expect(refs.sameRecordPaths).toEqual([]);
-    expect(refs.crossRefs).toEqual([]);
-  });
-
-  it('ignores a purely numeric comparison (not string mode)', () => {
-    const refs = collectStringComparisonRefs(parse('IF(amount > 5, amount, 0)'));
-    expect(refs.sameRecordPaths).toEqual([]);
-    expect(refs.crossRefs).toEqual([]);
-  });
-
-  it('does not collect the IF branches, only the compared operand', () => {
-    const refs = collectStringComparisonRefs(
-      parse('IF(stage = "QUALIFIED", branchA, branchB)'),
-    );
-    expect(refs.sameRecordPaths).toEqual(['stage']);
-  });
-
-  it('reaches a string comparison nested inside an AND/OR/NOT combinator (ADR 0017)', () => {
-    // Save-time field-kind validation must see the string operand even when the
-    // comparison is nested inside a boolean combinator.
-    const refs = collectStringComparisonRefs(
-      parse('IF(AND(stage = "won", amount > 1000), 1, 0)'),
-    );
-    expect(refs.sameRecordPaths).toEqual(['stage']);
-    const orRefs = collectStringComparisonRefs(
-      parse('IF(OR(NOT(stage = "lost"), region = "EU"), 1, 0)'),
-    );
-    expect(orRefs.sameRecordPaths).toEqual(['region', 'stage']);
-  });
-
-  it('finds a string comparison nested inside an operand sub-IF', () => {
-    const refs = collectStringComparisonRefs(
-      parse('IF(IF(status = "x", 1, 0) = 1, tier, 0)'),
-    );
-    expect(refs.sameRecordPaths).toEqual(['status']);
-  });
-
-  it('deduplicates and sorts collected same-record paths', () => {
-    const refs = collectStringComparisonRefs(
-      parse('IF(tier = "gold", IF(stage = "NEW", 1, IF(tier = "gold", 2, 3)), 0)'),
-    );
-    expect(refs.sameRecordPaths).toEqual(['stage', 'tier']);
-  });
-
-  // ADR 0018: string SWITCH keys ride the existing string-comparison machinery
-  // because the parser desugars `SWITCH(stage, "lead", ...)` into a real
-  // `IF(stage = "lead", ...)` comparison node. Save-time field-kind validation
-  // (validate-expression.ts calls collectStringComparisonRefs on the parsed AST)
-  // therefore reaches the SWITCH subject with NO production change.
-  it('reaches the SWITCH subject compared against string keys (save-time kind check)', () => {
-    const refs = collectStringComparisonRefs(
-      parse('SWITCH(stage, "lead", 1, "won", 2, 0)'),
-    );
-    expect(refs.sameRecordPaths).toEqual(['stage']);
-    expect(refs.crossRefs).toEqual([]);
-  });
-
-  it('reaches a cross-record SWITCH subject compared against string keys', () => {
-    const refs = collectStringComparisonRefs(
-      parse(`SWITCH([company:${UUID}:name], "Acme", 1, 0)`),
-    );
-    expect(refs.sameRecordPaths).toEqual([]);
-    expect(refs.crossRefs).toEqual([
-      { object: 'company', recordId: UUID, fieldPath: 'name' },
-    ]);
-  });
-
-  it('carries no string-key constraint for a numeric-keyed SWITCH', () => {
-    const refs = collectStringComparisonRefs(parse('SWITCH(tier, 1, 10, 2, 20, 0)'));
-    expect(refs.sameRecordPaths).toEqual([]);
-    expect(refs.crossRefs).toEqual([]);
-  });
-
-  it('carries no string-kind constraint for a concat operand', () => {
-    // A concat is not a comparison, and a concat sitting beside a string
-    // literal in a comparison is not a direct field operand either — neither
-    // shape constrains the field kinds its parts read.
-    expect(collectStringComparisonRefs(parse('a & "-x"')).sameRecordPaths).toEqual([]);
-    expect(
-      collectStringComparisonRefs(parse('IF(a & "-" = "x", 1, 0)')).sameRecordPaths,
-    ).toEqual([]);
-  });
-
-  it('still reaches a string comparison nested inside a concat operand', () => {
-    const refs = collectStringComparisonRefs(
-      parse('IF(status = "won", 1, 0) & "-x"'),
-    );
-    expect(refs.sameRecordPaths).toEqual(['status']);
   });
 });
 

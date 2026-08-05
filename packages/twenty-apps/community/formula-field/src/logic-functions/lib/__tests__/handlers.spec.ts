@@ -134,10 +134,14 @@ describe('handleFormulaChange (save-time validation)', () => {
   });
 
   it('disables a formula whose string comparison targets a non-SELECT/TEXT field', async () => {
+    // Was branch 1b; now the strict kind gate's comparison rule (Task 3). The
+    // gate only runs against a known target kind, so this needs a
+    // targetFieldType where 1b did not.
     const def: FormulaDefinitionRecord = {
       id: 'f1',
       targetObject: 'opportunity',
       targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
       expression: 'IF(amount = "big", 1, 0)',
       enabled: true,
     };
@@ -154,7 +158,7 @@ describe('handleFormulaChange (save-time validation)', () => {
     const stored = client.get('formulaDefinition', 'f1')!;
     expect(stored.enabled).toBe(false);
     expect(stored.lastError).toBe(
-      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
+      'Cannot compare number with text using "=" (kinds must match)',
     );
   });
 
@@ -258,6 +262,36 @@ describe('handleFormulaChange (save-time validation)', () => {
     );
   });
 
+  it('preloads kinds for a cross-record operand that is not a bare mirror ref (strict kind gate, Task 3)', async () => {
+    // The widened preload (Task 3) fetches kinds for every cross-referenced
+    // object the expression reads, not only a bare-ref mirror source — this
+    // cross-record field sits inside a comparison on an ENGINE-family target.
+    const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    const def: FormulaDefinitionRecord = {
+      id: 'f1',
+      targetObject: 'opportunity',
+      targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
+      expression: `IF([company:${companyId}:closeDate] = "2026-01-15", 1, 0)`,
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('company', { closeDate: 'DATE' });
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'f1')!;
+    expect(stored.enabled).toBe(false);
+    expect(stored.lastError).toBe(
+      'Cannot compare date with text using "=" (kinds must match)',
+    );
+  });
+
   it('ignores its own bookkeeping-only writes (no re-processing loop)', async () => {
     const def: FormulaDefinitionRecord = {
       id: 'f1',
@@ -281,10 +315,11 @@ describe('handleFormulaChange (save-time validation)', () => {
 });
 
 describe('validateFormula string-comparison field-kind validation', () => {
-  const candidate = (expression: string) => ({
+  const candidate = (expression: string, targetFieldType?: string) => ({
     id: 'f1',
     targetObject: 'opportunity',
     targetField: 'formulaScore',
+    targetFieldType,
     expression,
   });
 
@@ -307,14 +342,17 @@ describe('validateFormula string-comparison field-kind validation', () => {
   });
 
   it('rejects a string comparison against a NUMBER field with the exact message', () => {
+    // Was branch 1b; now the strict kind gate's comparison rule (Task 3). The
+    // gate only runs against a known target kind, so this needs a
+    // targetFieldType where 1b did not.
     const result = validateFormula({
-      candidate: candidate('IF(amount = "big", 1, 0)'),
+      candidate: candidate('IF(amount = "big", 1, 0)', 'NUMBER'),
       existingFormulas: [],
       fieldKinds: () => new Map([['amount', 'NUMBER']]),
     });
     expect(result.valid).toBe(false);
     expect((result as { valid: false; error: string }).error).toBe(
-      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
+      'Cannot compare number with text using "=" (kinds must match)',
     );
   });
 
@@ -441,13 +479,21 @@ describe('validateFormula mirror validation', () => {
     expect(result.valid).toBe(true);
   });
 
-  it('leaves an engine-family target (NUMBER) on the engine path (bare ref valid)', () => {
+  it('rejects a bare SELECT-source ref onto a NUMBER target (strict kind gate, Task 3)', () => {
+    // Previously an engine-family target skipped the mirror block (1c)
+    // entirely, so this bare ref passed unchecked here — any mismatch would
+    // only surface later, at eval time. The strict kind gate now types the bare
+    // ref's output (SELECT -> text) and rejects it against the NUMBER target at
+    // save time instead.
     const result = validateFormula({
       candidate: mirror('sourceField', 'NUMBER'),
       existingFormulas: [],
       fieldKinds: () => new Map([['sourceField', 'SELECT']]),
     });
-    expect(result.valid).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toMatch(
+      /computes text but the target field holds number/,
+    );
   });
 
   it('leaves an engine-family target (NUMBER) unaffected for a subpath expression', () => {

@@ -1,7 +1,6 @@
 import {
   type AstNode,
   bareReferenceOf,
-  collectStringComparisonRefs,
   detectCycle,
   extractDependenciesFromAst,
   type FormulaDependencies,
@@ -9,6 +8,10 @@ import {
   isFormulaError,
   parse,
 } from 'src/engine';
+import {
+  type KindLookup,
+  strictKindGateError,
+} from 'src/logic-functions/lib/kind-inference';
 import {
   ENGINE_FAMILY_KINDS,
   isMirrorTargetKind,
@@ -71,7 +74,7 @@ export const validateExpressionCore = ({
   hostObject: string;
   targetField: string;
   targetFieldType?: string;
-  fieldKinds?: (objectName: string) => Map<string, string> | undefined;
+  fieldKinds?: KindLookup;
   // The candidate is excluded by the caller — the backend by id, the editor by
   // targetObject+targetField pair.
   otherFormulas: ValidatableFormula[];
@@ -91,26 +94,21 @@ export const validateExpressionCore = ({
     };
   }
 
-  // 1b. String-comparison field-kind check. A string comparison against a
-  //     same-record field whose kind cannot hold a string (anything but SELECT /
-  //     TEXT) is rejected here — between dependency extraction and cycle
-  //     detection. Unknown fields and cross-refs are EXEMPT: their kinds live on
-  //     another object this check does not read, so a cross-record non-text
-  //     field in a text comparison is left to evaluate — typed equality makes it
-  //     simply false (accepted delta B6, ADR 0026), never an error. Skipped
-  //     entirely when the target object's kinds are absent.
-  const targetObjectFieldKinds = fieldKinds?.(hostObject);
-  if (targetObjectFieldKinds) {
-    for (const path of collectStringComparisonRefs(ast).sameRecordPaths) {
-      const rootField = path.split('.')[0];
-      const kind = targetObjectFieldKinds.get(rootField);
-      if (kind !== undefined && kind !== 'SELECT' && kind !== 'TEXT') {
-        return {
-          valid: false,
-          error: `String comparison against "${rootField}" is not supported (field type ${kind}; only SELECT and TEXT fields)`,
-        };
-      }
-    }
+  // 1b. Strict kind gate (Task 3, strict-typing arc). Infers the whole
+  //     expression's output kind and checks it against the target field's kind —
+  //     one general rule reached by every save path, replacing the old
+  //     string-comparison-only check (1b) and the TEXT-target bare-ref guard
+  //     (1d). The helper's own predicate is authoritative for when it applies
+  //     (mirror-lane / blank targets skip, never reject) — this call site does
+  //     not duplicate that predicate.
+  const kindGateError = strictKindGateError({
+    ast,
+    hostObject,
+    targetFieldType,
+    fieldKinds,
+  });
+  if (kindGateError !== null) {
+    return { valid: false, error: kindGateError, dependencies };
   }
 
   // 1c. Mirror validation. A target field the engine family does not cover is in
@@ -121,8 +119,9 @@ export const validateExpressionCore = ({
   //     The MIRRORABLE arm of the condition makes the two sets' membership
   //     authoritative rather than the engine family alone; with TEXT now
   //     engine-only (ADR 0026) a TEXT target skips these checks entirely, so any
-  //     engine expression — `code & "-" & 1` — validates onto it; 1d below keeps
-  //     the one piece of 1c a TEXT target still needs (the bare-ref source kind).
+  //     engine expression — `code & "-" & 1` — validates onto it; the strict
+  //     kind gate above (1b) now covers the one piece a TEXT target still needs
+  //     (the bare-ref source kind, via its output-kind check).
   if (
     targetFieldType != null &&
     targetFieldType !== '' &&
@@ -155,36 +154,6 @@ export const validateExpressionCore = ({
         valid: false,
         error: `Cannot mirror ${sourceKind} field "${sourceField}" onto a ${targetFieldType} field (kinds must match)`,
       };
-    }
-  }
-
-  // 1d. TEXT-target source-kind guard, for the BARE-REF shape only. TEXT left
-  //      MIRRORABLE_KINDS (ADR 0026), so branch 1c no longer runs for it — and
-  //      with it would go the save-time rejection main gave a deployed-mirror
-  //      shape naming a field whose kind cannot hold text: a BOOLEAN source
-  //      writes "1"/"0", a DATE writes a raw serial, a MULTI_SELECT/LINKS fails
-  //      per record with NON_NUMERIC_VALUE. Same message and mechanism as 1c(c),
-  //      so a formula main rejected is still rejected identically. Scoped two
-  //      ways: SELECT is exempt (it holds text, and SELECT -> TEXT is the
-  //      widening ADR 0026 intends), and a non-bare expression — `flag & ""` —
-  //      is exempt because main could not save ANY engine expression onto a TEXT
-  //      target, so constraining it would invent a delta rather than close one.
-  if (targetFieldType === 'TEXT') {
-    const bare = bareReferenceOf(ast);
-    if (bare !== null) {
-      const sourceObject = bare.kind === 'same' ? hostObject : bare.ref.object;
-      const sourceField = bare.kind === 'same' ? bare.field : bare.ref.fieldPath;
-      const sourceKind = fieldKinds?.(sourceObject)?.get(sourceField);
-      if (
-        sourceKind !== undefined &&
-        sourceKind !== 'TEXT' &&
-        sourceKind !== 'SELECT'
-      ) {
-        return {
-          valid: false,
-          error: `Cannot mirror ${sourceKind} field "${sourceField}" onto a TEXT field (kinds must match)`,
-        };
-      }
     }
   }
 

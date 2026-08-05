@@ -1,4 +1,4 @@
-import { bareReferenceOf, parse } from 'src/engine';
+import { extractDependencies } from 'src/engine';
 import {
   loadAllEnabledFormulas,
   updateFormulaBookkeeping,
@@ -86,11 +86,14 @@ export const handleFormulaChange = async ({
 
   const existing = await loadAllEnabledFormulas(client);
   // Preload field kinds so save-time validation can run its kind-dependent
-  // checks: the target object (string-comparison check + a same-record mirror's
-  // source) and, when the expression is a whole-field cross-ref, that referenced
-  // object (a cross-record mirror's source, step 1c). Each fetch is guarded — a
-  // client without fieldKinds, or a rejecting impl, degrades to no kind check for
-  // that object (it must NOT abort save handling before cycle detection).
+  // checks: the target object (the strict kind gate's own-record operands + a
+  // same-record mirror's source) and every cross-referenced object the
+  // expression reads (the strict kind gate can type a cross-record operand
+  // anywhere in the AST, not just a bare mirror ref — step 1c still only needs
+  // the bare-ref case, which is a subset of this wider set). Each fetch is
+  // guarded — a client without fieldKinds, or a rejecting impl, degrades to no
+  // kind check for that object (it must NOT abort save handling before cycle
+  // detection).
   const kindsByObject = new Map<string, Map<string, string>>();
   const preloadKinds = async (objectName: string): Promise<void> => {
     if (!objectName || kindsByObject.has(objectName)) {
@@ -109,11 +112,13 @@ export const handleFormulaChange = async ({
   if (after.targetObject) {
     await preloadKinds(after.targetObject);
   }
-  // Also preload the cross-referenced object's kinds for a cross-record mirror.
+  // Also preload every cross-referenced object's kinds — the strict kind gate
+  // (Task 3) can read a cross-record operand anywhere in the expression, not
+  // just a bare mirror ref.
   try {
-    const bare = bareReferenceOf(parse(after.expression ?? ''));
-    if (bare?.kind === 'cross') {
-      await preloadKinds(bare.ref.object);
+    const { crossRecordRefs } = extractDependencies(after.expression ?? '');
+    for (const ref of crossRecordRefs) {
+      await preloadKinds(ref.object);
     }
   } catch {
     // A parse failure surfaces through validateFormula; nothing to preload.

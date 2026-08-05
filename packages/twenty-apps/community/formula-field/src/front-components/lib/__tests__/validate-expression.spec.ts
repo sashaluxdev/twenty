@@ -71,6 +71,9 @@ describe('validateExpression', () => {
   });
 
   it('rejects a NUMBER field string comparison with the exact message', () => {
+    // Was branch 1b; now the strict kind gate's comparison rule (Task 3). The
+    // gate only runs against a known target kind, so this needs a
+    // targetFieldType where 1b did not.
     expect(
       validateExpression(
         'IF(amount = "big", 1, 0)',
@@ -78,10 +81,9 @@ describe('validateExpression', () => {
         'formulaScore',
         [],
         () => new Map([['amount', 'NUMBER']]),
+        'NUMBER',
       ),
-    ).toBe(
-      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
-    );
+    ).toBe('Cannot compare number with text using "=" (kinds must match)');
   });
 
   it('rejects a SWITCH with a string key on a NUMBER field at save-time validation', () => {
@@ -95,10 +97,9 @@ describe('validateExpression', () => {
         'formulaScore',
         [],
         () => new Map([['amount', 'NUMBER']]),
+        'NUMBER',
       ),
-    ).toBe(
-      'String comparison against "amount" is not supported (field type NUMBER; only SELECT and TEXT fields)',
-    );
+    ).toBe('Cannot compare number with text using "=" (kinds must match)');
   });
 
   it('rejects a MULTI_SELECT field string comparison with the exact message', () => {
@@ -109,10 +110,9 @@ describe('validateExpression', () => {
         'formulaScore',
         [],
         () => new Map([['tags', 'MULTI_SELECT']]),
+        'NUMBER',
       ),
-    ).toBe(
-      'String comparison against "tags" is not supported (field type MULTI_SELECT; only SELECT and TEXT fields)',
-    );
+    ).toBe('Cannot compare opaque with text using "=" (kinds must match)');
   });
 
   it('only applies the kinds accessor to the host object', () => {
@@ -251,7 +251,11 @@ describe('validateExpression', () => {
     ).toBeNull();
   });
 
-  it('leaves an engine-family target (NUMBER) on the engine path', () => {
+  it('rejects a bare SELECT-source ref onto a NUMBER target (strict kind gate, Task 3)', () => {
+    // Previously an engine-family target skipped the mirror block (1c)
+    // entirely, so this bare ref passed unchecked here. The strict kind gate
+    // now types the bare ref's output (SELECT -> text) and rejects it against
+    // the NUMBER target at save time instead.
     expect(
       validateExpression(
         'sourceField',
@@ -261,7 +265,7 @@ describe('validateExpression', () => {
         () => new Map([['sourceField', 'SELECT']]),
         'NUMBER',
       ),
-    ).toBeNull();
+    ).toBe('Formula computes text but the target field holds number');
   });
 
   it('degrades gracefully without an accessor: unknown source kind passes', () => {
