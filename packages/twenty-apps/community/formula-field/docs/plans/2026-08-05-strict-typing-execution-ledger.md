@@ -33,3 +33,23 @@ green, oxlint 0/0.
 - No deploy, no push, and no formulahelp edits occurred anywhere in this arc
   — all three remain separately gated on user approval per the plan's Global
   Constraints and the "Post-plan gates" section.
+
+## Post-review parked findings (final whole-branch review, 2026-08-05 — durable record)
+
+Parked with rulings at the final review; the git-ignored SDD ledger holds the full trail.
+
+- **ISBLANK is the one hole in "opaque mismatches every operation"** (kind-inference.ts:278):
+  an ISBLANK over an opaque ref re-creates a per-record permanent error of the class D6 set
+  out to remove. Design-level tension — needs a user ruling in a future arc, not a quiet fix.
+- **handle-record-update.ts:183**: pre-pass guards `updatedFields !== undefined` while sibling
+  predicates use `!updatedFields`. Unreachable under the declared type; style-consistency
+  only — fold into any future touch of that file.
+- **Perf micro-items** (off the main hot path, deferred to the perf ledger): front-component
+  double parse per definition (refresh-stale-formulas.ts / formula-editor.tsx), per-record
+  resolveFieldKinds on the id-only fallback scan (recompute.ts:486), coerceToDateSerial's
+  per-value two-element parser array (coercion.ts:125).
+- **renderAs stamping is a side effect of the gate call** (kind-inference.ts:298 sole write
+  site): coupling documented in ADR 0027; the fix wave's four end-to-end pins make silent
+  breakage test-visible.
+- Live-verification carry-forwards are first-class checks in
+  `2026-08-05-strict-typing-live-verification-plan.md` (P3.1, P4.2, P4.4, P5.4, P1.11).

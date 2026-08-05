@@ -5,6 +5,9 @@ user approval
 **Branch under test:** `strict-typing` at `49eff11edd` (20 commits off local main `3e2be6f670`)
 **Environment:** local dev stack; dev workspace schema `workspace_1wgvd1injqtife6y4rvfbu3h5`;
 the workspace currently runs app version **0.2.0** (`core.application`) — load-bearing, see P0.
+**Companion reference:** `2026-08-05-strict-typing-live-surface-inventory.md` (same directory)
+— exact templates, DB state, observability facts. Read its CORRECTIONS section FIRST; it
+overrides the body where they conflict. Where this plan and code disagree, re-derive from code.
 
 ## Purpose and doctrine
 
@@ -301,3 +304,25 @@ code.
 All checks CONFIRMED or EXPECTED-DELTA (or FINDING-closed with green re-runs); teardown diff
 clean; verdict archive committed. Then: cloud audit → user shown the gated list → cloud
 deploy v0.3.0 → formulahelp refresh.
+
+## Execution quickstart (session pickup)
+
+State as of 2026-08-05 end of planning session:
+
+- Worktree: `/home/sasha_shin/twenty/.claude/worktrees/strict-typing` (enter via EnterWorktree
+  `path:`), branch `strict-typing`; suite 1184/67 green at the plan commit.
+- Postgres/Redis: RUNNING (left up). Server/worker/front: STOPPED — start all three from the
+  worktree (`npx nx start twenty-server`, `npx nx run twenty-server:worker`,
+  `npx nx start twenty-front`); `.env` files already in place (copied from the main checkout);
+  server healthz on `:3000`.
+- SDK client: already generated in the worktree `node_modules` (gitignored; survives on disk).
+  If missing after a clean: `node node_modules/twenty-sdk/dist/cli.cjs -r dev
+  dev:generate-client` + the `twenty-client-sdk` symlink (Task 8 note in the SDD ledger).
+- MCP needed: playwright (UI lanes) + postgres read-only (DB evidence). Both configured in
+  `.mcp.json`.
+- Dev workspace app version is 0.2.0 until P0.4 — do NOT deploy before P0.3's pre-deploy
+  seeding. `defaultRemote` is `cloud` (PRODUCTION): pin `-r dev` / `dev` on every invocation.
+- SDD ledger (parked rulings, fix history): `<worktree>/.superpowers/sdd/
+  2026-08-05-strict-typing-implementation/progress.md` — git-ignored; keep until merge.
+- The unanswered integration decision (merge to local main `3e2be6f670` / PR / keep) is
+  independent of this phase and still pending.
