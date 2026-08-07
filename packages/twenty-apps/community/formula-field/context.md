@@ -1141,7 +1141,11 @@ written at the app root (`README.md`).
 - **`dev --once` does NOT fire the post-install logic function** (only a real
   install does, e.g. the integration test's app:install). After a DB reset +
   dev sync, seed the demo formula manually via createFormulaDefinition (the
-  handler's idempotent equivalent).
+  handler's idempotent equivalent): `{ name: 'Opportunity score (demo)',
+  targetObject: 'opportunity', targetField: 'formulaScore', targetFieldType:
+  'NUMBER', expression: 'formulaInputA + formulaInputB * 2', enabled: true }`
+  — save-validation now rejects a blank `targetFieldType` when `targetField`
+  is set, disabling the definition, so the field must be included.
 - After a DB reset the CLI API key dies with the DB. Re-mint via the auth
   mutations on /metadata (getLoginTokenFromCredentials tim@apple.dev /
   tim@apple.dev → getAuthTokensFromLoginToken → getRoles (Admin id; createApiKey
