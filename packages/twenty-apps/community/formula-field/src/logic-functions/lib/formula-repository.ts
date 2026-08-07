@@ -343,6 +343,17 @@ export const updateScanCursor = async (
   );
 };
 
+// The record API round-trips a SQL-NULL TEXT column as '', while mirrorValueText
+// produces null for a null value and never '' (every non-null value JSON-encodes
+// to at least two characters). Comparing the two verbatim made a gated
+// TEXT-target definition rewrite `lastValueText: null` on EVERY pass (F4) — one
+// pure heartbeat write per sweep, forever. So '' can only mean "no stored text",
+// and reads as null here, exactly as the lastError comparison normalizes the same
+// ambiguity toward ''. The number lane needs none of this: a float column
+// round-trips null as null.
+const storedValueText = (value: string | null | undefined): string | null =>
+  value === null || value === undefined || value === '' ? null : value;
+
 // ADR 0015 staleness probe, shared by every heartbeat lane: a formula reading
 // TODAY() can go a long time between VALUE changes, so a no-op outcome still has
 // to refresh lastEvaluatedAt once per sweep cadence or "last evaluated" would
@@ -385,7 +396,7 @@ export const recordEvaluationHeartbeat = async (
   // so the flag is never set on the raw lane and its zero-write path stands.
   if (outcome.value.kind !== 'number') {
     const nextValueText = mirrorValueText(outcome.value.value);
-    const textChanged = (formula.lastValueText ?? null) !== nextValueText;
+    const textChanged = storedValueText(formula.lastValueText) !== nextValueText;
     if (!textChanged && !errorChanged) {
       if (expressionUsesToday && heartbeatIsStale(formula.lastEvaluatedAt)) {
         const evaluatedAt = new Date().toISOString();

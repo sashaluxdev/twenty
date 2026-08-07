@@ -1590,6 +1590,49 @@ describe('handleRecordUpdate per-definition static gate', () => {
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(7);
   });
 
+  // F4 companion: the sweep's gated TEXT-target lane rewrote lastValueText: null
+  // over the '' the API returns for a NULL column, once per pass. The event path
+  // must stay at zero definition writes for the same definition — it declines to
+  // act at all, so it never reaches the heartbeat.
+  it('event path leaves a gated TEXT-target definition row untouched', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaLabel: 'TEXT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'ftg',
+        targetObject: 'opportunity',
+        targetField: 'formulaLabel',
+        targetFieldType: 'TEXT',
+        // Computes number onto a text target (live S5 / T4 Text Greeting).
+        expression: 'amount * 2',
+        enabled: true,
+        // The NULL lastValueText column as the record API hands it back.
+        lastValueText: '',
+        lastError: 'Formula computes number but the target field holds text',
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', amount: 10, formulaLabel: null }]);
+
+    const outcomes = await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', amount: 10, formulaLabel: null },
+      updatedFields: ['amount'],
+    });
+
+    expect(outcomes).toHaveLength(0);
+    expect(
+      client.mutationSelections.filter(
+        (selection) => selection.updateFormulaDefinition !== undefined,
+      ),
+    ).toHaveLength(0);
+    expect(client.writes).toHaveLength(0);
+  });
+
   it('event path renders TEXT(dateField) as a date string, not the epoch-day serial', async () => {
     // Companion to the recompute-path pins: the event path resolves its own
     // kinds and runs its own gate walk, which is what stamps `renderAs`. If

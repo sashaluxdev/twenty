@@ -1525,6 +1525,176 @@ describe('recomputeAllRecords per-definition static gate', () => {
   });
 });
 
+// F4 (live 2026-08-06): a gated TEXT-target definition wrote one PURE heartbeat
+// row per sweep — lastEvaluatedAt advanced, every data column unchanged. The
+// record API round-trips a SQL-NULL TEXT column as '', so the definition reloads
+// holding lastValueText: '' while the gated heartbeat computes null for it, and
+// the write-avoidance comparison read that as a change. The NUMBER lane is immune
+// (a float column round-trips null as null), which is why the gate pins above —
+// all NUMBER-target — never caught it.
+// recomputeAllRecords is the funnel the cron sweep, the definition-page widget
+// refresh and the cross-record event branch share; recomputeForRecord is the
+// single-record funnel (widget per-record refresh, event case 1); the event
+// path's own gate loop is pinned in handlers.spec.ts.
+describe('gated TEXT-target definition heartbeat churn', () => {
+  const seedTextFixture = (client: FakeClient): void => {
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaLabel: 'TEXT',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', amount: 10, formulaLabel: null },
+      { id: 'o2', amount: 20, formulaLabel: null },
+    ]);
+  };
+
+  // Output-gate shape (live S5 / T4 Text Greeting): computes number, target
+  // holds text.
+  const textTargetFormula = (
+    overrides: Partial<FormulaDefinitionRecord> = {},
+  ): FormulaDefinitionRecord => ({
+    id: 'ftg',
+    targetObject: 'opportunity',
+    targetField: 'formulaLabel',
+    targetFieldType: 'TEXT',
+    expression: 'amount * 2',
+    enabled: true,
+    ...overrides,
+  });
+
+  const GATE_ERROR = /computes number but the target field holds text/;
+
+  // The row as the record API hands it back to the NEXT pass: a SQL-NULL TEXT
+  // column arrives as '', never as null. FakeClient's projection returns null,
+  // so the round-trip is modelled here instead of papered over — without it the
+  // second pass sees a null the live loader never produces.
+  const reloadedThroughApi = (
+    client: FakeClient,
+    base: FormulaDefinitionRecord,
+  ): FormulaDefinitionRecord => {
+    const row = client.get('formulaDefinition', base.id)!;
+    return {
+      ...base,
+      lastValueText: (row.lastValueText as string | null) ?? '',
+      lastError: (row.lastError as string | null) ?? '',
+      lastEvaluatedAt: row.lastEvaluatedAt as string | null,
+    };
+  };
+
+  // FakeClient.mutations is a scalar counter over every mutation; the
+  // definition-row writes alone are what churn formulaDefinition.updated.
+  const definitionWrites = (client: FakeClient): number =>
+    client.mutationSelections.filter(
+      (selection) => selection.updateFormulaDefinition !== undefined,
+    ).length;
+
+  it('second gate pass performs zero definition writes', async () => {
+    const client = new FakeClient();
+    seedTextFixture(client);
+    const definition = textTargetFormula();
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recomputeAllRecords(client, definition);
+
+    expect(client.get('formulaDefinition', 'ftg')!.lastError).toMatch(GATE_ERROR);
+    expect(client.get('formulaDefinition', 'ftg')!.lastValueText).toBeNull();
+    const writesAfterFirstPass = definitionWrites(client);
+    expect(writesAfterFirstPass).toBe(1);
+
+    await recomputeAllRecords(client, reloadedThroughApi(client, definition));
+
+    expect(definitionWrites(client)).toBe(writesAfterFirstPass);
+  });
+
+  it('converged PASSING definition performs zero definition writes on the second pass', async () => {
+    const client = new FakeClient();
+    seedTextFixture(client);
+    // Empty lastValueText is the fresh row's NULL column as the API returns it:
+    // the first pass must still write the real value over it.
+    const definition = textTargetFormula({
+      expression: 'TEXT(amount * 2)',
+      lastValueText: '',
+    });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recomputeAllRecords(client, definition);
+
+    expect(client.get('opportunity', 'o1')!.formulaLabel).toBe('20');
+    expect(client.get('formulaDefinition', 'ftg')!.lastValueText).toBe('"20"');
+    const writesAfterFirstPass = definitionWrites(client);
+    expect(writesAfterFirstPass).toBe(1);
+
+    await recomputeAllRecords(client, reloadedThroughApi(client, definition));
+
+    expect(definitionWrites(client)).toBe(writesAfterFirstPass);
+  });
+
+  it('a changed error string still writes once', async () => {
+    const client = new FakeClient();
+    seedTextFixture(client);
+    const definition = textTargetFormula({
+      lastValueText: '',
+      lastError: 'Formula computes date but the target field holds text',
+    });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recomputeAllRecords(client, definition);
+
+    expect(definitionWrites(client)).toBe(1);
+    expect(client.get('formulaDefinition', 'ftg')!.lastError).toMatch(GATE_ERROR);
+  });
+
+  it('recomputeForRecord refuses a gated definition without touching the definition row', async () => {
+    const client = new FakeClient();
+    seedTextFixture(client);
+    const definition = textTargetFormula({
+      lastValueText: '',
+      lastError: 'Formula computes number but the target field holds text',
+    });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: definition,
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.error).toMatch(GATE_ERROR);
+    expect(definitionWrites(client)).toBe(0);
+    expect(client.writes).toHaveLength(0);
+  });
+
+  it('raw lane: a null-source mirror stops rewriting NULL over an empty-string column', async () => {
+    const client = new FakeClient();
+    const definition = formula({
+      targetFieldType: 'SELECT',
+      expression: 'stage',
+      lastValueText: '',
+      lastError: '',
+    });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recordEvaluationHeartbeat(
+      client,
+      definition,
+      { value: { kind: 'raw', value: null }, error: null },
+      false,
+    );
+
+    expect(definitionWrites(client)).toBe(0);
+  });
+});
+
 // Task 6: the heartbeat's write-avoidance compares against the IN-MEMORY
 // definition record, and formula-sweep compares against that same object right
 // after. Without syncing the fields it just wrote, every lane paid a second,
