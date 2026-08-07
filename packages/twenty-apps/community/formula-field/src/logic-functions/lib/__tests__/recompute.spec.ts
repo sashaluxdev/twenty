@@ -19,12 +19,16 @@ vi.mock('src/engine/parser', async (importActual) => {
   return { ...actual, parse: vi.fn(actual.parse) };
 });
 
+// targetFieldType is explicit because the recompute lane refuses a definition
+// that has a target field but no target field type (F2) — the blank kind these
+// fixtures used to rely on now means "unevaluable", not "NUMBER".
 const formula = (
   overrides: Partial<FormulaDefinitionRecord> = {},
 ): FormulaDefinitionRecord => ({
   id: 'f1',
   targetObject: 'opportunity',
   targetField: 'formulaScore',
+  targetFieldType: 'NUMBER',
   expression: 'formulaInputA + formulaInputB * 2',
   enabled: true,
   ...overrides,
@@ -258,7 +262,9 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
     // Text now survives evaluation, so the coercion that used to fail at resolve
     // time fails at the write boundary instead — same reported error, still an
     // outcome rather than a thrown exception, and still no write.
-    client.setFieldKinds('opportunity', { tier: 'TEXT' });
+    // `tier`'s kind is deliberately unresolvable: with it known the strict kind
+    // gate refuses the definition before any record is read, and the write
+    // boundary under test here is only reachable through a metadata gap.
     client.seed('opportunity', [{ id: 'o1', tier: 'gold', formulaScore: null }]);
     const before = client.mutations;
 
@@ -274,7 +280,8 @@ describe('recomputeForRecord string comparisons (SELECT/TEXT/cross-record)', () 
   });
 
   it('still writes a numeric-shaped text value to a numeric target', async () => {
-    client.setFieldKinds('opportunity', { tier: 'TEXT' });
+    // Same metadata gap as the test above: a known TEXT source kind is the gate's
+    // business, the write boundary's coercion is what this pins.
     client.seed('opportunity', [{ id: 'o1', tier: '042', formulaScore: null }]);
 
     const outcome = await recomputeForRecord({
@@ -1692,6 +1699,159 @@ describe('gated TEXT-target definition heartbeat churn', () => {
     );
 
     expect(definitionWrites(client)).toBe(0);
+  });
+});
+
+// F2 (live exhibit 2026-08-05, api-C): a definition created through the API with
+// targetFieldType blank (stored NULL) and a real TEXT targetField. The strict
+// kind gate skips a blank target by design (mirror-lane territory), so the pass
+// evaluated `1 + 2` and attempted the record write, which failed ("Invalid string
+// value 3 for text field") — every pass, forever, for a definition that can
+// never store a value. Save-validation now rejects new ones; the recompute lane
+// owns the rows that predate it: no evaluation, no record write, one error on the
+// definition row.
+describe('blank-targetFieldType definition is a recompute no-op (F2)', () => {
+  const seedBlankTargetFixture = (client: FakeClient): void => {
+    client.setFieldKinds('opportunity', { formulaLabel: 'TEXT' });
+    client.seed('opportunity', [
+      { id: 'o1', formulaLabel: 'keep' },
+      { id: 'o2', formulaLabel: 'keep' },
+    ]);
+  };
+
+  const blankTargetFormula = (
+    overrides: Partial<FormulaDefinitionRecord> = {},
+  ): FormulaDefinitionRecord => ({
+    id: 'fbt',
+    targetObject: 'opportunity',
+    targetField: 'formulaLabel',
+    targetFieldType: '',
+    expression: '1 + 2',
+    enabled: true,
+    ...overrides,
+  });
+
+  const BLANK_TARGET_ERROR = /targetFieldType is not set/;
+
+  const definitionWrites = (client: FakeClient): number =>
+    client.mutationSelections.filter(
+      (selection) => selection.updateFormulaDefinition !== undefined,
+    ).length;
+
+  // The row as the record API hands it back to the NEXT pass: the number lane's
+  // null lastValue round-trips as null, a NULL TEXT column as '' (F4).
+  const reloadedThroughApi = (
+    client: FakeClient,
+    base: FormulaDefinitionRecord,
+  ): FormulaDefinitionRecord => {
+    const row = client.get('formulaDefinition', base.id)!;
+    return {
+      ...base,
+      lastValue: (row.lastValue as number | null) ?? null,
+      lastValueText: (row.lastValueText as string | null) ?? '',
+      lastError: (row.lastError as string | null) ?? '',
+      lastEvaluatedAt: row.lastEvaluatedAt as string | null,
+    };
+  };
+
+  it('skips every record and records the error once on the definition row', async () => {
+    const client = new FakeClient();
+    seedBlankTargetFixture(client);
+    const definition = blankTargetFormula();
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    const outcomes = await recomputeAllRecords(client, definition);
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].error).toMatch(BLANK_TARGET_ERROR);
+    expect(outcomes[0].targetRecordId).toBe('');
+    expect(outcomes[0].changed).toBe(false);
+    // Zero evaluation: no record scan, no per-record fetch, no override load.
+    expect(client.querySelections).toHaveLength(0);
+    // The write the exhibit failed on every pass never happens.
+    expect(client.writes).toHaveLength(0);
+    expect(client.get('opportunity', 'o1')!.formulaLabel).toBe('keep');
+    expect(client.get('formulaDefinition', 'fbt')!.lastError).toMatch(
+      BLANK_TARGET_ERROR,
+    );
+    expect(definitionWrites(client)).toBe(1);
+  });
+
+  it('writes NOTHING on a repeat pass over the already-errored definition', async () => {
+    const client = new FakeClient();
+    seedBlankTargetFixture(client);
+    const definition = blankTargetFormula();
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    await recomputeAllRecords(client, definition);
+    const writesAfterFirstPass = definitionWrites(client);
+
+    await recomputeAllRecords(client, reloadedThroughApi(client, definition));
+
+    expect(definitionWrites(client)).toBe(writesAfterFirstPass);
+    expect(client.writes).toHaveLength(0);
+  });
+
+  it('a null targetFieldType is the same no-op', async () => {
+    const client = new FakeClient();
+    seedBlankTargetFixture(client);
+    const definition = blankTargetFormula({ targetFieldType: null });
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    const outcomes = await recomputeAllRecords(client, definition);
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].error).toMatch(BLANK_TARGET_ERROR);
+    expect(client.writes).toHaveLength(0);
+  });
+
+  // The single-record funnel (event case 1, the widget's per-record refresh, the
+  // editor's override toggle-off) must refuse it too — it is where the exhibit's
+  // failing write would otherwise be issued one record at a time. Its posture is
+  // the gate's: no definition-row write from this lane (its callers heartbeat).
+  it('recomputeForRecord refuses it without touching either row', async () => {
+    const client = new FakeClient();
+    seedBlankTargetFixture(client);
+    const definition = blankTargetFormula();
+    client.seed('formulaDefinition', [
+      definition as Record<string, unknown> & { id: string },
+    ]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: definition,
+      targetRecordId: 'o1',
+    });
+
+    expect(outcome.error).toMatch(BLANK_TARGET_ERROR);
+    expect(outcome.changed).toBe(false);
+    expect(client.querySelections).toHaveLength(0);
+    expect(client.writes).toHaveLength(0);
+    expect(definitionWrites(client)).toBe(0);
+  });
+
+  // Boundary (F2 brief): a definition with no targetField writes to no record
+  // field at all. Save-validation already rejects that shape ("targetField is
+  // required"), so this lane keeps its pre-existing behavior rather than growing
+  // a second skip for it.
+  it('negative control: an explicit target kind still recomputes normally', async () => {
+    const client = new FakeClient();
+    seedBlankTargetFixture(client);
+
+    const outcomes = await recomputeAllRecords(
+      client,
+      blankTargetFormula({ targetFieldType: 'TEXT', expression: 'TEXT(1 + 2)' }),
+    );
+
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.every((outcome) => outcome.error === null)).toBe(true);
+    expect(client.get('opportunity', 'o1')!.formulaLabel).toBe('3');
   });
 });
 

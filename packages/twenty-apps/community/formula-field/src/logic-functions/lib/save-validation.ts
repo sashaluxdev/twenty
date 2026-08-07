@@ -139,6 +139,16 @@ export const validateFormula = ({
       error: `Invalid target field name "${field}" (must be a camelCase identifier)`,
     };
   }
+  // F2: a definition that names a target field but no field TYPE is unevaluable —
+  // the write boundary reads a blank kind as NUMBER (targetFieldKind), so it can
+  // only ever store a number into whatever kind the column actually is, and a
+  // mismatch fails the record write on every pass. API-only shape (both wizard
+  // paths always set it); rejected here rather than in the strict kind gate,
+  // which must stay skip-never-reject for a blank kind (the mirror lane shares
+  // that branch).
+  if (!targetFieldType) {
+    return { valid: false, error: 'targetFieldType is required' };
+  }
 
   // Exclude any existing record with the same id (this IS the candidate) so an
   // update re-evaluates cleanly; the shared core takes the graph pre-filtered.

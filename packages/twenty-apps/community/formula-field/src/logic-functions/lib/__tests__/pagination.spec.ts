@@ -85,6 +85,7 @@ describe('recomputeAllRecords target-record scan order (ADR 0022)', () => {
       id: 'f1',
       targetObject: 'opportunity',
       targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
       expression: '1',
       enabled: true,
     };

@@ -356,6 +356,40 @@ const emptyComputedValue = (
     ? { kind: 'raw', value: null }
     : tagEngineValue(targetFieldKind(formula.targetFieldType), null);
 
+// F2: a definition that names a target field but no field TYPE is unevaluable —
+// the write boundary reads a blank kind as NUMBER (targetFieldKind), so it can
+// only ever store a number into whatever kind the column actually is, and the
+// record write fails on every pass for a value the definition can never hold.
+// Save-validation rejects new ones (the shape is API-only, both wizard paths set
+// the type); this is the lane for rows that predate it. Deliberately NOT in the
+// strict kind gate, which must stay skip-never-reject for a blank kind — the
+// mirror lane shares that branch.
+const blankTargetTypeError = (formula: FormulaDefinitionRecord): string | null =>
+  (formula.targetField ?? '') !== '' && (formula.targetFieldType ?? '') === ''
+    ? 'Skipped: targetFieldType is not set'
+    : null;
+
+// A definition-level refusal (the F2 blank target, a failed strict kind gate):
+// record the problem on the definition row and skip every record, since no
+// record could produce a correct value. Write-avoidance is the heartbeat's own —
+// an unchanged error writes nothing, so a repeat pass costs zero writes. The
+// TODAY flag stays false on purpose: a definition that never evaluated must not
+// claim a fresh "last evaluated" it did not earn. Returns the pass's single
+// synthetic outcome carrying the error; every caller reads only
+// .length/.changed/.error, so the empty targetRecordId is inert (the sweep's
+// `evaluated` counter reading 1 for a refused definition is expected).
+const refuseWholeDefinition = async (
+  client: FormulaClient,
+  formula: FormulaDefinitionRecord,
+  value: ComputedValue,
+  error: string,
+): Promise<RecomputeOutcome[]> => {
+  await recordEvaluationHeartbeat(client, formula, { value, error }, false);
+  return [
+    { formulaId: formula.id, targetRecordId: '', changed: false, value, error },
+  ];
+};
+
 export type RecomputeArgs = {
   client: FormulaClient;
   formula: FormulaDefinitionRecord;
@@ -869,6 +903,19 @@ export const recomputeForRecord = async (
   args: RecomputeArgs,
 ): Promise<RecomputeOutcome> => {
   const { client, formula, targetRecordId } = args;
+  // F2: unevaluable definition, refused ahead of everything below — same posture
+  // as the gate: no record write, and no definition-row write from this lane
+  // (its callers own the heartbeat).
+  const blankTarget = blankTargetTypeError(formula);
+  if (blankTarget !== null) {
+    return {
+      formulaId: formula.id,
+      targetRecordId,
+      changed: false,
+      value: emptyComputedValue(formula, false),
+      error: blankTarget,
+    };
+  }
   // Per-definition static gate, placed at the single point every single-record
   // caller funnels through: the editor's override toggle-off and the widget's
   // per-record TODAY refresh would otherwise write the silently-wrong value the
@@ -968,6 +1015,19 @@ export const recomputeAllRecords = async (
   formula: FormulaDefinitionRecord,
   options: RecomputeAllRecordsOptions = {},
 ): Promise<RecomputeOutcome[]> => {
+  // F2: unevaluable definition, refused before the parse, the kind resolution and
+  // the gate below — none of them can change the verdict, and a blank kind is
+  // exactly what the gate skips.
+  const blankTarget = blankTargetTypeError(formula);
+  if (blankTarget !== null) {
+    return refuseWholeDefinition(
+      client,
+      formula,
+      emptyComputedValue(formula, false),
+      blankTarget,
+    );
+  }
+
   const pageSize = options.pageSize ?? 100;
   const targetObject = formula.targetObject ?? '';
   const targetField = formula.targetField ?? '';
@@ -1014,27 +1074,8 @@ export const recomputeAllRecords = async (
         });
   if (gateError !== null) {
     // Record the problem on the definition row and skip the work — the cyclic
-    // skip's posture. Write-avoidance is the heartbeat's own: an unchanged error
-    // writes nothing. The flag stays false on purpose, so a broken definition
-    // never claims a fresh "last evaluated" it did not earn.
-    await recordEvaluationHeartbeat(
-      client,
-      formula,
-      { value: emptyValue, error: gateError },
-      false,
-    );
-    // One synthetic outcome carrying the error. Every caller reads only
-    // .length/.changed/.error, so the empty targetRecordId is inert (the sweep's
-    // `evaluated` counter reading 1 for a gated definition is expected).
-    return [
-      {
-        formulaId: formula.id,
-        targetRecordId: '',
-        changed: false,
-        value: emptyValue,
-        error: gateError,
-      },
-    ];
+    // skip's posture, shared with the F2 refusal above.
+    return refuseWholeDefinition(client, formula, emptyValue, gateError);
   }
 
   // Load the overridden record ids once so pinned records are skipped (#2).

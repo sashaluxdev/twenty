@@ -38,6 +38,7 @@ describe('handleFormulaChange (save-time validation)', () => {
       id: 'f1',
       targetObject: 'opportunity',
       targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
       expression: 'formulaInputA + formulaInputB * 2',
       enabled: true,
       lastError: 'stale',
@@ -70,6 +71,7 @@ describe('handleFormulaChange (save-time validation)', () => {
       id: 'a',
       targetObject: 'opportunity',
       targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
       expression: 'formulaCrossScore + 1',
       enabled: true,
     };
@@ -77,6 +79,7 @@ describe('handleFormulaChange (save-time validation)', () => {
       id: 'b',
       targetObject: 'opportunity',
       targetField: 'formulaCrossScore',
+      targetFieldType: 'NUMBER',
       expression: 'formulaScore + 1',
       enabled: true,
     };
@@ -101,6 +104,7 @@ describe('handleFormulaChange (save-time validation)', () => {
       id: 'x',
       targetObject: 'opportunity',
       targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
       expression: '1 + ;',
       enabled: true,
     };
@@ -175,6 +179,7 @@ describe('handleFormulaChange (save-time validation)', () => {
       id: 'f1',
       targetObject: 'opportunity',
       targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
       expression: 'IF(stage = "QUALIFIED", 1, 0)',
       enabled: true,
     };
@@ -300,6 +305,39 @@ describe('handleFormulaChange (save-time validation)', () => {
     );
   });
 
+  // F2 (live exhibit 2026-08-05, api-C): a definition created through the API
+  // with targetFieldType blank (stored NULL) and a real TEXT targetField. The
+  // write boundary reads a blank kind as NUMBER, so every pass evaluated the
+  // expression and failed the record write ("Invalid string value 3 for text
+  // field") while the definition stayed enabled — evaluation + failed-write rent
+  // for guaranteed-zero output. Save-validation now refuses it at the source.
+  it('disables a definition whose targetFieldType is blank (F2)', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'fbt',
+      targetObject: 'opportunity',
+      targetField: 'formulaLabel',
+      targetFieldType: '',
+      expression: '1 + 2',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('opportunity', { formulaLabel: 'TEXT' });
+    client.seed('opportunity', [{ id: 'o1', formulaLabel: 'keep' }]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'fbt')!;
+    expect(stored.enabled).toBe(false);
+    expect(stored.lastError).toBe('targetFieldType is required');
+    // The write the exhibit failed on every pass never even happens.
+    expect(client.get('opportunity', 'o1')!.formulaLabel).toBe('keep');
+  });
+
   it('ignores its own bookkeeping-only writes (no re-processing loop)', async () => {
     const def: FormulaDefinitionRecord = {
       id: 'f1',
@@ -340,6 +378,7 @@ describe('handleFormulaChange bookkeeping short-circuit (F3)', () => {
     id: 'f1',
     targetObject: 'opportunity',
     targetField: 'formulaScore',
+    targetFieldType: 'NUMBER',
     expression: 'formulaInputA + formulaInputB * 2',
     enabled: true,
     lastEvaluatedAt: '2026-08-06T02:00:12.462Z',
@@ -481,7 +520,10 @@ describe('handleFormulaChange bookkeeping short-circuit (F3)', () => {
 });
 
 describe('validateFormula string-comparison field-kind validation', () => {
-  const candidate = (expression: string, targetFieldType?: string) => ({
+  // The target kind is explicit (F2: a definition with a target field and no
+  // target field type is rejected outright), so these cases still exercise the
+  // comparison rule they were written for.
+  const candidate = (expression: string, targetFieldType = 'NUMBER') => ({
     id: 'f1',
     targetObject: 'opportunity',
     targetField: 'formulaScore',
@@ -545,6 +587,56 @@ describe('validateFormula string-comparison field-kind validation', () => {
       candidate: candidate(`IF([company:${companyId}:employees] = "x", 1, 0)`),
       existingFormulas: [],
       fieldKinds: () => new Map([['amount', 'NUMBER']]),
+    });
+    expect(result.valid).toBe(true);
+  });
+});
+
+// F2: a definition that names a target FIELD but no field TYPE tells the write
+// boundary nothing, and its blank kind reads as NUMBER there — so it can only
+// ever store a number into whatever kind the column actually is. Rejected next
+// to the other two target requirements rather than in the strict kind gate,
+// which must stay skip-never-reject for a blank kind (that branch is the mirror
+// lane's).
+describe('validateFormula blank targetFieldType (F2)', () => {
+  const errorOf = (result: ReturnType<typeof validateFormula>): string =>
+    (result as { valid: false; error: string }).error;
+
+  const candidate = (targetFieldType: string | null | undefined) => ({
+    id: 'f1',
+    targetObject: 'opportunity',
+    targetField: 'formulaLabel',
+    targetFieldType,
+    expression: '1 + 2',
+  });
+
+  it('rejects a blank, null or absent targetFieldType', () => {
+    for (const blank of ['', null, undefined]) {
+      const result = validateFormula({
+        candidate: candidate(blank),
+        existingFormulas: [],
+      });
+      expect(result.valid).toBe(false);
+      expect(errorOf(result)).toBe('targetFieldType is required');
+    }
+  });
+
+  it('boundary: no targetField either still reports the targetField requirement', () => {
+    // Pre-existing intent, unchanged: a definition with no target field writes to
+    // no record field at all, and the field requirement is what names the actual
+    // problem — so it keeps precedence over the type requirement.
+    const result = validateFormula({
+      candidate: { ...candidate(''), targetField: '' },
+      existingFormulas: [],
+    });
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toBe('targetField is required');
+  });
+
+  it('negative control: an explicit target kind validates', () => {
+    const result = validateFormula({
+      candidate: candidate('NUMBER'),
+      existingFormulas: [],
     });
     expect(result.valid).toBe(true);
   });
@@ -848,6 +940,7 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
         id: 'f1',
         targetObject: 'opportunity',
         targetField: 'formulaScore',
+        targetFieldType: 'NUMBER',
         expression: 'formulaInputA + formulaInputB * 2',
         enabled: true,
       },
@@ -1025,6 +1118,7 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
         id: 'f1',
         targetObject: 'opportunity',
         targetField: 'formulaScore',
+        targetFieldType: 'NUMBER',
         expression: 'formulaInputA + formulaInputB * 2',
         enabled: true,
         lastValue: 25,
@@ -1045,6 +1139,51 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     });
 
     expect(client.mutations).toBe(before);
+  });
+
+  // F2: the event path is the highest-frequency lane, so a blank-target
+  // definition paid an evaluation plus a doomed record write on every input edit.
+  // It must cost one definition-row error and nothing at all after that.
+  it('refuses a blank-targetFieldType definition once, then writes nothing (F2)', async () => {
+    client.seed('formulaDefinition', [
+      {
+        id: 'f1',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        targetFieldType: '',
+        expression: 'formulaInputA + formulaInputB * 2',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: null },
+    ]);
+    const event = {
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: {
+        id: 'o1',
+        formulaInputA: 5,
+        formulaInputB: 10,
+        formulaScore: null,
+      },
+      updatedFields: ['formulaInputA'],
+    };
+
+    const outcomes = await handleRecordUpdate(event);
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].error).toMatch(/targetFieldType is not set/);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBeNull();
+    expect(client.get('formulaDefinition', 'f1')!.lastError).toMatch(
+      /targetFieldType is not set/,
+    );
+    const mutationsAfterFirstEvent = client.mutations;
+
+    await handleRecordUpdate(event);
+
+    expect(client.mutations).toBe(mutationsAfterFirstEvent);
   });
 
   it('does NOT create a spurious override when the stored value was superseded (echo-race, finding m1)', async () => {
@@ -1234,6 +1373,7 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
         id: 'fx',
         targetObject: 'opportunity',
         targetField: 'formulaCrossScore',
+        targetFieldType: 'NUMBER',
         expression: `formulaInputA + [company:${companyId}:employees]`,
         enabled: true,
       },

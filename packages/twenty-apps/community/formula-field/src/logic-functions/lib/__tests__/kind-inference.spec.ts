@@ -108,4 +108,15 @@ describe('strictKindGateError', () => {
     expect(strictKindGateError({ ast: parse('mystery'), hostObject: 'company',
       targetFieldType: 'NUMBER', fieldKinds: () => undefined })).toBeNull();
   });
+  // F2 pin: the recompute lane refuses a blank-target definition, and
+  // save-validation rejects one — but the GATE must stay skip-never-reject for a
+  // blank kind. Turning it into a rejector here would reject every mirror
+  // definition with it (blank and non-family share this branch, 1c's territory).
+  it('a blank target kind is skipped, never rejected (F2)', () => {
+    expect(gate('amount * 2', '')).toBeNull();
+    expect(strictKindGateError({ ast: parse('amount * 2'), hostObject: 'company',
+      targetFieldType: null, fieldKinds: lookup })).toBeNull();
+    expect(strictKindGateError({ ast: parse('amount * 2'), hostObject: 'company',
+      targetFieldType: undefined, fieldKinds: lookup })).toBeNull();
+  });
 });
