@@ -18,13 +18,18 @@ const handler = async (
   // Dynamic client: the validation path recomputes against target objects whose
   // value fields may have been created after deploy (wizard).
   const client = createDynamicCoreClient();
-  const { after, updatedFields } = payload.properties;
+  const { after, before, updatedFields } = payload.properties;
 
   return handleFormulaChange({
     client,
     after: after as unknown as Parameters<
       typeof handleFormulaChange
     >[0]['after'],
+    // Lets the guard fall back to diffing the row images if the platform ever
+    // delivers an update without updatedFields.
+    before: before as unknown as Parameters<
+      typeof handleFormulaChange
+    >[0]['before'],
     updatedFields,
   });
 };

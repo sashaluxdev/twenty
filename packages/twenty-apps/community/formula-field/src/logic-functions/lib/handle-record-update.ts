@@ -180,7 +180,7 @@ export const handleRecordUpdate = async ({
     // field. It runs ahead of the cycle guard, which only fences recompute.
     if (
       actorWorkspaceMemberId &&
-      updatedFields !== undefined &&
+      updatedFields &&
       updatedFields.length > 0 &&
       typeof formula.targetField === 'string' &&
       updatedFields.includes(formula.targetField)

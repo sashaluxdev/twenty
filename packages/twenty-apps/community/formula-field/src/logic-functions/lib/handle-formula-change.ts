@@ -1,4 +1,5 @@
 import { extractDependencies } from 'src/engine';
+import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
 import {
   loadAllEnabledFormulas,
   updateFormulaBookkeeping,
@@ -13,6 +14,9 @@ import {
 
 // Fields the app writes back as bookkeeping. An update that only touches these
 // is our own write — skip re-processing to avoid a validation/recompute loop.
+// `order` is the Formula tab's drag-to-reorder column: display-only, written one
+// row at a time by the widget (formula-editor.tsx), so a reorder must not cost a
+// validate + recompute per dropped row.
 const BOOKKEEPING_FIELDS = new Set([
   'dependencies',
   'lastEvaluatedAt',
@@ -22,21 +26,71 @@ const BOOKKEEPING_FIELDS = new Set([
   'status',
   'statusReason',
   'scanCursor',
+  'order',
 ]);
 
+// Platform-owned columns that no formula can read. They ride along in a real
+// event: `position` moves whenever someone drags the definition row in a table
+// view, and the platform's own exclusion list is not a contract — twenty-server
+// stopped stripping POSITION from the event diff (20c83e1f86) precisely so that
+// position-only updates emit events instead of being dropped, which turned every
+// reorder into a full validate + recompute across every target record. Treated
+// as bookkeeping so a column the engine never reads cannot cost a pass.
+// `updatedAt` is also load-bearing for the row-image fallback below, where it is
+// the one field that ALWAYS differs.
+const PLATFORM_MANAGED_FIELDS = new Set([
+  'position',
+  'updatedAt',
+  'createdAt',
+  'createdBy',
+  'searchVector',
+]);
+
+const isIgnorableField = (field: string): boolean =>
+  BOOKKEEPING_FIELDS.has(field) || PLATFORM_MANAGED_FIELDS.has(field);
+
+// An empty list means "nothing the app reads changed", which is only reachable
+// through the row-image fallback: the platform drops an update whose diff is
+// empty before any trigger fires.
 const isPureBookkeepingUpdate = (
   updatedFields: string[] | undefined,
 ): boolean => {
-  if (!updatedFields || updatedFields.length === 0) {
+  if (!updatedFields) {
     return false;
   }
-  return updatedFields.every((field) => BOOKKEEPING_FIELDS.has(field));
+  return updatedFields.every(isIgnorableField);
+};
+
+// The changed field set the guards below judge. twenty-server delivers
+// `updatedFields` on every UPDATE event (declared non-optional on
+// ObjectRecordUpdateEvent, and an update with an empty diff never reaches a
+// trigger), but an update event also carries both full row images — so when the
+// list is missing we diff them rather than assume a real edit and pay a full
+// validate + recompute. A create has no before image and keeps the safe path.
+const resolveChangedFields = (
+  updatedFields: string[] | undefined,
+  before: FormulaDefinitionRecord | null | undefined,
+  after: FormulaDefinitionRecord,
+): string[] | undefined => {
+  if (updatedFields) {
+    return updatedFields;
+  }
+  if (!before) {
+    return undefined;
+  }
+  const beforeRecord = before as Record<string, unknown>;
+  const afterRecord = after as Record<string, unknown>;
+  return [
+    ...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)]),
+  ].filter((field) => !deepJsonEqual(beforeRecord[field], afterRecord[field]));
 };
 
 export type HandleFormulaChangeArgs = {
   client: FormulaClient;
   after: FormulaDefinitionRecord | null | undefined;
   updatedFields: string[] | undefined;
+  // The update event's `before` row image. Absent on a create.
+  before?: FormulaDefinitionRecord | null;
 };
 
 // Save-time validation (ADR 0005). Runs after a FormulaDefinition is created or
@@ -48,13 +102,16 @@ export const handleFormulaChange = async ({
   client,
   after,
   updatedFields,
+  before,
 }: HandleFormulaChangeArgs): Promise<Record<string, unknown>> => {
   if (!after?.id) {
     return { handled: false };
   }
 
+  const changedFields = resolveChangedFields(updatedFields, before, after);
+
   // Recursion guard: ignore our own bookkeeping writes.
-  if (isPureBookkeepingUpdate(updatedFields)) {
+  if (isPureBookkeepingUpdate(changedFields)) {
     return { handled: false, reason: 'bookkeeping-only' };
   }
 
@@ -67,10 +124,9 @@ export const handleFormulaChange = async ({
   // expression still flows through.
   if (
     after.enabled === false &&
-    updatedFields &&
-    updatedFields.length > 0 &&
-    updatedFields.every(
-      (field) => BOOKKEEPING_FIELDS.has(field) || field === 'enabled',
+    changedFields &&
+    changedFields.every(
+      (field) => isIgnorableField(field) || field === 'enabled',
     )
   ) {
     return { handled: false, reason: 'disabled-bookkeeping' };
@@ -80,7 +136,7 @@ export const handleFormulaChange = async ({
   // Only a human re-enabling it (enabled: true) or editing its expression flows
   // past here. This keeps a cycle rejection sticky instead of being cleared when
   // the sibling cyclic formula later drops out of the enabled set.
-  if (after.enabled === false && !updatedFields?.includes('expression')) {
+  if (after.enabled === false && !changedFields?.includes('expression')) {
     return { handled: false, reason: 'disabled' };
   }
 

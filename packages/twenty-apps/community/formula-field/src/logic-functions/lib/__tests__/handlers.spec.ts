@@ -322,6 +322,164 @@ describe('handleFormulaChange (save-time validation)', () => {
   });
 });
 
+// Payload shapes here are the ones twenty-server actually delivers on
+// formulaDefinition.updated, not invented ones:
+//   - properties = { before, after, updatedFields, diff }, both images FULL rows
+//     re-selected around the write (format-twenty-orm-event-to-database-batch-
+//     event.util.ts:127-154; workspace-update-query-builder.ts:136-138 / 238-247)
+//   - updatedFields = the diff's keys, where the diff EXCLUDES updatedAt and
+//     searchVector and INCLUDES position (object-record-changed-values.ts:
+//     112-126; the POSITION strip was removed in twenty-server 20c83e1f86 so
+//     that position-only reorders emit events instead of being dropped)
+//   - an update whose diff is empty never reaches a trigger at all
+//     (format-twenty-orm-event-to-database-batch-event.util.ts:140-142)
+describe('handleFormulaChange bookkeeping short-circuit (F3)', () => {
+  let client: FakeClient;
+
+  const definition = (): FormulaDefinitionRecord => ({
+    id: 'f1',
+    targetObject: 'opportunity',
+    targetField: 'formulaScore',
+    expression: 'formulaInputA + formulaInputB * 2',
+    enabled: true,
+    lastEvaluatedAt: '2026-08-06T02:00:12.462Z',
+  });
+
+  // The platform columns every row image carries alongside the app's own fields.
+  const rowImage = (
+    overrides: Record<string, unknown> = {},
+  ): FormulaDefinitionRecord =>
+    ({
+      ...definition(),
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-06T02:00:12.500Z',
+      deletedAt: null,
+      position: 1,
+      createdBy: {
+        source: 'API',
+        workspaceMemberId: null,
+        name: '',
+        context: {},
+      },
+      ...overrides,
+    }) as FormulaDefinitionRecord;
+
+  beforeEach(() => {
+    client = new FakeClient();
+    client.seed('formulaDefinition', [definition()]);
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 2, formulaInputB: 3, formulaScore: null },
+    ]);
+  });
+
+  it('short-circuits the live shape: an external single-field lastEvaluatedAt update', async () => {
+    const result = await handleFormulaChange({
+      client,
+      after: definition(),
+      updatedFields: ['lastEvaluatedAt'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+    expect(client.queries).toBe(0);
+  });
+
+  it('short-circuits a position-only update (a table drag reorders the row)', async () => {
+    const result = await handleFormulaChange({
+      client,
+      after: definition(),
+      updatedFields: ['position'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+    expect(client.queries).toBe(0);
+  });
+
+  it('short-circuits an order-only update (the widget drag-to-reorder writes it)', async () => {
+    // formula-editor.tsx:564 writes `data: { order }` per dropped row; `order`
+    // is display-only (formula-definition.object.ts: isUIEditable false,
+    // "managed by drag-to-reorder"), so a reorder must cost zero recomputes.
+    const result = await handleFormulaChange({
+      client,
+      after: definition(),
+      updatedFields: ['order'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+    expect(client.queries).toBe(0);
+  });
+
+  it('short-circuits a bookkeeping write that a reorder rode along with', async () => {
+    const result = await handleFormulaChange({
+      client,
+      after: definition(),
+      updatedFields: ['lastEvaluatedAt', 'position'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+    expect(client.queries).toBe(0);
+  });
+
+  it('still validates when a real edit rode along with a reorder', async () => {
+    const result = await handleFormulaChange({
+      client,
+      after: definition(),
+      updatedFields: ['expression', 'position'],
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.valid).toBe(true);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(8);
+  });
+
+  it('short-circuits from the row images when updatedFields is absent and only bookkeeping moved', async () => {
+    const result = await handleFormulaChange({
+      client,
+      before: rowImage(),
+      after: rowImage({
+        lastEvaluatedAt: '2026-08-06T02:50:09.906Z',
+        updatedAt: '2026-08-06T02:50:09.950Z',
+      }),
+      updatedFields: undefined,
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+    expect(client.queries).toBe(0);
+  });
+
+  it('validates from the row images when updatedFields is absent and the expression moved', async () => {
+    const result = await handleFormulaChange({
+      client,
+      before: rowImage(),
+      after: rowImage({
+        expression: 'formulaInputA',
+        updatedAt: '2026-08-06T02:50:09.950Z',
+      }),
+      updatedFields: undefined,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.valid).toBe(true);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(2);
+  });
+
+  it('still validates a create, which carries no before image and no updatedFields', async () => {
+    const result = await handleFormulaChange({
+      client,
+      after: definition(),
+      updatedFields: undefined,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.valid).toBe(true);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(8);
+  });
+});
+
 describe('validateFormula string-comparison field-kind validation', () => {
   const candidate = (expression: string, targetFieldType?: string) => ({
     id: 'f1',
