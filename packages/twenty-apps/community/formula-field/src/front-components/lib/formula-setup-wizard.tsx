@@ -27,6 +27,7 @@ import {
 } from 'src/front-components/lib/formula-field-formats';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import {
+  BannerWarning,
   ChoiceChip,
   ErrText,
   HintText,
@@ -155,6 +156,12 @@ export const FormulaSetupWizard = ({
   const [description, setDescription] = useState(draft.description);
   // Suppresses the description-persist debounce until the user actually types.
   const descriptionTouched = useRef(false);
+  // Create-time-only choice (Feature A′): whether the created field stays
+  // manually editable or is locked to always-computed. Legacy drafts arrive
+  // normalized to true by Task 9's editor-side default.
+  const [allowOverride, setAllowOverride] = useState<boolean>(
+    draft.allowOverride,
+  );
 
   // Mirror-mode draft, recovered once from the persisted settings (outputFormat
   // 'mirror' or a mirror block). The source object/field re-resolve against the
@@ -198,6 +205,14 @@ export const FormulaSetupWizard = ({
         .catch(() => {});
     },
     [draft.id],
+  );
+
+  const pickAllowOverride = useCallback(
+    (next: boolean) => {
+      setAllowOverride(next);
+      persistDraft({ allowOverride: next });
+    },
+    [persistDraft],
   );
 
   useEffect(() => {
@@ -662,7 +677,7 @@ export const FormulaSetupWizard = ({
                   label: label.trim() || fieldName,
                   description: `Computed by the Formula Field app (${format}).`,
                   icon: 'IconMathFunction',
-                  isUIEditable: true,
+                  isUIEditable: allowOverride,
                   ...(settings ? { settings } : {}),
                   // String defaults use the server's quoted-literal convention.
                   ...(isCurrency
@@ -695,6 +710,7 @@ export const FormulaSetupWizard = ({
           // Provenance: the lifecycle machinery only deactivates / reactivates
           // fields the wizard created (ADR 0009).
           createdField: true,
+          allowOverride,
         },
       });
     } catch (createError) {
@@ -710,6 +726,7 @@ export const FormulaSetupWizard = ({
     label,
     existingField,
     finalizeCreation,
+    allowOverride,
   ]);
 
   // Mirror create: CLONE the source field (type + settings + option set) onto a
@@ -754,7 +771,7 @@ export const FormulaSetupWizard = ({
                   label: label.trim() || fieldName,
                   description: `Mirrors ${sourceObject.nameSingular}.${sourceField.name} (Formula Field app).`,
                   icon: 'IconCopy',
-                  isUIEditable: true,
+                  isUIEditable: allowOverride,
                   ...(sourceField.settings
                     ? { settings: sourceField.settings }
                     : {}),
@@ -786,6 +803,7 @@ export const FormulaSetupWizard = ({
             mirror: mirrorDraft,
           }),
           createdField: true,
+          allowOverride,
         },
       });
     } catch (createError) {
@@ -802,6 +820,7 @@ export const FormulaSetupWizard = ({
     label,
     existingField,
     finalizeCreation,
+    allowOverride,
   ]);
 
   return (
@@ -1018,6 +1037,34 @@ export const FormulaSetupWizard = ({
         <MutedText as="div">
           Optional — shown as a hover tooltip in the Formulas tab.
         </MutedText>
+      </div>
+
+      <div style={layout.step}>
+        <StepTitle style={layout.stepTitle}>5 · Overrides</StepTitle>
+        <div style={layout.formatRow}>
+          <ChoiceChip
+            selected={allowOverride}
+            onMouseDown={() => pickAllowOverride(true)}
+          >
+            Allow manual overrides
+            <HintText as="span"> a human edit pins that record's value</HintText>
+          </ChoiceChip>
+          <ChoiceChip
+            selected={!allowOverride}
+            onMouseDown={() => pickAllowOverride(false)}
+          >
+            Locked
+            <HintText as="span"> always computed, permanent</HintText>
+          </ChoiceChip>
+        </div>
+        {!allowOverride ? (
+          <BannerWarning>
+            Permanent: this setting cannot be changed after the field is
+            created. Changing it later means deleting the formula and
+            recreating the field — and a deactivated old field can still
+            reserve the name.
+          </BannerWarning>
+        ) : null}
       </div>
 
       <div style={layout.actions}>
