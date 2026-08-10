@@ -606,7 +606,12 @@ const FormulaDefinitionEditor = () => {
             {definition.targetFieldType === 'CURRENCY' ? (
               <HintText> currency (micros)</HintText>
             ) : null}
-            {!definition.enabled ? <ErrText> (disabled)</ErrText> : null}
+            {/* An awaiting definition is disabled by construction — saying so
+                reads as a fault rather than as the next step (Task 12's
+                record-tab rule). */}
+            {!definition.enabled && !awaitingExpression ? (
+              <ErrText> (disabled)</ErrText>
+            ) : null}
           </div>
           <MutedText as="div">Current value</MutedText>
         </div>

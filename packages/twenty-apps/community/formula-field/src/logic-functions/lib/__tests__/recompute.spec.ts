@@ -1335,6 +1335,65 @@ describe('recomputeAllRecords hoisted compilation (once per pass)', () => {
   });
 });
 
+// A locked definition (allowOverride === false) is "fully computed, no
+// exceptions" (ADR 0028). The event lane already ignores pins on a locked
+// target; the SCAN lane must too, or a rogue ACTIVE row — one the UI gives no
+// way to clear, since the toggle is hidden for locked definitions — freezes
+// that record against every expression change and TODAY-rollover sweep forever.
+describe('recomputeAllRecords pin handling by lock state', () => {
+  const pinnedFixture = (client: FakeClient): void => {
+    client.seed('formulaOverride', [
+      {
+        id: 'ov1',
+        name: 'opportunity.formulaScore#o1',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        recordId: 'o1',
+        overrideValue: 999,
+        active: true,
+      },
+    ]);
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 999 },
+    ]);
+  };
+
+  it('locked definition: an ACTIVE pin is ignored and the stale value is recomputed', async () => {
+    const client = new FakeClient();
+    pinnedFixture(client);
+
+    const outcomes = await recomputeAllRecords(
+      client,
+      formula({ allowOverride: false }),
+    );
+
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(25);
+    expect(outcomes[0].overridden ?? false).toBe(false);
+    // The pin lookup is not merely ignored, it is not PAID for: a locked
+    // definition must not spend a paginated formulaOverrides scan per pass.
+    expect(
+      client.querySelections.filter(
+        (selection) => selection.formulaOverrides !== undefined,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('negative control: an unlocked definition still skips the pinned record', async () => {
+    const client = new FakeClient();
+    pinnedFixture(client);
+
+    const outcomes = await recomputeAllRecords(client, formula());
+
+    expect(outcomes[0].overridden).toBe(true);
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(999);
+    expect(
+      client.querySelections.filter(
+        (selection) => selection.formulaOverrides !== undefined,
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
 // Task 6: the strict kind gate is a property of the DEFINITION, so a definition
 // whose kinds do not check can never produce a correct value for ANY record —
 // it must cost zero record queries per pass, not one silently-wrong write per

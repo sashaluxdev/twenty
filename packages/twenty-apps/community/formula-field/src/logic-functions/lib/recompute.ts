@@ -1081,11 +1081,13 @@ export const recomputeAllRecords = async (
   }
 
   // Load the overridden record ids once so pinned records are skipped (#2).
-  const overriddenRecordIds = await loadOverriddenRecordIds(
-    client,
-    targetObject,
-    targetField,
-  );
+  // A LOCKED definition (allowOverride === false) is fully computed with no
+  // exceptions (ADR 0028), so it neither honours a pin nor pays the paginated
+  // lookup: `undefined` leaves every record unpinned for this pass. The
+  // `?? true` read keeps legacy rows (no allowOverride column) on the old path.
+  const overriddenRecordIds = (formula.allowOverride ?? true)
+    ? await loadOverriddenRecordIds(client, targetObject, targetField)
+    : undefined;
 
   // One cache per pass: every target record in this sweep resolves the same
   // fixed cross-references, so a referenced record is fetched once for the

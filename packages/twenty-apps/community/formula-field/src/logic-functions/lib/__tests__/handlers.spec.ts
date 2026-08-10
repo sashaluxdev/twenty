@@ -1340,6 +1340,50 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.writes).toHaveLength(0);
   });
 
+  it('locked definition: revert then echo settles in exactly one write (end-to-end)', async () => {
+    // The two halves above are asserted separately; this pins the SEAM. Pass 1
+    // reverts an outside write, pass 2 replays the event that revert's own
+    // write emits (memberless, naming the target, carrying the reverted row) —
+    // the pair must converge on one write, not oscillate.
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-locked',
+        targetObject: 'opportunity',
+        targetField: 'lockedScore',
+        targetFieldType: 'NUMBER',
+        expression: 'formulaInputA + 1',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', formulaInputA: 2, lockedScore: 777 }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 2, lockedScore: 777 },
+      updatedFields: ['lockedScore'],
+    });
+
+    expect(client.get('opportunity', 'o1')!.lockedScore).toBe(3);
+    expect(client.writes).toEqual(['opportunity:o1:lockedScore=3']);
+    const writesAfterRevert = [...client.writes];
+
+    // The echo: same shape as the event the revert write produces, carrying the
+    // post-revert row.
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 2, lockedScore: 3 },
+      updatedFields: ['lockedScore'],
+    });
+
+    expect(client.writes).toEqual(writesAfterRevert);
+    expect(client.get('opportunity', 'o1')!.lockedScore).toBe(3);
+  });
+
   it('recomputes when a dependency field changed', async () => {
     client.seed('opportunity', [
       { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: null },
