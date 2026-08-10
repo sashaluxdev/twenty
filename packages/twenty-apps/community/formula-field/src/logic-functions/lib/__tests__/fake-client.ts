@@ -167,6 +167,19 @@ export class FakeClient implements FormulaClient {
     return { [key]: record ? this.project(record, node, key) : null };
   }
 
+  // Evaluates a filter object against a record, mirroring the server's
+  // any-subfilter-matches semantics for a top-level `or` (e.g.
+  // `{ or: [{ enabled: { eq: true } }, { allowOverride: { eq: false } }] }`).
+  // Every other key is AND-combined via matchesCondition, same as before.
+  private matchesFilter(record: Rec, filter: any): boolean {
+    return Object.entries(filter).every(([field, cond]: [string, any]) => {
+      if (field === 'or' && Array.isArray(cond)) {
+        return cond.some((subFilter) => this.matchesFilter(record, subFilter));
+      }
+      return this.matchesCondition(record[field], cond);
+    });
+  }
+
   private matchesCondition(value: unknown, cond: any): boolean {
     if (cond == null) return true;
     if (cond.eq !== undefined) return value === cond.eq;
@@ -223,11 +236,7 @@ export class FakeClient implements FormulaClient {
       records = records.filter((record) => record.deletedAt == null);
     }
     if (filter) {
-      records = records.filter((record) =>
-        Object.entries(filter).every(([field, cond]: [string, any]) =>
-          this.matchesCondition(record[field], cond),
-        ),
-      );
+      records = records.filter((record) => this.matchesFilter(record, filter));
     }
 
     // Opt-in cursor pagination. When `first` is absent the mock keeps its

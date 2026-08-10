@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { __clearEnabledFormulasCacheForTests } from 'src/logic-functions/lib/formula-repository';
+import { __clearSyncExclusionFormulasCacheForTests } from 'src/logic-functions/lib/formula-repository';
 import { detectVariationDivergence } from 'src/logic-functions/lib/variation-sync';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
@@ -27,7 +27,7 @@ describe('detectVariationDivergence', () => {
     ]);
   });
 
-  afterEach(() => __clearEnabledFormulasCacheForTests());
+  afterEach(() => __clearSyncExclusionFormulasCacheForTests());
 
   it('pins a NUMBER override (numeric slot) when a human edits a variation field away from the primary', async () => {
     client.seed('company', [

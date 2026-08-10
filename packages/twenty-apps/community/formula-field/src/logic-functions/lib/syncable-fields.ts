@@ -1,5 +1,5 @@
 import { loadAllObjectsWithFields } from 'src/logic-functions/lib/metadata-objects';
-import { loadAllEnabledFormulasCached } from 'src/logic-functions/lib/formula-repository';
+import { loadSyncExclusionFormulasCached } from 'src/logic-functions/lib/formula-repository';
 import {
   ENGINE_FAMILY_KINDS,
   MIRRORABLE_KINDS,
@@ -27,9 +27,10 @@ export type SyncableFieldInfo = { name: string; kind: string };
 // join column (emitted as a RELATION-kind entry named after joinColumnName);
 // ONE_TO_MANY inverses (no local FK) and MORPH_RELATION (discriminator column,
 // deferred) stay excluded, as do ACTOR/RICH_TEXT/POSITION/TS_VECTOR (simply not
-// in either source set). Also excluded: any field an enabled FormulaDefinition
-// targets on this object (the
-// formula owns that column; the two write sets must stay disjoint), and any
+// in either source set). Also excluded: any field an enabled OR locked
+// FormulaDefinition targets on this object (the formula owns that column, and
+// a locked target stays fully computed even while its definition is disabled
+// pre-first-save — spec §2.6; the two write sets must stay disjoint), and any
 // UNIQUE-constrained field (e.g. Company domainName) — a unique value can
 // never be legitimately mirrored onto a second record without colliding with
 // the primary's own value, and since syncOneVariation writes every syncable
@@ -48,7 +49,7 @@ export const computeSyncableFields = async (
     return [];
   }
 
-  const formulas = await loadAllEnabledFormulasCached(client);
+  const formulas = await loadSyncExclusionFormulasCached(client);
   const formulaTargetFields = new Set(
     formulas
       .filter((formula) => formula.targetObject === targetObject)

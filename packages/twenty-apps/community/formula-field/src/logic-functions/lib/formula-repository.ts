@@ -114,12 +114,12 @@ export const invalidateEnabledFormulasCache = (): void => {
   enabledFormulasCacheByWorkspace.delete(workspaceCacheKey());
 };
 
-export const __clearEnabledFormulasCacheForTests = (): void => {
+export const __clearSyncExclusionFormulasCacheForTests = (): void => {
   enabledFormulasCacheByWorkspace.clear();
   enabledFormulasInFlightByWorkspace.clear();
 };
 
-export const loadAllEnabledFormulasCached = async (
+export const loadSyncExclusionFormulasCached = async (
   client: FormulaClient,
 ): Promise<FormulaDefinitionRecord[]> => {
   const cacheKey = workspaceCacheKey();
@@ -134,7 +134,53 @@ export const loadAllEnabledFormulasCached = async (
   }
 
   const fetchPromise = (async () => {
-    const formulas = await loadEnabledFormulas(client);
+    // Variation sync must ignore enabled-formula targets AND locked targets even
+    // while the locked definition is disabled (§2.6 / ADR 0028): locked = fully
+    // computed, no exceptions. Sync-exclusion is this cache's only consumer;
+    // recompute paths use the uncached enabled-only loader.
+    const filter = {
+      or: [{ enabled: { eq: true } }, { allowOverride: { eq: false } }],
+    };
+    const pageSize = 200;
+
+    const formulas: FormulaDefinitionRecord[] = [];
+    let after: string | undefined;
+
+    for (;;) {
+      const response = await withRetry(() =>
+        client.query({
+          formulaDefinitions: {
+            __args: {
+              first: pageSize,
+              filter,
+              // Stable order so a time-bounded sweep resumes at a predictable
+              // definition instead of starving whichever ones land late in an
+              // unspecified ordering.
+              orderBy: [{ id: graphqlEnum('AscNullsFirst') }],
+              ...(after ? { after } : {}),
+            },
+            edges: { node: FORMULA_FIELDS },
+            pageInfo: { hasNextPage: true, endCursor: true },
+          },
+        }),
+      );
+
+      const connection = response?.formulaDefinitions;
+      const edges: Array<{ node?: FormulaDefinitionRecord }> =
+        connection?.edges ?? [];
+
+      for (const edge of edges) {
+        if (edge?.node) {
+          formulas.push(edge.node);
+        }
+      }
+
+      if (!connection?.pageInfo?.hasNextPage) {
+        break;
+      }
+      after = connection.pageInfo.endCursor ?? undefined;
+    }
+
     // Cache only on success — a rejected pull leaves nothing behind, so the
     // next caller retries reality instead of a poisoned entry.
     enabledFormulasCacheByWorkspace.set(cacheKey, {

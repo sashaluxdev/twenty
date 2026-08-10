@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { __clearEnabledFormulasCacheForTests } from 'src/logic-functions/lib/formula-repository';
+import { __clearSyncExclusionFormulasCacheForTests } from 'src/logic-functions/lib/formula-repository';
 import {
   computeSyncableFields,
   SYNCABLE_KINDS,
 } from 'src/logic-functions/lib/syncable-fields';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
-afterEach(() => __clearEnabledFormulasCacheForTests());
+afterEach(() => __clearSyncExclusionFormulasCacheForTests());
 
 // Lane-switch invariant (Task 7): variation sync copies the UNION of the mirror
 // allowlist and the engine family, so moving TEXT from one set to the other must
@@ -174,5 +174,50 @@ describe('computeSyncableFields', () => {
     const result = await computeSyncableFields(client, 'unknown', 'primaryRecord');
 
     expect(result).toEqual([]);
+  });
+
+  it('excludes a locked target even while its definition is disabled (spec §2.6)', async () => {
+    const client = new FakeClient();
+    client.setObjectsWithFields([
+      {
+        id: 'obj-company',
+        nameSingular: 'company',
+        labelIdentifierFieldMetadataId: 'field-name',
+        fields: [
+          { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
+          { id: 'field-locked', name: 'lockedTotal', type: 'NUMBER', isActive: true, isSystem: false },
+          { id: 'field-emp', name: 'employees', type: 'NUMBER', isActive: true, isSystem: false },
+          { id: 'field-rel', name: 'primaryRecord', type: 'RELATION', isActive: true, isSystem: false },
+        ],
+      },
+    ]);
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-locked',
+        targetObject: 'company',
+        targetField: 'lockedTotal',
+        targetFieldType: 'NUMBER',
+        expression: '',
+        enabled: false,
+        allowOverride: false,
+      },
+      // Tripwire for the filter shape AND the fake's `or` support: disabled and
+      // unlocked must stay OUT of the exclusion set — if the widened filter (or
+      // a fake that ignores `or`) returns everything, employees drops out of the
+      // syncable set and this test fails.
+      {
+        id: 'f-disabled-unlocked',
+        targetObject: 'company',
+        targetField: 'employees',
+        targetFieldType: 'NUMBER',
+        expression: '',
+        enabled: false,
+      },
+    ]);
+
+    const fields = await computeSyncableFields(client, 'company', 'primaryRecord');
+
+    expect(fields.map((field) => field.name)).not.toContain('lockedTotal');
+    expect(fields.map((field) => field.name)).toContain('employees');
   });
 });

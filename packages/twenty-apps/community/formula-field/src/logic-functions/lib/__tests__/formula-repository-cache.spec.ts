@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  __clearEnabledFormulasCacheForTests,
+  __clearSyncExclusionFormulasCacheForTests,
   invalidateEnabledFormulasCache,
-  loadAllEnabledFormulasCached,
+  loadSyncExclusionFormulasCached,
 } from 'src/logic-functions/lib/formula-repository';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 
@@ -24,30 +24,30 @@ const clientWithSpy = () => {
   };
 };
 
-afterEach(() => __clearEnabledFormulasCacheForTests());
+afterEach(() => __clearSyncExclusionFormulasCacheForTests());
 
-describe('loadAllEnabledFormulasCached', () => {
+describe('loadSyncExclusionFormulasCached', () => {
   it('serves the second call from cache within the TTL', async () => {
     const { client, query } = clientWithSpy();
-    await loadAllEnabledFormulasCached(client);
-    await loadAllEnabledFormulasCached(client);
+    await loadSyncExclusionFormulasCached(client);
+    await loadSyncExclusionFormulasCached(client);
     expect(query).toHaveBeenCalledTimes(1);
   });
 
   it('dedupes concurrent cold-cache callers into one fetch', async () => {
     const { client, query } = clientWithSpy();
     await Promise.all([
-      loadAllEnabledFormulasCached(client),
-      loadAllEnabledFormulasCached(client),
+      loadSyncExclusionFormulasCached(client),
+      loadSyncExclusionFormulasCached(client),
     ]);
     expect(query).toHaveBeenCalledTimes(1);
   });
 
   it('refetches after invalidation', async () => {
     const { client, query } = clientWithSpy();
-    await loadAllEnabledFormulasCached(client);
+    await loadSyncExclusionFormulasCached(client);
     invalidateEnabledFormulasCache();
-    await loadAllEnabledFormulasCached(client);
+    await loadSyncExclusionFormulasCached(client);
     expect(query).toHaveBeenCalledTimes(2);
   });
 
@@ -58,7 +58,7 @@ describe('loadAllEnabledFormulasCached', () => {
       .mockResolvedValueOnce(pageResponse);
     const client = { query, mutation: vi.fn() } as unknown as FormulaClient;
 
-    await expect(loadAllEnabledFormulasCached(client)).rejects.toThrow('boom');
-    await expect(loadAllEnabledFormulasCached(client)).resolves.toHaveLength(1);
+    await expect(loadSyncExclusionFormulasCached(client)).rejects.toThrow('boom');
+    await expect(loadSyncExclusionFormulasCached(client)).resolves.toHaveLength(1);
   });
 });
