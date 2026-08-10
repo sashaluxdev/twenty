@@ -48,7 +48,10 @@ export const PLATFORM_MANAGED_FIELDS = new Set([
 
 // Cosmetic/immutable definition fields the engine never reads: renames and
 // description edits must not trigger validation or recompute (item 0.2).
-const INERT_FIELDS = new Set(['name', 'description']);
+// allowOverride (ADR 0028) is immutable after create — the wizard writes it
+// once at create time and nothing ever flips it again, so the definition lane
+// never needs to react to it (spec §2.3).
+const INERT_FIELDS = new Set(['name', 'description', 'allowOverride']);
 
 const isIgnorableField = (field: string): boolean =>
   BOOKKEEPING_FIELDS.has(field) ||

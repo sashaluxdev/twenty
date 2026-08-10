@@ -43,6 +43,10 @@ export type FormulaDefinitionRecord = {
   statusReason?: string | null;
   expression?: string | null;
   enabled?: boolean | null;
+  // Create-time override lock (ADR 0028): false = value field born view-only,
+  // overrides never honored. Immutable after creation; null (legacy rows and
+  // unwidened selections) must read as true (`?? true`) everywhere.
+  allowOverride?: boolean | null;
   lastValue?: number | null;
   // Mirror heartbeat (design 2026-07-06): JSON-stringified, 500-char-truncated
   // last mirrored raw value. Every non-numeric outcome (a mirror passthrough or

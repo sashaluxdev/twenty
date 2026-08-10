@@ -21,6 +21,7 @@ const FORMULA_FIELDS = {
   createdField: true,
   expression: true,
   enabled: true,
+  allowOverride: true,
   lastValue: true,
   lastValueText: true,
   lastError: true,

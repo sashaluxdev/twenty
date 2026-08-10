@@ -13,6 +13,7 @@ import {
 } from 'src/logic-functions/lib/override-repository';
 import {
   loadAllEnabledFormulas,
+  loadEnabledFormulas,
   recordEvaluationHeartbeat,
 } from 'src/logic-functions/lib/formula-repository';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
@@ -381,6 +382,27 @@ describe('handleFormulaChange (save-time validation)', () => {
     expect(client.writes).toHaveLength(0);
   });
 
+  it('treats an allowOverride-only update as inert (spec §2.3)', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'f1',
+      targetObject: 'opportunity',
+      targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
+      expression: 'formulaInputA + 1',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: { ...def, allowOverride: false },
+      updatedFields: ['allowOverride'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+  });
+
   it('disables and skips wizard drafts that have no targetField yet (spec §9.5)', async () => {
     client.seed('formulaDefinition', [
       { id: 'draft-1', targetObject: 'company', targetField: '', expression: '', enabled: true },
@@ -419,6 +441,17 @@ describe('handleFormulaChange (save-time validation)', () => {
     expect(result).toEqual({ handled: false, reason: 'disabled' });
     expect(client.mutations).toBe(0);
     expect(client.queries).toBe(0);
+  });
+});
+
+describe('loadEnabledFormulas projection (A-prime I2)', () => {
+  it('selects allowOverride on definition loads (projection contents)', async () => {
+    const client = new FakeClient();
+    await loadEnabledFormulas(client);
+    const selection = client.querySelections.find(
+      (candidate) => 'formulaDefinitions' in candidate,
+    );
+    expect(selection.formulaDefinitions.edges.node.allowOverride).toBe(true);
   });
 });
 

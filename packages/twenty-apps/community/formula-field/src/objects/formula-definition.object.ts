@@ -22,6 +22,7 @@ export const FORMULA_DEFINITION_FIELDS = {
   description: '7c2a1f5e-4b8d-4e2a-9f63-0d81c5b7ae24',
   dependencies: 'a39455b0-c789-441a-8fea-1d6c87277446',
   enabled: '64790652-18a3-47d9-a1ac-8883d0830a7a',
+  allowOverride: '436befd0-e824-4d85-a79f-2b02460c43e3',
   lastEvaluatedAt: '2ec77311-1738-44f0-8179-ba8f11557282',
   lastValue: 'c84ad4eb-709b-4897-aec4-bfcfb9177ff4',
   lastValueText: 'c24bd9f9-9d3e-4fb1-b799-d501bec3f4af',
@@ -125,6 +126,19 @@ export default defineObject({
       description: 'When off, the formula is not evaluated.',
       icon: 'IconToggleRight',
       defaultValue: true,
+    },
+    {
+      universalIdentifier: FORMULA_DEFINITION_FIELDS.allowOverride,
+      type: FieldType.BOOLEAN,
+      name: 'allowOverride',
+      label: 'Allow overrides',
+      description:
+        'Create-time choice (ADR 0028): when false, the value field was ' +
+        'created view-only and manual overrides are never honored. ' +
+        'Permanent — the platform cannot make a field editable after creation.',
+      icon: 'IconLock',
+      defaultValue: true,
+      isUIEditable: false,
     },
     {
       universalIdentifier: FORMULA_DEFINITION_FIELDS.lastEvaluatedAt,
