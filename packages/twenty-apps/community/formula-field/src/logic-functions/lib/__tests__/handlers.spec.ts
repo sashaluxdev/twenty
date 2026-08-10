@@ -1072,6 +1072,136 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.writes).toHaveLength(0);
   });
 
+  it('locked definition: a human edit does not pin an override (engine lane)', async () => {
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-locked',
+        targetObject: 'opportunity',
+        targetField: 'lockedScore',
+        targetFieldType: 'NUMBER',
+        expression: 'formulaInputA + 1',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', formulaInputA: 2, lockedScore: 999 }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 2, lockedScore: 999 },
+      updatedFields: ['lockedScore'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    expect(
+      client.mutationSelections.some((s) => 'createFormulaOverride' in s),
+    ).toBe(false);
+  });
+
+  it('locked definition: a human edit does not pin an override (mirror lane)', async () => {
+    // Mirror = bare same-record field ref onto a non-engine kind (fixture shape
+    // from mirror-target.spec.ts's mirrorFormula helper).
+    client.setFieldKinds('opportunity', {
+      sourceField: 'SELECT',
+      mirrorField: 'SELECT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-mirror',
+        targetObject: 'opportunity',
+        targetField: 'mirrorField',
+        targetFieldType: 'SELECT',
+        expression: 'sourceField',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', sourceField: 'A', mirrorField: 'B' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', sourceField: 'A', mirrorField: 'B' },
+      updatedFields: ['mirrorField'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    expect(
+      client.mutationSelections.some((s) => 'createFormulaOverride' in s),
+    ).toBe(false);
+  });
+
+  it('locked definition: an active rogue pin is ignored on recompute', async () => {
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-locked',
+        targetObject: 'opportunity',
+        targetField: 'lockedScore',
+        targetFieldType: 'NUMBER',
+        expression: 'formulaInputA + 1',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('formulaOverride', [
+      {
+        id: 'ov1',
+        name: 'opportunity.lockedScore#o1',
+        targetObject: 'opportunity',
+        targetField: 'lockedScore',
+        recordId: 'o1',
+        overrideValue: 999,
+        active: true,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', formulaInputA: 2, lockedScore: 999 }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 2, lockedScore: 999 },
+      updatedFields: ['formulaInputA'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    expect(client.get('opportunity', 'o1')!.lockedScore).toBe(3);
+  });
+
+  it('legacy rows (allowOverride unset) still honor pins', async () => {
+    // beforeEach's f1 has no allowOverride key — seed an active pin on
+    // formulaScore for o1, update formulaInputA, and assert formulaScore keeps
+    // the pinned value (the ?? true read).
+    client.seed('formulaOverride', [
+      {
+        id: 'ov1',
+        name: 'opportunity.formulaScore#o1',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        recordId: 'o1',
+        overrideValue: 999,
+        active: true,
+      },
+    ]);
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 999 },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 999 },
+      updatedFields: ['formulaInputA'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(999);
+  });
+
   it('recomputes when a dependency field changed', async () => {
     client.seed('opportunity', [
       { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: null },

@@ -284,6 +284,9 @@ export const handleRecordUpdate = async ({
       // Blank targetFieldType: kinds are unknowable ('' reads as NUMBER), so a
       // human edit must never pin a junk-kind override (F2's event-path sibling).
       if (blankTargetTypeError(formula) !== null) continue;
+      // Locked at creation: a locked definition never turns edits into
+      // overrides, in either the engine or the mirror lane (ADR 0028).
+      if (formula.allowOverride === false) continue;
       const compiled = compiledByFormulaId.get(formula.id);
 
       // Mirror fork: a mirror target stores non-numeric raw values, so the
@@ -443,12 +446,15 @@ export const handleRecordUpdate = async ({
       const isMirror = isMirrorDefinition(compiled.ast, formula.targetFieldType);
 
       // Respect an ACTIVE manual override on this specific record (#2).
-      const override = await findOverride(
-        client,
-        formula.targetObject ?? '',
-        formula.targetField ?? '',
-        recordId,
-      );
+      // Locked definitions never honor pins, so don't pay the lookup (§5).
+      const override = (formula.allowOverride ?? true)
+        ? await findOverride(
+            client,
+            formula.targetObject ?? '',
+            formula.targetField ?? '',
+            recordId,
+          )
+        : null;
       if (override?.active) {
         const pinnedKind = targetFieldKind(formula.targetFieldType);
         outcomes.push({
