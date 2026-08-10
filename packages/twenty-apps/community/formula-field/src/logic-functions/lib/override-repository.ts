@@ -187,6 +187,10 @@ export const overrideSlotForKind = (
     ? { text: JSON.stringify(value ?? null) }
     : { numeric: typeof value === 'number' ? value : null };
 
+// TEXT round-trips SQL NULL as '' on some read paths; both mean "no text".
+const normalizedText = (value: string | null | undefined): string | null =>
+  value === null || value === undefined || value === '' ? null : value;
+
 // Creates or updates an ACTIVE override pinning the given value. Numeric targets
 // pin overrideValue (overrideValueText null); mirror targets pin overrideValueText
 // (overrideValue null).
@@ -198,12 +202,12 @@ export const upsertOverride = async (
   value: OverrideValue,
 ): Promise<void> => {
   const overrideValue = value.numeric ?? null;
-  const overrideValueText = value.text ?? null;
+  const overrideValueText = normalizedText(value.text ?? null);
   const existing = await findOverride(client, targetObject, targetField, recordId);
   if (existing) {
     if (
       existing.overrideValue !== overrideValue ||
-      existing.overrideValueText !== overrideValueText ||
+      normalizedText(existing.overrideValueText) !== overrideValueText ||
       existing.active !== true
     ) {
       await withRetry(() =>

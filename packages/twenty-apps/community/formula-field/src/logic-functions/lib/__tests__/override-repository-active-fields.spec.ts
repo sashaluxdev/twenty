@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { loadActiveOverrideFieldsForRecord } from 'src/logic-functions/lib/override-repository';
+import {
+  loadActiveOverrideFieldsForRecord,
+  overrideSlotForKind,
+  upsertOverride,
+} from 'src/logic-functions/lib/override-repository';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 
 describe('loadActiveOverrideFieldsForRecord', () => {
@@ -50,5 +54,35 @@ describe('loadActiveOverrideFieldsForRecord', () => {
     const fields = await loadActiveOverrideFieldsForRecord(client, 'company', 'c1');
 
     expect(fields).toEqual(new Set());
+  });
+});
+
+describe('upsertOverride', () => {
+  it('does not rewrite an identical pin whose text slot round-tripped as empty string (item 0.4)', async () => {
+    const client = new FakeClient();
+    // findOverride matches ONLY on the deterministic name key
+    // (override-repository.ts:27-31) — omit it and the CREATE branch runs.
+    client.seed('formulaOverride', [
+      {
+        id: 'ov1',
+        name: 'opportunity.formulaScore#o1',
+        targetObject: 'opportunity',
+        targetField: 'formulaScore',
+        recordId: 'o1',
+        overrideValue: 5,
+        overrideValueText: '',
+        active: true,
+      },
+    ]);
+
+    await upsertOverride(
+      client,
+      'opportunity',
+      'formulaScore',
+      'o1',
+      overrideSlotForKind('NUMBER', 5),
+    );
+
+    expect(client.mutations).toBe(0);
   });
 });
