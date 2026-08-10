@@ -1,3 +1,7 @@
+import {
+  PLATFORM_MANAGED_FIELDS,
+  resolveChangedFields,
+} from 'src/logic-functions/lib/handle-formula-change';
 import { validateVariationConfig } from 'src/logic-functions/lib/variation-config-validation';
 import {
   findVariationConfigById,
@@ -18,17 +22,26 @@ const BOOKKEEPING_FIELDS = new Set([
   'statusReason',
 ]);
 
+// Aligned with the formula lane's shape: a defined-but-empty list is a no-op
+// write (vacuous-true -> skip), while a missing list still falls through.
 const isPureBookkeepingUpdate = (
   updatedFields: string[] | undefined,
 ): boolean => {
-  if (!updatedFields || updatedFields.length === 0) return false;
-  return updatedFields.every((field) => BOOKKEEPING_FIELDS.has(field));
+  if (!updatedFields) {
+    return false;
+  }
+  return updatedFields.every(
+    (field) =>
+      BOOKKEEPING_FIELDS.has(field) || PLATFORM_MANAGED_FIELDS.has(field),
+  );
 };
 
 export type HandleVariationConfigChangeArgs = {
   client: FormulaClient;
   after: VariationConfigRecord | null | undefined;
   updatedFields: string[] | undefined;
+  // The update event's `before` row image. Absent on a create.
+  before?: VariationConfigRecord | null;
 };
 
 // Runs after a VariationConfig is created or updated: validate, then either
@@ -39,11 +52,16 @@ export const handleVariationConfigChange = async ({
   client,
   after,
   updatedFields,
+  before,
 }: HandleVariationConfigChangeArgs): Promise<Record<string, unknown>> => {
   if (!after?.id) {
     return { handled: false };
   }
-  if (isPureBookkeepingUpdate(updatedFields)) {
+
+  // Aligned with the formula lane (spec §9.3): platform row images fill in when
+  // the event names no fields; a defined-but-empty list is a no-op write.
+  const changedFields = resolveChangedFields(updatedFields, before, after);
+  if (isPureBookkeepingUpdate(changedFields)) {
     return { handled: false, reason: 'bookkeeping-only' };
   }
   // Our own "disable on invalid" write sets { enabled: false, lastError }.
@@ -51,9 +69,9 @@ export const handleVariationConfigChange = async ({
   // wrongly re-validate clean (same second recursion guard as formulas).
   if (
     after.enabled === false &&
-    updatedFields &&
-    updatedFields.length > 0 &&
-    updatedFields.every(
+    changedFields &&
+    changedFields.length > 0 &&
+    changedFields.every(
       (field) => BOOKKEEPING_FIELDS.has(field) || field === 'enabled',
     )
   ) {

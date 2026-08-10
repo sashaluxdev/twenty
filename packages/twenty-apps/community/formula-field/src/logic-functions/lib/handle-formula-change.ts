@@ -38,7 +38,7 @@ const BOOKKEEPING_FIELDS = new Set([
 // as bookkeeping so a column the engine never reads cannot cost a pass.
 // `updatedAt` is also load-bearing for the row-image fallback below, where it is
 // the one field that ALWAYS differs.
-const PLATFORM_MANAGED_FIELDS = new Set([
+export const PLATFORM_MANAGED_FIELDS = new Set([
   'position',
   'updatedAt',
   'createdAt',
@@ -67,7 +67,7 @@ const isPureBookkeepingUpdate = (
 // trigger), but an update event also carries both full row images — so when the
 // list is missing we diff them rather than assume a real edit and pay a full
 // validate + recompute. A create has no before image and keeps the safe path.
-const resolveChangedFields = (
+export const resolveChangedFields = (
   updatedFields: string[] | undefined,
   before: FormulaDefinitionRecord | null | undefined,
   after: FormulaDefinitionRecord,

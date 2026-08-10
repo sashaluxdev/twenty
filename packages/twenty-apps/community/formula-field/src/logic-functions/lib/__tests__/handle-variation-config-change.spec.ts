@@ -246,4 +246,30 @@ describe('handleVariationConfigChange', () => {
     expect(result).toEqual({ handled: false, reason: 'superseded-missing' });
     expect(client.mutations).toBe(0);
   });
+
+  // Item 0.1: aligned with the formula lane (spec §9.3) — platform-managed
+  // columns (position/updatedAt/createdAt/createdBy/searchVector) must not cost
+  // a full validate + sweep, same defect class as F3.
+  it('ignores a platform position write (item 0.1)', async () => {
+    const client = new FakeClient();
+    const result = await handleVariationConfigChange({
+      client,
+      after: { id: 'vc1', targetObject: 'company' } as VariationConfigRecord,
+      updatedFields: ['position'],
+    });
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+  });
+
+  it('falls back to a before/after diff when updatedFields is missing', async () => {
+    const client = new FakeClient();
+    const result = await handleVariationConfigChange({
+      client,
+      after: { id: 'vc1', targetObject: 'company', position: 2 } as VariationConfigRecord,
+      before: { id: 'vc1', targetObject: 'company', position: 1 } as VariationConfigRecord,
+      updatedFields: undefined,
+    });
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+  });
 });

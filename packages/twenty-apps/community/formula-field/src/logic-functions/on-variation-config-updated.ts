@@ -17,13 +17,18 @@ const handler = async (
   >,
 ): Promise<Record<string, unknown>> => {
   const client = createDynamicCoreClient();
-  const { after, updatedFields } = payload.properties;
+  const { after, before, updatedFields } = payload.properties;
 
   return handleVariationConfigChange({
     client,
     after: after as unknown as Parameters<
       typeof handleVariationConfigChange
     >[0]['after'],
+    // Lets the guard fall back to diffing the row images if the platform ever
+    // delivers an update without updatedFields.
+    before: before as unknown as Parameters<
+      typeof handleVariationConfigChange
+    >[0]['before'],
     updatedFields,
   });
 };
