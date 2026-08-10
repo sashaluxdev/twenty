@@ -53,6 +53,14 @@ through a front component on the record page.
   record, or a field on a specific record of any object by uuid.
 - **Manual per-record overrides** — a human editing the value directly pins that
   record; recompute leaves it alone until the override is cleared (ADR 0006).
+- **Create-time override lock** — the wizard's "5 · Overrides" step can create
+  the value field view-only (`isUIEditable: false`, a real grey-out in table /
+  detail / kanban): no override is ever created for it, stray pins are ignored
+  on recompute (with one scan-lane caveat spelled out in ADR 0028), outside API
+  writes are reverted event-driven, and variations never track the field
+  regardless of whether the formula is enabled yet. The choice is
+  **permanent** — the platform only accepts `isUIEditable` at field creation —
+  so the wizard warns before you make it (ADR 0028).
 - **Operational status + status snackbar** — when an input field is
   deactivated/missing a formula goes OFFLINE; downstream formulas go UPSTREAM.
   The record-page Formulas widget fires a toast on mount and on every status
@@ -67,6 +75,12 @@ through a front component on the record page.
   Formulas tab; hovering it shows the description via the browser's native
   tooltip (`title` attribute — the app's only tooltip mechanism, ADR 0022). No
   glyph renders when the description is empty.
+- **Quiet awaiting-expression state** — a wizard-created definition with no
+  expression yet shows the same muted "Field created — write the formula
+  expression and save to activate." hint on both surfaces (the definition editor
+  and the record-page Formulas tab), instead of the record tab's old red
+  `PARSE_ERROR: Unexpected end of expression`. Typing anything resumes live
+  validation unchanged; `lastError` and save-validation are untouched.
 
 ## Formula grammar
 
@@ -592,10 +606,18 @@ the evaluator independently caps AST depth at runtime.
 
 ## Limitations (honest)
 
-- **Per-record edit-lock is impossible.** `isUIEditable` is column-level, not
-  per-record. Value fields are globally editable; a direct human edit is treated
-  as a manual override (detected by comparing the written value to the computed
-  value, not by actor — a recompute write inherits the triggering user's id).
+- **Per-record edit-lock is impossible, and the field-level lock is
+  create-time-only.** `isUIEditable` is column-level, not per-record, so the
+  lock is all-or-nothing for a whole formula field. By default value fields are
+  globally editable and a direct human edit is treated as a manual override
+  (detected by comparing the written value to the computed value, not by actor —
+  a recompute write inherits the triggering user's id). The wizard can instead
+  create the field view-only (ADR 0028), but that choice is **permanent**:
+  `createOneField` honors `isUIEditable` while `updateOneField` silently
+  whitelist-drops it, so no supported call flips it afterward — changing your
+  mind means deleting the formula and recreating the field. Existing fields
+  cannot be locked retroactively, and the flag is UI-only: raw API writes still
+  land and are reverted event-driven rather than refused.
 - **No inline cell badge.** Apps cannot decorate a native field cell
   (`FieldDisplay` is a fixed internal switch). The override indicator is a toggle
   *inside the widget*, and status surfaces via a snackbar toast fired from the

@@ -762,6 +762,125 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   cut over the same S3 path — measure exactly from a logged-in browser
   DevTools waterfall when convenient.
 
+- **2026-07-24 ARC (recompute scan efficiency, ADR 0025, ships v0.1.11;
+  DEPLOYED to cloud same day)**: a full-object recompute (the definition-change
+  handlers and the hourly sweep) paged the target object id-only, then
+  re-fetched every record one at a time — ~2 API requests per record. Measured
+  live: 387 opportunities × 19 enabled definitions, so a 387-record backfill was
+  4 page queries + 387 reads + up to 387 writes (~778 requests), overrunning the
+  30s handler `timeoutSeconds`. Worse, the scan cursor was a local variable
+  reseeded `undefined` per invocation, so a pass that overran restarted at the
+  first record id and never reached records past the timeout horizon. Four
+  changes: page nodes now carry the dependency and target fields
+  (`buildScanSelection`, `scan-selection.ts`) so the per-record read disappears;
+  writes batch (`flushBatchedWrites`, `batch-write.ts`); scans are
+  budget-bounded; and the resume point persists on the definition row as a new
+  `scanCursor` TEXT field (`updateScanCursor`), so an overrunning pass resumes
+  where it stopped instead of starving later definitions in an unordered
+  19-definition loop. Deploy details (platform 2.23 line, `plan` preview, all 23
+  defs read back healthy with `scanCursor` live) are in the deploy paragraph
+  under "What is NOT done" below.
+
+- **2026-08-04 → 2026-08-07 ARC (string values + `&` concatenation then strict
+  kind typing; ADR 0026 + ADR 0027, ships v0.3.0; DEPLOYED to cloud
+  2026-08-07)**: two arcs that shipped as one cloud deploy. **ADR 0026**
+  (implemented 2026-08-04) widened the engine's value domain from `number |
+  null` to `number | string | null`: string literals became ordinary values
+  legal anywhere, `&` concatenation landed (capped at 10 000 chars,
+  `TEXT_TOO_LONG`), a **Text output format** joined the wizard, and the
+  eleven mirror-vs-engine forks across the write path collapsed as TEXT moved
+  out of the mirror allowlist into the engine lane. **ADR 0027** (implemented
+  2026-08-05) then made the whole language statically typed at save time —
+  seven kinds, one rule ("operands must match the operation"), explicit
+  `NUMBER`/`TEXT`/`DATE` casts as the only crossings, and an output gate
+  matching the expression's inferred kind to the target field's. It reversed
+  0026's B2 (eager date-coercion of date-shaped TEXT) and B6 (silent cross-kind
+  `=` flip to false) plus the lazy numeric coercion B3, which is why the v0.2.0
+  line was **held and never deployed alone** (user ruling — the deployed
+  semantics are the intended ones from day one, so no B2/B5 rewrite storm ever
+  hit real data). Legacy definitions are **gated, not migrated**: one static
+  check per definition per pass, error recorded write-avoidantly on the
+  definition row, record scan skipped entirely. Also in the line: the
+  shape-sniffing resolver retired in favor of kind-directed resolution
+  (per-record CPU win) and per-definition hoisted compilation. Zero schema
+  changes — v0.3.0 added no FormulaDefinition fields; `description` (v0.1.8,
+  2026-07-15) and `targetFieldSettings` (2026-07-03) were already deployed under
+  v0.1.11 and are NOT part of this arc, despite the build spec's shorthand.
+  Pre-deploy blast-radius audit (`scripts/audit-strict-gate.ts`, read-only) ran
+  against the real remote so the deploy shipped with a known — not guessed —
+  population of gated definitions.
+
+- **2026-08-10 ARC (create-time override lock + deferred-fix sweep + quiet
+  awaiting hint; ADR 0028, ships v0.4.0 — LOCAL ONLY, cloud deploy NOT done)**:
+  executed the 14-task plan
+  (`docs/superpowers/plans/2026-08-10-v040-create-time-override-lock.md`, off
+  the build spec `docs/superpowers/specs/2026-08-07-v040-build-and-roadmap-
+  design.md`) via subagent-driven-development. **Phase 0 (deferred-fix sweep)**:
+  blank-target definitions no longer pin junk overrides on a human edit (the
+  root cause was `computeFormulaValueForRecord` lacking the
+  `blankTargetTypeError` guard the sweep paths have — `targetFieldKind('')`
+  reads NUMBER); the variation-config lane got the platform-managed-field guard
+  plus a `before` row-image threaded from `on-variation-config-updated` for the
+  fallback diff (the F3 fix shape, item 0.1); `name`/`description`/
+  `allowOverride` became `INERT_FIELDS` in the definition lane and a
+  `targetField`-less wizard draft early-returns with a write-avoidant disable,
+  so a description-edit debounce tick no longer costs a full
+  `recomputeAllRecords` (item 0.2); the inactive-override re-pin path normalizes
+  its text-slot compare, killing the ''/NULL churn write (item 0.4); and the
+  `deepJsonEqual` Date-instance caveat is now a comment at the diff site (item
+  0.5). **Feature A′ (create-time override lock, ADR 0028)**: new
+  `allowOverride` BOOLEAN on FormulaDefinition (universalIdentifier
+  `436befd0-e824-4d85-a79f-2b02460c43e3`, `defaultValue: true`, manifest-declared
+  `isUIEditable: false` so permanence is enforced rather than asserted). Server
+  lane is three edits — detection skip in the per-definition skip block (above
+  the mirror fork, so it covers both lanes), pin-ignore at the respect fork
+  (which also SKIPS the per-event `findOverride` lookup, a query removed), and
+  an **actor-independent** event revert: a second branch in
+  `eventAffectedFormulas` for locked definitions whose `targetField` is in
+  `updatedFields` (API writes carry no member id, so the actor-gated branch
+  would have left the revert kind-blind and ungated), plus a
+  `lockedTargetTouched` term widening Case 1 so the existing single-record
+  recompute body IS the revert. The echo terminates: revert write → one
+  prefetch-fed recompute → write-avoids, **test-pinned** at
+  `handlers.spec.ts:1315`. The sync-exclusion loader was renamed
+  `loadSyncExclusionFormulasCached` with an `or: [{enabled:{eq:true}},
+  {allowOverride:{eq:false}}]` filter, so locked targets leave the variation
+  syncable set regardless of enabled state ("off = fully computed, no
+  exceptions"). UI: definition-editor status line ("Overrides: allowed" /
+  "Overrides: locked at creation", placed outside the field-settings ternary so
+  mirrors get it), wizard step "5 · Overrides" with a permanence `BannerWarning`
+  and `isUIEditable: allowOverride` wired into BOTH create payloads
+  (format + mirror), and the record-tab override toggle hidden for locked rows.
+  **Feature B**: `lib/row-status.ts` helper + a shared
+  `AWAITING_EXPRESSION_HINT` constant, so a fresh wizard field shows the same
+  muted hint on both surfaces instead of the record tab's red `PARSE_ERROR`.
+  **KNOWN LIMITATION (documented in ADR 0028, not fixed)**: the sync-exclusion
+  cache has **no production invalidator** (`invalidateEnabledFormulasCache` is
+  test-only), so the "locked targets never syncable" guarantee is bounded by the
+  60s TTL — a locked definition created while a workspace's cache is warm can
+  have its target pinned by a variation-sync pass for up to 60s. Bounded by
+  defense in depth (the locked engine ignores rogue pins; the revert restores
+  the value); residue is one ignored ACTIVE override row plus one wasted write.
+  Same staleness already accepted for enabled-formula targets. Follow-up
+  available: call the invalidator from the locked-definition create path.
+  **SECOND KNOWN ASYMMETRY (found while writing ADR 0028 against the landed
+  code; documented, NOT fixed)**: the pin-ignore is **event-lane only**.
+  `recomputeAllRecords` — the lane the definition-change handlers and the hourly
+  sweep use — loads `loadOverriddenRecordIds` once per pass and skips any pinned
+  record (`recompute.ts:788`) with no `allowOverride` condition. So while a rogue
+  ACTIVE pin sits on a locked target, that record still converges through the
+  event lane (every write reverts) but loses its **sweep backstop**, which is the
+  missed-event safety net. Only reachable via the 60s TTL window or a direct API
+  write to FormulaOverride, and it self-clears when the pin is deactivated. Fix
+  is small — don't pass `overriddenRecordIds` for a locked definition — but wants
+  its own test; queued, not done.
+  Verify: full suite **1234 tests green (69 files)**. Version bump to 0.4.0 and
+  the local live checklist are the finalize task; **cloud deploy remains a
+  human step** — the wizard OFF path, both read-only UI surfaces, and the
+  server actually APPLYING `isUIEditable: false` on create have no unit coverage
+  (no React test rig; the pre-existing `true` in both payloads proves the client
+  transmits the flag, not that the server honors it) and must be live-verified.
+
 ## What is NOT done (next work)
 
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
@@ -922,7 +1041,12 @@ Then:
    from the app dir: bump `version` in package.json, then
    `... cli.cjs app:publish --private -r cloud` (server rejects a
    non-incremented version) followed by `... cli.cjs app:install -r cloud`.
-   Currently deployed to cloud: **v0.1.11** (recompute scan efficiency arc, ADR
+   Currently deployed to cloud: **v0.3.0** (string values + `&` concatenation
+   and strict kind typing, ADR 0026 + 0027; 2026-08-07 — zero schema changes;
+   the held v0.2.0 line deployed straight through as v0.3.0 per the user
+   ruling; see the 2026-08-04 → 2026-08-07 arc entry above). v0.4.0 is built
+   but NOT deployed — it gets stamped here at deploy time, not before.
+   Predecessor **v0.1.11** (recompute scan efficiency arc, ADR
    0025; 2026-07-24 — platform on the 2.23 line (v2.23.2), npm twenty-sdk@2.23.0
    scratch build, `plan` preview 1 add (scanCursor TEXT field) / 21 change (16
    logicFunction + 4 frontComponent checksums, 2 navigationMenuItem moved to
