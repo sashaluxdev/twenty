@@ -78,6 +78,7 @@ type Definition = {
   // Parsed once at load time (staleness scoping, ADR 0015) — checking it at
   // render/refresh time would re-parse the expression every 4s poll.
   usesTodayFlag: boolean;
+  allowOverride: boolean;
 };
 
 // Safe usesToday() over a possibly-invalid expression — an unparseable
@@ -409,6 +410,7 @@ const FormulaDefinitionEditor = () => {
             statusReason: true,
             lastEvaluatedAt: true,
             description: true,
+            allowOverride: true,
           },
         },
       },
@@ -434,6 +436,9 @@ const FormulaDefinitionEditor = () => {
         lastEvaluatedAt: edge.node.lastEvaluatedAt ?? null,
         description: edge.node.description ?? '',
         usesTodayFlag: expressionUsesToday(edge.node.expression ?? ''),
+        // Legacy rows predate this flag and arrive as undefined — override
+        // was unconditionally allowed before this feature existed.
+        allowOverride: edge.node.allowOverride ?? true,
       }),
     );
 
@@ -556,6 +561,7 @@ const FormulaDefinitionEditor = () => {
             currencyCode: definition.currencyCode,
             targetFieldSettings: definition.targetFieldSettings,
             description: definition.description ?? '',
+            allowOverride: definition.allowOverride,
           }}
           onCreated={load}
         />
@@ -674,6 +680,12 @@ const FormulaDefinitionEditor = () => {
           currencyCode={definition.currencyCode}
         />
       )}
+
+      <MutedText as="div">
+        {definition.allowOverride
+          ? 'Overrides: allowed'
+          : 'Overrides: locked at creation'}
+      </MutedText>
 
       <FormulaDescriptionEditor
         definitionId={definition.id}

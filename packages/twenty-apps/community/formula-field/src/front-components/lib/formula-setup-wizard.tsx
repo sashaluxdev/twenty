@@ -109,6 +109,7 @@ export type WizardDraft = {
   // so the wizard resumes with the exact chosen decimals / format / date style.
   targetFieldSettings: string;
   description: string;
+  allowOverride: boolean;
 };
 
 type FormulaSetupWizardProps = {
