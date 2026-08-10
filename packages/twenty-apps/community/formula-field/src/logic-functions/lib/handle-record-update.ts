@@ -188,6 +188,18 @@ export const handleRecordUpdate = async ({
     ) {
       return true;
     }
+    // Locked definitions revert outside writes to their value field. No actor
+    // gate: API/integration writes carry no member id, and skipping the
+    // pre-pass here would leave the revert kind-blind and ungated (A'-C1).
+    if (
+      formula.allowOverride === false &&
+      updatedFields &&
+      updatedFields.length > 0 &&
+      typeof formula.targetField === 'string' &&
+      updatedFields.includes(formula.targetField)
+    ) {
+      return true;
+    }
     if (isCyclicTarget(cyclic, formula)) {
       return false;
     }
@@ -431,10 +443,18 @@ export const handleRecordUpdate = async ({
     }
     const dependencies = compiled.dependencies;
 
+    // A locked target hit by an outside write recomputes even though the
+    // target is never its own dependency — that recompute IS the revert.
+    const lockedTargetTouched =
+      formula.allowOverride === false &&
+      typeof formula.targetField === 'string' &&
+      (updatedFields?.includes(formula.targetField) ?? false);
+
     // Case 1: this object's own record changed and it feeds this formula.
     if (
       formula.targetObject === objectName &&
-      sameRecordAffected(dependencies.sameRecordFields, updatedFields)
+      (sameRecordAffected(dependencies.sameRecordFields, updatedFields) ||
+        lockedTargetTouched)
     ) {
       // Mirror formulas do their own kind-aware fetch inside
       // computeMirrorValueForRecord — the event `after` is NOT

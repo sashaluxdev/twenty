@@ -1202,6 +1202,144 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(999);
   });
 
+  it('locked definition: a memberless outside write to the value field reverts (A-prime C1)', async () => {
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-locked',
+        targetObject: 'opportunity',
+        targetField: 'lockedScore',
+        targetFieldType: 'NUMBER',
+        expression: 'formulaInputA + 1',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', formulaInputA: 2, lockedScore: 777 }]);
+
+    const outcomes = await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 2, lockedScore: 777 },
+      updatedFields: ['lockedScore'],
+      // no actorWorkspaceMemberId: an API/integration write
+    });
+
+    expect(client.get('opportunity', 'o1')!.lockedScore).toBe(3);
+    expect(outcomes.some((outcome) => outcome.changed)).toBe(true);
+  });
+
+  it('locked definition: the revert resolves event kinds (A-prime C1 kinds)', async () => {
+    // DATE regression: a kind-blind revert would read signedDate as text and
+    // produce NON_NUMERIC_VALUE instead of a value. The event path resolves
+    // kinds through the client, so seed setFieldKinds — NOT setObjectsWithFields,
+    // which feeds the metadata catalog, not the kind path (date-target.spec.ts
+    // precedent).
+    client.setFieldKinds('company', { signedDate: 'DATE', renewDate: 'DATE' });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-date-locked',
+        targetObject: 'company',
+        targetField: 'renewDate',
+        targetFieldType: 'DATE',
+        expression: 'signedDate + 30',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('company', [
+      { id: 'c1', signedDate: '2026-07-03', renewDate: '1999-01-01' },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'company',
+      recordId: 'c1',
+      after: { id: 'c1', signedDate: '2026-07-03', renewDate: '1999-01-01' },
+      updatedFields: ['renewDate'],
+    });
+
+    // 2026-07-03 + 30 days, serialized back to the DATE scalar on write.
+    expect(client.get('company', 'c1')!.renewDate).toBe('2026-08-02');
+  });
+
+  it('locked definition: a gate-failing revert declines to write (A-prime C1 gate)', async () => {
+    // Kinds resolve through the client on the event path — setFieldKinds, NOT
+    // setObjectsWithFields (that feeds the metadata catalog; the gate would see
+    // empty kinds, infer `unknown`, and never fire — a vacuous test).
+    client.setFieldKinds('opportunity', {
+      textInput: 'TEXT',
+      lockedScore: 'NUMBER',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-locked',
+        targetObject: 'opportunity',
+        targetField: 'lockedScore',
+        targetFieldType: 'NUMBER',
+        expression: 'textInput + 1',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', textInput: 'abc', lockedScore: 777 }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', textInput: 'abc', lockedScore: 777 },
+      updatedFields: ['lockedScore'],
+    });
+
+    expect(client.get('opportunity', 'o1')!.lockedScore).toBe(777);
+    expect(client.writes).toHaveLength(0);
+  });
+
+  it('unlocked definition: a memberless write to the value field is left alone', async () => {
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 777 },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 777 },
+      updatedFields: ['formulaScore'],
+    });
+
+    expect(client.get('opportunity', 'o1')!.formulaScore).toBe(777);
+  });
+
+  it('locked definition: the revert echo terminates (no write on its own event)', async () => {
+    // The revert's write emits a memberless event naming the locked target; it
+    // re-enters Case 1 once, finds the stored value already correct, and
+    // write-avoids — the chain must stop here (accepted echo cost, ADR 0028).
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-locked',
+        targetObject: 'opportunity',
+        targetField: 'lockedScore',
+        targetFieldType: 'NUMBER',
+        expression: 'formulaInputA + 1',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', formulaInputA: 2, lockedScore: 3 }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 2, lockedScore: 3 },
+      updatedFields: ['lockedScore'],
+    });
+
+    expect(client.writes).toHaveLength(0);
+  });
+
   it('recomputes when a dependency field changed', async () => {
     client.seed('opportunity', [
       { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: null },
