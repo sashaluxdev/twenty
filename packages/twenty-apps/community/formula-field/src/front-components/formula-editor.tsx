@@ -109,6 +109,7 @@ type Definition = {
   // Parsed once at load time (staleness scoping, ADR 0015) — checking it at
   // render/self-heal time would re-parse every expression on every 4s poll.
   usesTodayFlag: boolean;
+  allowOverride: boolean;
 };
 
 // Safe usesToday() over a possibly-invalid expression — an unparseable
@@ -283,6 +284,7 @@ const FormulaEditor = () => {
             statusReason: true,
             order: true,
             lastEvaluatedAt: true,
+            allowOverride: true,
           },
         },
       },
@@ -309,6 +311,9 @@ const FormulaEditor = () => {
         order: edge.node.order ?? null,
         lastEvaluatedAt: edge.node.lastEvaluatedAt ?? null,
         usesTodayFlag: expressionUsesToday(edge.node.expression ?? ''),
+        // Legacy rows predate this flag and arrive as undefined — override
+        // was unconditionally allowed before this feature existed.
+        allowOverride: edge.node.allowOverride ?? true,
       }),
     );
 
@@ -991,25 +996,27 @@ const FormulaEditor = () => {
             </BannerWarning>
           ) : null}
 
-          <div style={layout.overrideRow}>
-            <OverrideToggle
-              on={isOverridden}
-              busy={rowBusy}
-              onChange={(next) => toggleOverride(definition, next)}
-            />
-            {isOverridden ? (
-              restoredHint[definition.id] ? (
-                <OkText style={layout.restored} title="Override value restored">
-                  Override value restored
-                </OkText>
-              ) : (
-                <MutedText>
-                  Edit the “{definition.name || definition.targetField}” field
-                  directly to change this record’s value.
-                </MutedText>
-              )
-            ) : null}
-          </div>
+          {definition.allowOverride ? (
+            <div style={layout.overrideRow}>
+              <OverrideToggle
+                on={isOverridden}
+                busy={rowBusy}
+                onChange={(next) => toggleOverride(definition, next)}
+              />
+              {isOverridden ? (
+                restoredHint[definition.id] ? (
+                  <OkText style={layout.restored} title="Override value restored">
+                    Override value restored
+                  </OkText>
+                ) : (
+                  <MutedText>
+                    Edit the “{definition.name || definition.targetField}” field
+                    directly to change this record’s value.
+                  </MutedText>
+                )
+              ) : null}
+            </div>
+          ) : null}
 
           {liveError ? (
             <ErrText as="div" style={layout.error}>{liveError}</ErrText>
