@@ -268,7 +268,8 @@ the property.
 - **Deactivating pins that already exist on a locked target.** Locked
   definitions never *create* pins, and D2.2 makes a stray pin inert on the event
   lane, so a dedicated cleanup pass was judged pure cost. The scan-lane
-  asymmetry recorded under accepted limitations is the residue of that call.
+  asymmetry recorded under accepted limitations is independent of this call and
+  is queued for its own fix.
 - **Cleaning `lastError` or any stored bookkeeping on lock** — the flag is
   orthogonal to definition health.
 - **Upstream filing of the `isUIEditable` update-lane gap** — offered and
