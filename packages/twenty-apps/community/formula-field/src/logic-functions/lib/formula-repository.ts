@@ -95,40 +95,40 @@ export const loadAllEnabledFormulas = (
 // variation-sync event. 60s staleness for the syncable-field set is the
 // documented, deliberate trade-off there — mirror it, including the in-flight
 // dedup so N cold-cache callers share one paginated fetch.
-const ENABLED_FORMULAS_TTL_MS = 60_000;
+const SYNC_EXCLUSION_FORMULAS_TTL_MS = 60_000;
 
-type EnabledFormulasCacheEntry = {
+type SyncExclusionFormulasCacheEntry = {
   formulas: FormulaDefinitionRecord[];
   loadedAt: number;
 };
-const enabledFormulasCacheByWorkspace = new Map<
+const syncExclusionFormulasCacheByWorkspace = new Map<
   string,
-  EnabledFormulasCacheEntry
+  SyncExclusionFormulasCacheEntry
 >();
-const enabledFormulasInFlightByWorkspace = new Map<
+const syncExclusionFormulasInFlightByWorkspace = new Map<
   string,
   Promise<FormulaDefinitionRecord[]>
 >();
 
-export const invalidateEnabledFormulasCache = (): void => {
-  enabledFormulasCacheByWorkspace.delete(workspaceCacheKey());
+export const invalidateSyncExclusionFormulasCache = (): void => {
+  syncExclusionFormulasCacheByWorkspace.delete(workspaceCacheKey());
 };
 
 export const __clearSyncExclusionFormulasCacheForTests = (): void => {
-  enabledFormulasCacheByWorkspace.clear();
-  enabledFormulasInFlightByWorkspace.clear();
+  syncExclusionFormulasCacheByWorkspace.clear();
+  syncExclusionFormulasInFlightByWorkspace.clear();
 };
 
 export const loadSyncExclusionFormulasCached = async (
   client: FormulaClient,
 ): Promise<FormulaDefinitionRecord[]> => {
   const cacheKey = workspaceCacheKey();
-  const cached = enabledFormulasCacheByWorkspace.get(cacheKey);
-  if (cached && Date.now() - cached.loadedAt < ENABLED_FORMULAS_TTL_MS) {
+  const cached = syncExclusionFormulasCacheByWorkspace.get(cacheKey);
+  if (cached && Date.now() - cached.loadedAt < SYNC_EXCLUSION_FORMULAS_TTL_MS) {
     return cached.formulas;
   }
 
-  const inFlight = enabledFormulasInFlightByWorkspace.get(cacheKey);
+  const inFlight = syncExclusionFormulasInFlightByWorkspace.get(cacheKey);
   if (inFlight) {
     return inFlight;
   }
@@ -153,9 +153,8 @@ export const loadSyncExclusionFormulasCached = async (
             __args: {
               first: pageSize,
               filter,
-              // Stable order so a time-bounded sweep resumes at a predictable
-              // definition instead of starving whichever ones land late in an
-              // unspecified ordering.
+              // Deterministic page order, so a cached set does not reshuffle
+              // between refreshes.
               orderBy: [{ id: graphqlEnum('AscNullsFirst') }],
               ...(after ? { after } : {}),
             },
@@ -183,17 +182,17 @@ export const loadSyncExclusionFormulasCached = async (
 
     // Cache only on success — a rejected pull leaves nothing behind, so the
     // next caller retries reality instead of a poisoned entry.
-    enabledFormulasCacheByWorkspace.set(cacheKey, {
+    syncExclusionFormulasCacheByWorkspace.set(cacheKey, {
       formulas,
       loadedAt: Date.now(),
     });
     return formulas;
   })();
-  enabledFormulasInFlightByWorkspace.set(cacheKey, fetchPromise);
+  syncExclusionFormulasInFlightByWorkspace.set(cacheKey, fetchPromise);
   try {
     return await fetchPromise;
   } finally {
-    enabledFormulasInFlightByWorkspace.delete(cacheKey);
+    syncExclusionFormulasInFlightByWorkspace.delete(cacheKey);
   }
 };
 

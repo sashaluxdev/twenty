@@ -245,7 +245,7 @@ describe('detectVariationDivergence', () => {
     expect(variationReads).toBe(1);
 
     // Total query breakdown for a 2-field human divergence:
-    //   1x formulaDefinitions  (computeSyncableFields -> loadAllEnabledFormulas)
+    //   1x formulaDefinitions  (computeSyncableFields -> loadSyncExclusionFormulasCached)
     //   1x companies connection (fetchPrimaryRecordInclTrashed, primary incl trashed)
     //   1x company singular     (ONE batched fresh-fetch of the variation)
     //   2x formulaOverrides     (findOverride, once per field during upsert)

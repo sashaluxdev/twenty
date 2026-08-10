@@ -855,7 +855,7 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   `AWAITING_EXPRESSION_HINT` constant, so a fresh wizard field shows the same
   muted hint on both surfaces instead of the record tab's red `PARSE_ERROR`.
   **KNOWN LIMITATION (documented in ADR 0028, not fixed)**: the sync-exclusion
-  cache has **no production invalidator** (`invalidateEnabledFormulasCache` is
+  cache has **no production invalidator** (`invalidateSyncExclusionFormulasCache` is
   test-only), so the "locked targets never syncable" guarantee is bounded by the
   60s TTL — a locked definition created while a workspace's cache is warm can
   have its target pinned by a variation-sync pass for up to 60s. Bounded by

@@ -177,7 +177,7 @@ Carried from the build spec §2.5, plus one found during implementation review.
   *eventually*-computed against API writers.
 - **The D3 guarantee is bounded by a 60-second cache TTL.** The sync-exclusion
   loader is cached per workspace for 60s and, although
-  `invalidateEnabledFormulasCache` exists, **it has no production caller** — it
+  `invalidateSyncExclusionFormulasCache` exists, **it has no production caller** — it
   is exercised only by tests. So a locked definition created while a workspace's
   cache is warm can have its target pinned by a variation-sync pass for up to
   60 seconds after creation. The consequence is bounded by defense in depth: the
@@ -187,7 +187,7 @@ Carried from the build spec §2.5, plus one found during implementation review.
   staleness the design already accepted for enabled-formula targets, which have
   always been excluded through this same cache — locking does not introduce the
   window, it inherits it. **Available follow-up:** calling
-  `invalidateEnabledFormulasCache` from the locked-definition create path would
+  `invalidateSyncExclusionFormulasCache` from the locked-definition create path would
   close the window; not done in this arc.
 - **Pin-ignore is event-lane only; the full-object scan lane still honors a
   rogue pin.** D2.2 conditions the *single-record event* path on

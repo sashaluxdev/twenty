@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __clearSyncExclusionFormulasCacheForTests,
-  invalidateEnabledFormulasCache,
+  invalidateSyncExclusionFormulasCache,
   loadSyncExclusionFormulasCached,
 } from 'src/logic-functions/lib/formula-repository';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
@@ -46,7 +46,7 @@ describe('loadSyncExclusionFormulasCached', () => {
   it('refetches after invalidation', async () => {
     const { client, query } = clientWithSpy();
     await loadSyncExclusionFormulasCached(client);
-    invalidateEnabledFormulasCache();
+    invalidateSyncExclusionFormulasCache();
     await loadSyncExclusionFormulasCached(client);
     expect(query).toHaveBeenCalledTimes(2);
   });
