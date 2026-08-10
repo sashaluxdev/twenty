@@ -40,6 +40,7 @@ import {
   BannerWarning,
   DragHandle,
   ErrText,
+  HintText,
   MutedText,
   OkText,
   PrimaryButton,
@@ -51,6 +52,10 @@ import {
   WidgetRoot,
 } from 'src/front-components/lib/ui';
 import { TOKENS } from 'src/front-components/lib/ui-tokens';
+import {
+  AWAITING_EXPRESSION_HINT,
+  resolveRowStatus,
+} from 'src/front-components/lib/row-status';
 import { validateExpression } from 'src/front-components/lib/validate-expression';
 import {
   activateOverride,
@@ -843,6 +848,12 @@ const FormulaEditor = () => {
         hostFieldKindsAccessor,
         definition.targetFieldType,
       );
+      const rowStatus = resolveRowStatus({
+        expression: definition.expression,
+        draft,
+        liveError,
+        lastError: definition.lastError,
+      });
       const overrideEntry = overrides[definition.targetField];
       const isOverridden = overrideEntry?.active ?? false;
       const value = isOverridden
@@ -964,7 +975,7 @@ const FormulaEditor = () => {
           ) : null}
           <MutedText as="div" style={layout.fieldLabel}>
             {definition.targetField}
-            {!definition.enabled ? (
+            {!definition.enabled && rowStatus.kind !== 'awaiting' ? (
               <ErrText> (formula disabled)</ErrText>
             ) : null}
           </MutedText>
@@ -1018,10 +1029,12 @@ const FormulaEditor = () => {
             </div>
           ) : null}
 
-          {liveError ? (
-            <ErrText as="div" style={layout.error}>{liveError}</ErrText>
-          ) : definition.lastError ? (
-            <ErrText as="div" style={layout.error}>{definition.lastError}</ErrText>
+          {rowStatus.kind === 'awaiting' ? (
+            <HintText as="div">{AWAITING_EXPRESSION_HINT}</HintText>
+          ) : rowStatus.kind === 'error' ? (
+            <ErrText as="div" style={layout.error}>
+              {rowStatus.message}
+            </ErrText>
           ) : null}
         </div>
       );

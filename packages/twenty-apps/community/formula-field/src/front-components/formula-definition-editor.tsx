@@ -22,6 +22,7 @@ import {
   refreshStaleTodayFormulas,
   sharedSweepRefreshState,
 } from 'src/front-components/lib/refresh-stale-formulas';
+import { AWAITING_EXPRESSION_HINT } from 'src/front-components/lib/row-status';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
@@ -645,9 +646,7 @@ const FormulaDefinitionEditor = () => {
       </div>
 
       {awaitingExpression ? (
-        <HintText as="div">
-          Field created — write the formula expression and save to activate.
-        </HintText>
+        <HintText as="div">{AWAITING_EXPRESSION_HINT}</HintText>
       ) : liveError ? (
         <ErrText as="div">{liveError}</ErrText>
       ) : definition.lastError ? (
