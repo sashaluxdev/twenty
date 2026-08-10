@@ -1,7 +1,7 @@
 # SELECT Output Design (formula-field v0.5.0 arc)
 
 Date: 2026-08-10
-Status: DRAFT, awaiting user review.
+Status: APPROVED (user gate passed 2026-08-10, rulings in section 9).
 App: `packages/twenty-apps/community/formula-field`, v0.4.0 on disk (cloud runs v0.3.0; v0.4.0 cloud deploy is a separate gated step).
 Consumer: the implementation-planning session for the SELECT output arc. ADR 0029 derives from this spec.
 This document is a design spec; it contains NO implementation plan.
@@ -11,7 +11,7 @@ Standing rules in force: efficiency-first (every operation pays rent; cost model
 
 ADR 0026's closing section commits this arc verbatim: "SELECT joins the expressible bucket as a text-kind target with one extra write-time step (the computed string must match a defined option value, else standard eval-error doctrine applies). Storage, convergence, and override detection already ride the text columns built here. The remaining work is almost entirely the wizard: an options editor (values, labels, colors) mirroring Twenty's native SELECT creation, plus post-creation settings editing." (docs/adr/0026-string-values-and-concatenation.md:327-338, restated in ADR 0027:320-321 and the v0.4.0 spec section 7 backlog item 4.)
 
-This spec honors that contract and sharpens it in one place: membership checking is two-tier (static where decidable, per-record only where it is not), because a runtime-only check violates the efficiency doctrine for the most common formula shape (section 2, approach A).
+This spec honors that contract and sharpens it in two places. Membership checking is two-tier (static where decidable, per-record only where it is not), because a runtime-only check violates the efficiency doctrine for the most common formula shape (section 2, approach A). And the ADR's "post-creation settings editing" clause is narrowed by user ruling (2026-08-10): options are owned by the data model; the app defines them exactly once at field creation and never edits them afterward (D7).
 
 **In scope**
 1. SELECT becomes an engine target: moves out of `MIRRORABLE_KINDS` into `ENGINE_FAMILY`, exactly the TEXT/ADR-0026 lane move replayed (D1, D2).
@@ -23,7 +23,7 @@ This spec honors that contract and sharpens it in one place: membership checking
 **Out of scope**
 - MULTI_SELECT output (stays `opaque` input and mirror-lane target). RATING likewise.
 - Language changes: no new functions, no new syntax, no new kinds. The kind lattice is untouched.
-- Automatic option creation or deletion from formula literals (see section 8; a user-gated "add missing options" affordance is backlog polish).
+- Any option editing through the app after field creation, including automatic option creation or deletion from formula literals (ruled out by the user 2026-08-10: options are data-model-owned).
 - Label-based matching (formulas match option values only, D6).
 - The F1-empty-string investigation and the DATE-cast arc (separate queued arcs; sequencing note in section 9).
 
@@ -63,7 +63,7 @@ The walker runs only for SELECT targets, after the kind gate has already passed 
 
 **Tier 1b, per-pass static re-gate.** The recompute paths already re-run the static gates once per definition per pass before any record work (recompute.ts:1056-1081 for the sweep; the single-record entry `recomputeForRecord` re-confirms at recompute.ts:911-949). A new `selectMembershipGateError(compiled, targetOptions)` runs alongside `strictKindGateError` and `blankTargetTypeError` there: for closed sets, it re-validates against the current option set, so deleting an option that a formula's literal names freezes the whole definition write-avoidantly via the existing `refuseWholeDefinition` funnel (recompute.ts:383-393): zero record scans, error on the definition row, zero repeat-pass writes. This is where approach B structurally beats A: option drift on the common formula shape costs one static check per pass instead of N failed evaluations per pass.
 
-Blast radius of a freeze, disclosed: on the event path the gate map (`gateErrorByFormulaId`, handle-record-update.ts:258-273) is also consulted by override detection (skip at handle-record-update.ts:295) and by the recompute loop that carries the v0.4.0 locked-definition revert (handle-record-update.ts:436, 448-451). If the membership gate joins that map, a frozen definition records no overrides and performs no lock reverts while frozen; outside writes stick until the options are fixed, then the next pass corrects them. Whether the membership gate joins the event-path map (full freeze, kind-gate doctrine) or stays sweep-only (events stay per-record live via tier 2, so the lock keeps holding under option drift) is user question 3 in section 9.
+Blast radius of a freeze, disclosed and ruled: on the event path the gate map (`gateErrorByFormulaId`, handle-record-update.ts:258-273) is also consulted by override detection (skip at handle-record-update.ts:295) and by the recompute loop that carries the v0.4.0 locked-definition revert (handle-record-update.ts:436, 448-451). The membership gate joins that map: full freeze on both lanes, kind-gate doctrine (user ruling 2026-08-10, section 9 question 3 posture (a)). While frozen, a definition records no overrides and performs no lock reverts; outside writes stick until the options are fixed, then the next pass corrects them. The gates self-heal within the 60s metadata TTL once the option is restored natively.
 
 **Tier 2, per-record membership check.** At the normalize-then-write choke point: inside `planRecomputeForRecord`, thrown from within the existing try around `normalizeComputedValue` (recompute.ts:855-869) so it rides the established FormulaError funnel, a `Set.has` against the hoisted option set (D5). Runs unconditionally for SELECT targets (defense in depth for mid-pass metadata drift; the check is O(1) and branch-predictable). Violation: new `NOT_AN_OPTION` eval error following standard doctrine (value NOT written, last value kept, error on `lastError`, record save never blocked, zero timeline rows). Null bypasses the check and writes through (clears the field), matching the platform's own semantics (twenty-server validate-rating-and-select-field-or-throw.util.ts:27).
 
@@ -103,7 +103,7 @@ The option data is already resident: `loadAllObjectsWithFields()` fetches and ca
 - **Step 2b for `select` is an options editor**: ordered rows of label + color; the option value is auto-derived from the label (uppercase, non-alphanumerics collapsed to `_`, no leading digit or double underscore, 63-char cap) to satisfy the platform validator (`/^(?!.*__)[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$/`), with the derived value shown read-only per row. Colors cycle a default palette from Twenty's `TagColor` names; position is row order (drag-reorder can borrow reorder-definitions.ts math; v1 may ship with up/down controls instead, planner's choice). Validity rule in `areFormatOptionsValid`: at least one option, all values valid and unique, labels non-empty, comma-free, 63-char cap.
 - **Draft persistence**: the options array rides `targetFieldSettings` JSON like the mirror draft does (`TargetFieldSettings` gains an optional `selectOptions` slot with a recovery arm in `parseTargetFieldSettings`, the `parseMirrorDraft` pattern), so the wizard resumes mid-draft. Resume reads `selectOptions` directly; `optionsFromSettings` stays off the SELECT path entirely (it only ever receives the inner `settings` object, which is null for SELECT).
 - **Creation**: the format-mode `createOneField` payload gains `...(isSelect ? { options } : {})`, no ids (server assigns v4 ids, context.md:1209-1215). `buildFieldSettings` returns null for SELECT (options are a field-level input, not a settings JSON key); `formatKeyForType` gains a SELECT case so the settings editor stops falling through to the integer form, and legacy rows must reach it via `targetFieldType`, not `outputFormat` (deployed SELECT mirrors keep `outputFormat: 'mirror'`).
-- **Post-creation settings editor**: label editing works as-is. Options editing in v1 is **add + rename only** (label, color, value rename in place): `loadField` additionally queries live `options` (with ids), and `save()` sends the full array back preserving every existing option's `id` (the platform update is full-replace keyed by id; omitting an id is a silent delete-and-recreate, and removal silently remaps records holding that value to default/NULL). **Option removal is deliberately not offered in v1**; users who need it have Twenty's native field settings, and the per-pass static gate (D3) plus tier 2 turn any resulting drift into visible freezes/errors instead of silent data damage. Every options update triggers a full Postgres enum rebuild server-side, so the editor performs one `updateOneField` per explicit user save, never automatic syncing. After a successful save the editor calls `invalidateMetadataCache()` so the front's own live gate re-reads immediately; the worker's cache self-heals within the 60s TTL (D6 staleness honesty), and the editor copy notes the sub-minute lag.
+- **Post-creation: the app never touches options** (user ruling 2026-08-10, stricter than the draft's add-plus-rename proposal). Options are defined exactly once, in the wizard at field creation, because the platform requires at least one option to create the field; from then on all option management is Twenty's native data model settings, full stop. The app's field-settings editor keeps label editing and gains the `formatKeyForType` SELECT case, but shows options read-only at most and never sends an `options` key. This deletes from the app's scope: the options load/save in `field-settings-editor.tsx`, the id-preserving full-replace dance, and any exposure to the server-side enum rebuild (the platform update is full-replace keyed by id; omitting an id is a silent delete-and-recreate, and removal silently remaps records to default/NULL: exactly the risk class the ruling keeps out of the app). The per-pass static gate (D3) plus tier 2 turn native option drift into visible freezes/errors instead of silent damage, and gate error copy points the user at the native field settings.
 
 ### D8 · Mirror-flow reroute for SELECT sources
 
@@ -130,7 +130,7 @@ Zero data rewrite, zero schema changes, no migration, matching ADR 0026's postur
 | Broken definition (closed set, e.g. typo or option drift) | 1 static check per pass, zero record scans, zero writes | vs. approach A's N failed evaluations per pass forever |
 | Broken records under an open set | 1 eval + 1 failed membership check per record per pass, zero writes | Irreducible: statics cannot decide; error string stable so heartbeat writes nothing on repeat passes |
 | Options create | 0 extra mutations (rides the existing `createOneField`) | |
-| Options edit (post-creation) | 1 `updateOneField` per explicit user save; platform performs a full enum rebuild | User-initiated and rare; never automatic; documented in the editor copy |
+| Options edit (post-creation) | Zero: the app never edits options (user ruling); native settings own them | The server-side enum rebuild cost lives entirely outside the app |
 | Non-SELECT formulas | Zero | Every new branch is behind a `targetFieldType === 'SELECT'` guard |
 
 No new queries on any hot path; no per-record metadata access; no new writes on converged state.
@@ -155,7 +155,7 @@ Front:
 - `formula-field-formats.ts`: `OutputFormat`/definition unions, 9th entry, `FormatOptions`/`makeFormatOptions`/`buildFieldSettings`/`areFormatOptionsValid` SELECT branches, `TargetFieldSettings.selectOptions` + `parseTargetFieldSettings` recovery arm (`optionsFromSettings` stays off the SELECT path), `pickableMirrorSourceFields` widening.
 - `format-options-fields.tsx`: options-editor branch (new list UI from existing primitives).
 - `formula-setup-wizard.tsx`: create() options spread, `isSelectTarget` mirror reroute, draft persistence.
-- `field-settings-editor.tsx`: `formatKeyForType` SELECT case, options load/edit/save (add + rename only).
+- `field-settings-editor.tsx`: `formatKeyForType` SELECT case only; no options surface (label editing works as-is).
 
 Docs/release: ADR 0029, README, context.md, formulahelp reference refresh (post-deploy, per standing memory), docs/adr/README.md index (also backfill the missing 0028 row). Version bump to 0.5.0.
 
@@ -172,23 +172,20 @@ Docs/release: ADR 0029, README, context.md, formulahelp reference refresh (post-
 
 ## 8 · Not done / backlog residue this arc creates
 
-- **"Add missing options" one-click fix** on the static-gate error (single `updateOneField`, user-gated): polish backlog, not v1.
-- **Option removal in the app's settings editor**: deliberately excluded (D7); revisit only with a danger-zone confirm that names the affected record count.
+- **Any in-app option editing** ("add missing options" one-click fix, add/rename/remove in the settings editor): ruled out by the user 2026-08-10, not deferred. Options are data-model-owned; do not resurrect these as backlog items.
 - **Output-side autocomplete** (suggest option values inside IF/SWITCH branches when the target is SELECT): polish backlog; the did-you-mean hint covers the typo class at zero UI cost.
 - **Label rendering in app widgets**: display-value shows the raw option value, a pre-existing gap that now becomes more visible; cheap follow-up, not v1.
 - MULTI_SELECT output; label-based matching; any language change.
 
-## 9 · Open questions for the user gate
+## 9 · User rulings (gate passed 2026-08-10)
 
-1. **Queue jump**: the v0.4.0 spec ordered F1-empty-string and the DATE-cast arc ahead of SELECT output (schedule ordering only; no technical dependency stated, and D4 defuses the one plausible F1 interaction). This request pulls SELECT ahead. Confirm the reorder.
-2. **Blank-clears doctrine (D4)**: computed empty/whitespace text on a SELECT target silently clears the field instead of erroring. Confirm.
-3. **Freeze-on-drift doctrine and its blast radius (D3 tier 1b)**: deleting an option named by a closed-set formula freezes the whole definition (all records) rather than erroring only on records that would compute the deleted value. The review pass surfaced what "frozen" means on the event path: if the membership gate joins `gateErrorByFormulaId`, a frozen definition also records no overrides (handle-record-update.ts:295) and performs no v0.4.0 locked-definition reverts (handle-record-update.ts:436), so an ordinary admin action (deleting an option) temporarily makes a locked field writable and can let a human edit made during the freeze be overwritten after unfreeze. The pre-existing kind gate has exactly this shape, but kind drift needs a schema change while option edits are routine. Two postures:
-   - (a) Full freeze, kind-gate doctrine: cheapest, one consistent lane, damage window self-corrects once options are fixed. Recommended.
-   - (b) Sweep-only freeze: the hourly sweep freezes (the efficiency win stands), but the event path skips the definition-level gate and relies on tier 2 per record, so lock reverts and override detection keep working under drift, at one eval + one Set.has per touched record.
-   Pick one.
-4. **Options editing scope (D7)**: v1 is add + rename, no removal. Confirm.
+1. **Queue jump**: CONFIRMED. SELECT output proceeds ahead of the F1-empty-string and DATE-cast arcs (the v0.4.0 spec's ordering was schedule-only; no technical dependency, and D4 defuses the one plausible F1 interaction).
+2. **Blank-clears doctrine (D4)**: CONFIRMED. Computed empty/whitespace text on a SELECT target clears the field instead of erroring.
+3. **Freeze-on-drift doctrine (D3 tier 1b)**: posture (a) CONFIRMED, full freeze on both lanes, kind-gate doctrine. Disclosed and accepted: while frozen, override detection and the v0.4.0 lock revert are also paused (blast radius stated in D3); the alternative sweep-only-freeze posture (b) was declined.
+4. **Option ownership (D7)**: ruled STRICTER than proposed. The app must not be able to change dropdown options at all; option management happens at the data model level. Options are defined exactly once at wizard field creation (platform requires at least one option to create the field, and the wizard picking initial options was separately confirmed); after that, native settings only. The draft's add-plus-rename editor is dropped.
 
 ## 10 · Decision log
 
 - 2026-08-10: spec drafted. Approach B (two-tier membership gate) chosen over runtime-only (A) on efficiency-doctrine grounds and over closed-set-required (C) on expressiveness/lane-invariant grounds. Lane move, text-domain predicate consolidation, blank-clears normalization, add-plus-rename-only options editing, and the mirror reroute decided as above.
 - 2026-08-10: opus code-cross-reference review pass (13 findings, 0 blockers). Applied directly: tier-1a wiring through handle-formula-change's preload seam (the sync core takes options as data); `targetOptions` threading through `recomputeForRecord` and its three callers; `usesTextDomain` widened to include `'raw'` plus the third override-slot edit; empty option arrays treated as unresolvable; batch-poisoning rationale corrected to the per-record-retry-storm cost; cost-table "strictly cheaper" claim corrected for the two-cache clock offset; `NOT_AN_OPTION` message quoted with its code prefix and thrown inside the normalize try; 60s-TTL staleness honesty notes (front invalidate + worker self-heal); wizard resume via `parseTargetFieldSettings.selectOptions` with `optionsFromSettings` off the SELECT path; section 4 disclosures (branch-1c loosening for TEXT-onto-SELECT, provenance-panel swap for deployed mirrors); read-side null-convergence integration pin in section 7. Escalated to the user gate: the tier-1b freeze's event-path blast radius (question 3 expanded with postures (a)/(b)).
+- 2026-08-10: user gate passed, all four rulings in (section 9). Notable: ruling 4 came back stricter than proposed; the app never edits options post-creation, the add-plus-rename settings editor is deleted from scope, and the wizard's one-time creation options step was explicitly confirmed as the field's origin. Spec amended accordingly (D3, D7, sections 1, 5, 6, 8). Status flips to APPROVED; next step is the implementation plan.
