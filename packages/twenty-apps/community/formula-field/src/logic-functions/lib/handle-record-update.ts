@@ -7,6 +7,7 @@ import {
   recordEvaluationHeartbeat,
 } from 'src/logic-functions/lib/formula-repository';
 import {
+  blankTargetTypeError,
   type CompiledFormula,
   computeFormulaValueForRecord,
   computeMirrorValueForRecord,
@@ -280,6 +281,9 @@ export const handleRecordUpdate = async ({
       // not check cannot answer "what would the formula say?", so a human edit
       // must never become an override row on its strength.
       if (gateErrorByFormulaId.has(formula.id)) continue;
+      // Blank targetFieldType: kinds are unknowable ('' reads as NUMBER), so a
+      // human edit must never pin a junk-kind override (F2's event-path sibling).
+      if (blankTargetTypeError(formula) !== null) continue;
       const compiled = compiledByFormulaId.get(formula.id);
 
       // Mirror fork: a mirror target stores non-numeric raw values, so the

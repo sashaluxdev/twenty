@@ -364,7 +364,9 @@ const emptyComputedValue = (
 // the type); this is the lane for rows that predate it. Deliberately NOT in the
 // strict kind gate, which must stay skip-never-reject for a blank kind — the
 // mirror lane shares that branch.
-const blankTargetTypeError = (formula: FormulaDefinitionRecord): string | null =>
+export const blankTargetTypeError = (
+  formula: FormulaDefinitionRecord,
+): string | null =>
   (formula.targetField ?? '') !== '' && (formula.targetFieldType ?? '') === ''
     ? 'Skipped: targetFieldType is not set'
     : null;

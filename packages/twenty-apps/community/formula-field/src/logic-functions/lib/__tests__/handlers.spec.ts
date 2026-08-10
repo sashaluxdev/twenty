@@ -947,6 +947,36 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     ]);
   });
 
+  it('does not pin an override when targetFieldType is blank (item 0.3)', async () => {
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-blank',
+        targetObject: 'opportunity',
+        targetField: 'blankScore',
+        targetFieldType: '',
+        expression: 'formulaInputA + 1',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', formulaInputA: 2, blankScore: 999 }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 2, blankScore: 999 },
+      updatedFields: ['blankScore'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    expect(
+      client.mutationSelections.filter(
+        (selection) => selection.createFormulaOverride !== undefined,
+      ),
+    ).toHaveLength(0);
+    expect(client.writes).toHaveLength(0);
+  });
+
   it('recomputes when a dependency field changed', async () => {
     client.seed('opportunity', [
       { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: null },
