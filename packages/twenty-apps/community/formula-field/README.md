@@ -56,7 +56,7 @@ through a front component on the record page.
 - **Create-time override lock** — the wizard's "5 · Overrides" step can create
   the value field view-only (`isUIEditable: false`, a real grey-out in table /
   detail / kanban): no override is ever created for it, stray pins are ignored
-  on recompute (with one scan-lane caveat spelled out in ADR 0028), outside API
+  on recompute in both the event and sweep lanes, outside API
   writes are reverted event-driven, and variations never track the field
   regardless of whether the formula is enabled yet. The choice is
   **permanent** — the platform only accepts `isUIEditable` at field creation —

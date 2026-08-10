@@ -842,7 +842,8 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   `lockedTargetTouched` term widening Case 1 so the existing single-record
   recompute body IS the revert. The echo terminates: revert write → one
   prefetch-fed recompute → write-avoids, **test-pinned** at
-  `handlers.spec.ts:1315`. The sync-exclusion loader was renamed
+  `handlers.spec.ts:1315` and again end-to-end across the seam ("revert then
+  echo settles in exactly one write"). The sync-exclusion loader was renamed
   `loadSyncExclusionFormulasCached` with an `or: [{enabled:{eq:true}},
   {allowOverride:{eq:false}}]` filter, so locked targets leave the variation
   syncable set regardless of enabled state ("off = fully computed, no
@@ -862,19 +863,23 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   defense in depth (the locked engine ignores rogue pins; the revert restores
   the value); residue is one ignored ACTIVE override row plus one wasted write.
   Same staleness already accepted for enabled-formula targets. Follow-up
-  available: call the invalidator from the locked-definition create path.
-  **SECOND KNOWN ASYMMETRY (found while writing ADR 0028 against the landed
-  code; documented, NOT fixed)**: the pin-ignore is **event-lane only**.
+  available but **best-effort only**: calling the invalidator from the
+  locked-definition create path narrows the window without closing it — the cache
+  is a module-scope Map, so it is per PROCESS, and definition-create and
+  variation-sync executions are not guaranteed to share one.
+  **SCAN-LANE PIN-IGNORE (was a known asymmetry, FIXED in the final fix wave)**:
   `recomputeAllRecords` — the lane the definition-change handlers and the hourly
-  sweep use — loads `loadOverriddenRecordIds` once per pass and skips any pinned
-  record (`recompute.ts:788`) with no `allowOverride` condition. So while a rogue
-  ACTIVE pin sits on a locked target, that record still converges through the
-  event lane (every write reverts) but loses its **sweep backstop**, which is the
-  missed-event safety net. Only reachable via the 60s TTL window or a direct API
-  write to FormulaOverride, and it self-clears when the pin is deactivated. Fix
-  is small — don't pass `overriddenRecordIds` for a locked definition — but wants
-  its own test; queued, not done.
-  Verify: full suite **1234 tests green (69 files)**. Version bump to 0.4.0 and
+  sweep use — now loads `loadOverriddenRecordIds` only when
+  `(formula.allowOverride ?? true)` and otherwise passes `undefined`, so a locked
+  definition ignores pins in BOTH lanes and no longer loses its sweep backstop to
+  a rogue ACTIVE row. Also deletes one paginated formulaOverrides query per
+  locked definition per pass. Covered by `recompute.spec.ts` "pin handling by
+  lock state" (locked ignores the pin and issues zero formulaOverrides queries;
+  unlocked negative control still skips the pinned record). Residue of the TTL
+  window is therefore just one inert ACTIVE row plus one wasted write — and note
+  it has **no UI remediation path**, since the override toggle is hidden for
+  locked rows, so clearing one takes a direct API write.
+  Verify: full suite **1237 tests green (69 files)**. Version bump to 0.4.0 and
   the local live checklist are the finalize task; **cloud deploy remains a
   human step** — the wizard OFF path, both read-only UI surfaces, and the
   server actually APPLYING `isUIEditable: false` on create have no unit coverage
@@ -1096,14 +1101,16 @@ written at the app root (`README.md`).
   `npx nx start twenty-front`. Postgres `postgres://postgres:postgres@localhost:5432/default`.
 - CLI: run via `node <repo>/node_modules/twenty-sdk/dist/cli.cjs <cmd>` (the
   `.bin/twenty` symlink hit a perms issue in this env).
-- **Deploy/sync** from the app dir: `... cli.cjs dev --once` (build + typecheck +
-  register + sync + regenerate client). Uninstall: `echo y | ... app:uninstall`.
+- **Deploy/sync** from the app dir: `... cli.cjs dev --once -r dev` (build +
+  typecheck + register + sync + regenerate client). The `-r dev` is NOT optional:
+  `defaultRemote` in `~/.twenty/config.json` is `cloud`, so omitting it deploys
+  to PRODUCTION. Uninstall: `echo y | ... app:uninstall`.
 - **Unit tests**: from the app dir, `node <repo>/node_modules/vitest/vitest.mjs run`.
   (Redirect to a file and `tail` it — background runs sometimes swallow stdout.)
 - **Lint**: `<repo>/node_modules/.bin/oxlint -c .oxlintrc.json .`
 - **Integration tests**: `... vitest.mjs run --config vitest.integration.config.ts`
   (does a real install → criteria → uninstall; bumps package.json version per run).
-- **API key** for scripts: in `~/.twenty/config.json` under `remotes.local.apiKey`
+- **API key** for scripts: in `~/.twenty/config.json` under `remotes.dev.apiKey`
   (workspace-scoped API_KEY JWT for the Apple workspace, valid to 2027). Read it
   in Node scripts; never mint/forge tokens.
 

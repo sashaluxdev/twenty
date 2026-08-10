@@ -86,9 +86,15 @@ Three edits carry the whole behavior:
    variation sync writes ACTIVE rows in the same
    `(targetObject, targetField, recordId)` key space and the API can write them
    directly. Locked definitions skip the `findOverride` lookup entirely rather
-   than looking it up and discarding it — see the cost model. **Scope note:**
-   this is the event lane only; the full-object scan lane keeps honoring pins
-   unconditionally — see the accepted limitation below.
+   than looking it up and discarding it — see the cost model. **Both lanes:**
+   the full-object scan lane reads the flag the same way —
+   `recomputeAllRecords` loads `overriddenRecordIds` only when
+   `(formula.allowOverride ?? true)` and otherwise passes `undefined`
+   (`recompute.ts:1083-1090`), so a locked pass skips the paginated
+   `loadOverriddenRecordIds` query it could never act on and leaves every
+   record unpinned. Without this the sweep — the backstop that exists to catch
+   missed events — would keep honoring a rogue pin, freezing that record
+   against expression changes and TODAY rollovers for as long as the pin lived.
 3. **Actor-independent event revert.** With detection skipped, an outside write
    touching only the value field engages neither recompute case (a formula's
    target is never its own dependency), so a revert would otherwise be
@@ -186,24 +192,17 @@ Carried from the build spec §2.5, plus one found during implementation review.
   ignored ACTIVE override row plus one wasted write. This is the *same*
   staleness the design already accepted for enabled-formula targets, which have
   always been excluded through this same cache — locking does not introduce the
-  window, it inherits it. **Available follow-up:** calling
-  `invalidateSyncExclusionFormulasCache` from the locked-definition create path would
-  close the window; not done in this arc.
-- **Pin-ignore is event-lane only; the full-object scan lane still honors a
-  rogue pin.** D2.2 conditions the *single-record event* path on
-  `allowOverride`, but `recomputeAllRecords` — the lane used by the
-  definition-change handlers and the hourly sweep — loads
-  `loadOverriddenRecordIds` once per pass and skips any pinned record
-  (`recompute.ts:788`) with **no** `allowOverride` condition. So while an ACTIVE
-  rogue pin exists on a locked target, that record keeps converging through the
-  event lane (every write to it reverts, D2.3) but loses its **sweep backstop** —
-  the mechanism that exists precisely to catch missed events. Reaching this state
-  requires a rogue pin in the first place, which only the TTL window above or a
-  direct API write to `FormulaOverride` can produce, and it self-clears when the
-  pin is deactivated. Recorded as a known asymmetry rather than fixed here: the
-  fix is small (don't pass `overriddenRecordIds` for a locked definition) but
-  wants its own test, and it did not surface until this ADR was being written
-  against the landed code.
+  window, it inherits it. Since D2.2 covers **both** lanes, the window's worst
+  consequence — a record frozen against every future recompute — is moot: the
+  rogue row is inert everywhere, and the residue is one ignored ACTIVE
+  `FormulaOverride` row plus one wasted write, standing until someone
+  deactivates it. **Available follow-up, best-effort only:** calling
+  `invalidateSyncExclusionFormulasCache` from the locked-definition create path
+  would narrow the window, but not close it — the cache is a module-scope `Map`,
+  so it is per *process*, and definition-create and variation-sync executions are
+  not guaranteed to run in the same one. An invalidation would clear the creating
+  process's entry and leave every other warm process untouched. Not done in this
+  arc.
 
 ## Cost model
 
@@ -216,6 +215,10 @@ Per the standing efficiency-first rule, every operation pays rent.
   short-circuits earlier (D2.1), and the respect fork **skips the per-event
   `findOverride` lookup entirely** for locked definitions (D2.2) rather than
   issuing it and discarding the result — a query removed, not added.
+- **The locked path is net *cheaper* per sweep, too.** The scan lane's half of
+  D2.2 deletes one paginated `loadOverriddenRecordIds` query per locked
+  definition per pass — the hourly sweep, every definition-change recompute and
+  every TODAY-rollover pass — for a result that could only ever be discarded.
 - **One widened query per variation-sync pass** (D3) is the only recurring cost
   Feature A′ adds anywhere: the same single paginated query it always issued,
   with an `or` clause instead of a bare `enabled` filter. It runs only where
@@ -266,10 +269,11 @@ the property.
 - **A per-record lock.** `isUIEditable` is column-level, not per-record (the
   long-standing limitation recorded in the README); nothing here changes that.
 - **Deactivating pins that already exist on a locked target.** Locked
-  definitions never *create* pins, and D2.2 makes a stray pin inert on the event
-  lane, so a dedicated cleanup pass was judged pure cost. The scan-lane
-  asymmetry recorded under accepted limitations is independent of this call and
-  is queued for its own fix.
+  definitions never *create* pins, and D2.2 makes a stray pin inert in **both**
+  lanes, so a dedicated cleanup pass was judged pure cost. Note the consequence:
+  a rogue pin on a locked target has **no UI remediation path** — the override
+  toggle that would clear it is hidden for locked rows — so clearing one
+  requires a direct API write. Inert, but not removable from the product.
 - **Cleaning `lastError` or any stored bookkeeping on lock** — the flag is
   orthogonal to definition health.
 - **Upstream filing of the `isUIEditable` update-lane gap** — offered and
@@ -291,11 +295,20 @@ the property.
   legacy row with `allowOverride` unset still honors its pin; an actorless
   outside write to a locked value field reverts it, with kinds resolved and the
   strict gate applied first, and a gate-failing revert declines to write. The
-  skipped `findOverride` lookup is a consequence of the same branch and is not
-  separately call-count-pinned.
-- **Echo termination** (`handlers.spec.ts:1315`): the revert's own event
-  produces zero further writes — the accepted echo cost is exactly one compute,
-  pinned so a future change cannot silently turn it into a loop.
+  skipped per-event `findOverride` lookup is a consequence of the same branch and
+  is not separately call-count-pinned.
+- Scan lane (`recompute.spec.ts`, "pin handling by lock state"): a locked
+  definition with a seeded ACTIVE pin and a stale stored value recomputes that
+  record and issues **zero** `formulaOverrides` queries (the skipped query is
+  call-count-pinned here, since it is the whole efficiency claim), with an
+  unlocked definition on the identical fixture as the negative control — it still
+  skips the pinned record and still pays the lookup.
+- **Echo termination**: the revert's own event produces zero further writes —
+  the accepted echo cost is exactly one compute, pinned so a future change cannot
+  silently turn it into a loop. Covered twice: directly, from an
+  already-converged row, and end-to-end ("revert then echo settles in exactly one
+  write"), which reverts a stale value and then replays the event that revert
+  emits, so the two halves are pinned at their seam rather than only apart.
 - Sync exclusion: a DISABLED **locked** definition's target is excluded from the
   syncable set, with a disabled-and-*unlocked* definition seeded alongside it as
   a tripwire — if the widened filter (or a fake that ignores `or`) over-returned,
