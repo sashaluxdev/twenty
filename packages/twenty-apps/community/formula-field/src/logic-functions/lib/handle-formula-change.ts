@@ -46,8 +46,14 @@ export const PLATFORM_MANAGED_FIELDS = new Set([
   'searchVector',
 ]);
 
+// Cosmetic/immutable definition fields the engine never reads: renames and
+// description edits must not trigger validation or recompute (item 0.2).
+const INERT_FIELDS = new Set(['name', 'description']);
+
 const isIgnorableField = (field: string): boolean =>
-  BOOKKEEPING_FIELDS.has(field) || PLATFORM_MANAGED_FIELDS.has(field);
+  BOOKKEEPING_FIELDS.has(field) ||
+  PLATFORM_MANAGED_FIELDS.has(field) ||
+  INERT_FIELDS.has(field);
 
 // An empty list means "nothing the app reads changed", which is only reachable
 // through the row-image fallback: the platform drops an update whose diff is
@@ -80,6 +86,8 @@ export const resolveChangedFields = (
   }
   const beforeRecord = before as Record<string, unknown>;
   const afterRecord = after as Record<string, unknown>;
+  // deepJsonEqual compares JSON shapes; event payloads arrive JSON-serialized,
+  // so Date instances never reach it — a live Date here would diff wrongly.
   return [
     ...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)]),
   ].filter((field) => !deepJsonEqual(beforeRecord[field], afterRecord[field]));
@@ -138,6 +146,19 @@ export const handleFormulaChange = async ({
   // the sibling cyclic formula later drops out of the enabled set.
   if (after.enabled === false && !changedFields?.includes('expression')) {
     return { handled: false, reason: 'disabled' };
+  }
+
+  // Wizard drafts have no targetField until finalizeCreation: nothing is
+  // validatable yet, and validating would disable the draft with lastError
+  // junk plus a workspace-wide status refresh on every draft tick (item 0.2 /
+  // A'-M1). The draft still must not stay in the enabled set — the hourly
+  // sweep would full-scan its target object otherwise. No status refresh
+  // needed: a definition without a targetField cannot be anyone's dependency.
+  if ((after.targetField ?? '') === '') {
+    if (after.enabled !== false) {
+      await updateFormulaBookkeeping(client, after.id, { enabled: false });
+    }
+    return { handled: false, reason: 'no-target-field' };
   }
 
   const existing = await loadAllEnabledFormulas(client);

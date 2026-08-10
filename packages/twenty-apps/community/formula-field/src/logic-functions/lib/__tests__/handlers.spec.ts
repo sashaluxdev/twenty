@@ -358,6 +358,68 @@ describe('handleFormulaChange (save-time validation)', () => {
     expect(result.handled).toBe(false);
     expect(client.mutations).toBe(before);
   });
+
+  it('treats a description-only update as inert (item 0.2)', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'f1',
+      targetObject: 'opportunity',
+      targetField: 'formulaScore',
+      targetFieldType: 'NUMBER',
+      expression: 'formulaInputA + 1',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: { ...def, description: 'now with prose' },
+      updatedFields: ['description'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'bookkeeping-only' });
+    expect(client.mutations).toBe(0);
+    expect(client.writes).toHaveLength(0);
+  });
+
+  it('disables and skips wizard drafts that have no targetField yet (spec §9.5)', async () => {
+    client.seed('formulaDefinition', [
+      { id: 'draft-1', targetObject: 'company', targetField: '', expression: '', enabled: true },
+    ]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: { id: 'draft-1', targetObject: 'company', targetField: '', expression: '', enabled: true },
+      updatedFields: ['targetObject'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'no-target-field' });
+    // Exactly one write — enabled:false, keeping the draft out of the sweep's
+    // enabled set. No lastError junk, no validation queries, no status refresh.
+    expect(client.queries).toBe(0);
+    expect(client.mutations).toBe(1);
+    expect(client.get('formulaDefinition', 'draft-1')).toMatchObject({
+      enabled: false,
+    });
+    expect(client.get('formulaDefinition', 'draft-1')!.lastError ?? '').toBe('');
+  });
+
+  it('a later draft tick on the now-disabled draft costs nothing', async () => {
+    // Pins pre-existing behavior: once disabled, the disabled guard exits before
+    // the early return, so the disable write above happens exactly once.
+    client.seed('formulaDefinition', [
+      { id: 'draft-1', targetObject: 'company', targetField: '', expression: '', enabled: false },
+    ]);
+
+    const result = await handleFormulaChange({
+      client,
+      after: { id: 'draft-1', targetObject: 'opportunity', targetField: '', expression: '', enabled: false },
+      updatedFields: ['targetObject'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'disabled' });
+    expect(client.mutations).toBe(0);
+    expect(client.queries).toBe(0);
+  });
 });
 
 // Payload shapes here are the ones twenty-server actually delivers on
