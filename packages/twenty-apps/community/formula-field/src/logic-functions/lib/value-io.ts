@@ -30,12 +30,16 @@ import { type ComputedValue } from 'src/logic-functions/lib/types';
 // now EXPRESS a text result, so the write boundary must be able to store one.
 // TEXT is no longer in MIRRORABLE_KINDS: a bare-ref TEXT target is a one-term
 // engine formula whose writes match what the mirror lane used to produce.
+// SELECT joins with the same string domain (ADR 0029): the computed text must
+// additionally name one of the field's options — that membership gate lives in
+// kind-inference/recompute; the write boundary treats SELECT as text.
 export const ENGINE_FAMILY = [
   'NUMBER',
   'CURRENCY',
   'DATE',
   'DATE_TIME',
   'TEXT',
+  'SELECT',
 ] as const;
 
 export type TargetFieldKind = (typeof ENGINE_FAMILY)[number];
@@ -46,6 +50,14 @@ export const targetFieldKind = (
   (ENGINE_FAMILY as readonly string[]).includes(targetFieldType ?? '')
     ? (targetFieldType as TargetFieldKind)
     : 'NUMBER';
+
+// The string-domain targets plus the raw mirror slot. Every "is this the text
+// lane" branch (value IO, override slots, pinned reads) routes through this
+// predicate — a hard-coded `kind === 'TEXT'` is how SELECT data silently lands
+// in the numeric lane (ADR 0029 D2). 'raw' carries every deployed mirror
+// override, so it must stay true.
+export const usesTextDomain = (kind: TargetFieldKind | 'raw'): boolean =>
+  kind === 'TEXT' || kind === 'SELECT' || kind === 'raw';
 
 // Selection entry for a field of the given metadata type: composite fields
 // need an explicit sub-selection, scalars use `true`. Used for the value field
@@ -77,7 +89,7 @@ export const normalizeStoredValue = (
   if (raw === undefined || raw === null) {
     return null;
   }
-  if (kind === 'TEXT') {
+  if (usesTextDomain(kind)) {
     return typeof raw === 'string' ? raw : null;
   }
   if (kind === 'DATE' || kind === 'DATE_TIME') {
@@ -125,9 +137,14 @@ export const normalizeComputedValue = (
   // TEXT target: a string is already in the field's domain; a number renders
   // through the engine's canonical decimal rendering (ADR 0026) so the stored
   // text matches what a text context inside a formula would have produced.
-  if (kind === 'TEXT') {
+  if (usesTextDomain(kind)) {
     if (value === null) return null;
-    return typeof value === 'string' ? value : formatNumberAsText(value);
+    const text = typeof value === 'string' ? value : formatNumberAsText(value);
+    // SELECT: blank text clears the field (ADR 0029 D4) — '' is structurally
+    // impossible as an option value (min length 1, UPPER_SNAKE), and blankness
+    // already means "null or empty/whitespace" everywhere in the language.
+    if (kind === 'SELECT' && text.trim() === '') return null;
+    return text;
   }
   const numeric = numericDomainValue(value);
   if (numeric === null) return null;
@@ -148,7 +165,7 @@ export const tagEngineValue = (
   kind: TargetFieldKind,
   value: EngineValue,
 ): ComputedValue =>
-  kind === 'TEXT'
+  usesTextDomain(kind)
     ? { kind: 'text', value: typeof value === 'string' ? value : null }
     : { kind: 'number', value: typeof value === 'number' ? value : null };
 
@@ -172,7 +189,7 @@ export const buildTargetWriteData = (
   // TEXT target: the string goes to the column as-is. An empty string is written
   // AS an empty string (the behavior a TEXT mirror already has), not collapsed
   // to null — only a null result clears the field.
-  if (kind === 'TEXT') {
+  if (usesTextDomain(kind)) {
     return { [targetField]: value };
   }
 

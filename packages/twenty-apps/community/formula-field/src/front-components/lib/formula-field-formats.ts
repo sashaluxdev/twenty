@@ -364,9 +364,14 @@ export const cloneMirrorOptions = (
 // Narrows a list of candidate source fields to only the mirror allowlist kinds
 // (excludes the engine numeric family and non-mirrorable kinds). Generic over the
 // field shape so the wizard can carry its own metadata alongside `type`.
+// SELECT stays pickable after its lane move: the mirror flow is the only place
+// that clones a source field's options onto the new field (ADR 0029 D8).
 export const pickableMirrorSourceFields = <T extends { type: string }>(
   fields: T[],
-): T[] => fields.filter((field) => isMirrorTargetKind(field.type));
+): T[] =>
+  fields.filter(
+    (field) => isMirrorTargetKind(field.type) || field.type === 'SELECT',
+  );
 
 // Derives a human display label for a fetched source record, given the object's
 // label-identifier field name + kind, so the wizard's record validation can

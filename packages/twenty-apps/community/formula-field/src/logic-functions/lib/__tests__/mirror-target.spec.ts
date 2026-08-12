@@ -18,13 +18,16 @@ import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 // non-engine target kind copies the source field's raw value onto the target
 // verbatim — no coercion, no engine involvement.
 
+// SELECT left the mirror lane for the engine family (ADR 0029); MULTI_SELECT is
+// still mirrorable and enum-shaped, so it stands in as the default scalar
+// mirror-kind fixture for every test below that does not override the kind.
 const mirrorFormula = (
   overrides: Partial<FormulaDefinitionRecord> = {},
 ): FormulaDefinitionRecord => ({
   id: 'f1',
   targetObject: 'company',
   targetField: 'mirror',
-  targetFieldType: 'SELECT',
+  targetFieldType: 'MULTI_SELECT',
   expression: 'source',
   enabled: true,
   ...overrides,
@@ -117,10 +120,12 @@ describe('mirror recompute passthrough — scalar kinds', () => {
 
   beforeEach(() => {
     client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
   });
 
-  it('copies a SELECT string verbatim', async () => {
+  // SELECT left the mirror lane for the engine family (ADR 0029); MULTI_SELECT
+  // covers the same "scalar-ish enum string, copied verbatim" shape.
+  it('copies a MULTI_SELECT-kind scalar string verbatim', async () => {
     client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: null }]);
 
     const outcome = await recomputeForRecord({
@@ -323,7 +328,7 @@ describe('mirror recompute — no-op suppression and null handling', () => {
   });
 
   it('writes exactly once on a value change, verbatim', async () => {
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('company', [{ id: 'c1', source: 'NEW', mirror: 'OLD' }]);
 
     const outcome = await recomputeForRecord({
@@ -337,7 +342,7 @@ describe('mirror recompute — no-op suppression and null handling', () => {
   });
 
   it('writes null once when the source is null, then no-ops', async () => {
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('company', [{ id: 'c1', source: null, mirror: 'OLD' }]);
 
     const first = await recomputeForRecord({
@@ -380,8 +385,8 @@ describe('mirror recompute — cross-record', () => {
 
   beforeEach(() => {
     client = new FakeClient();
-    client.setFieldKinds('company', { status: 'SELECT' });
-    client.setFieldKinds('opportunity', { mirror: 'SELECT' });
+    client.setFieldKinds('company', { status: 'MULTI_SELECT' });
+    client.setFieldKinds('opportunity', { mirror: 'MULTI_SELECT' });
   });
 
   it('copies a cross-referenced source value verbatim', async () => {
@@ -422,7 +427,7 @@ describe('mirror recompute — cross-record', () => {
 describe('computeMirrorValueForRecord', () => {
   it('returns the source raw value and the target record', async () => {
     const client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: 'OLD' }]);
 
     const result = await computeMirrorValueForRecord({
@@ -543,7 +548,7 @@ describe('mirror heartbeat — lastValueText', () => {
 describe('mirror heartbeat via recomputeAllRecords', () => {
   it('populates lastValueText from a representative record', async () => {
     const client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: null }]);
     client.seed('formulaDefinition', [
       mirrorFormula() as Record<string, unknown> & { id: string },

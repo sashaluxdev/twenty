@@ -228,7 +228,7 @@ describe('handleFormulaChange (save-time validation)', () => {
       id: 'm1',
       targetObject: 'opportunity',
       targetField: 'mirrorField',
-      targetFieldType: 'SELECT',
+      targetFieldType: 'MULTI_SELECT',
       expression: 'sourceField',
       enabled: true,
     };
@@ -245,11 +245,63 @@ describe('handleFormulaChange (save-time validation)', () => {
     const stored = client.get('formulaDefinition', 'm1')!;
     expect(stored.enabled).toBe(false);
     expect(stored.lastError).toBe(
-      'Cannot mirror TEXT field "sourceField" onto a SELECT field (kinds must match)',
+      'Cannot mirror TEXT field "sourceField" onto a MULTI_SELECT field (kinds must match)',
     );
   });
 
+  // SELECT joined the engine family (ADR 0029): a TEXT source and a SELECT
+  // target are both kind 'text' on the strict kind gate, so this bare ref now
+  // validates — membership (does the string name a real option) is tier 2's job.
+  it('accepts a same-record TEXT source onto a SELECT target (both kind text)', async () => {
+    const def: FormulaDefinitionRecord = {
+      id: 'm1',
+      targetObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'SELECT',
+      expression: 'sourceField',
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('opportunity', { sourceField: 'TEXT' });
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(true);
+    expect(client.get('formulaDefinition', 'm1')!.enabled).not.toBe(false);
+  });
+
   it('preloads the cross-ref source object kinds to reject a cross-record mirror mismatch', async () => {
+    const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
+    const def: FormulaDefinitionRecord = {
+      id: 'm1',
+      targetObject: 'opportunity',
+      targetField: 'mirrorField',
+      targetFieldType: 'MULTI_SELECT',
+      expression: `[company:${companyId}:name]`,
+      enabled: true,
+    };
+    client.seed('formulaDefinition', [def]);
+    client.setFieldKinds('company', { name: 'TEXT' });
+
+    const result = await handleFormulaChange({
+      client,
+      after: def,
+      updatedFields: ['expression'],
+    });
+
+    expect(result.valid).toBe(false);
+    const stored = client.get('formulaDefinition', 'm1')!;
+    expect(stored.enabled).toBe(false);
+    expect(stored.lastError).toBe(
+      'Cannot mirror TEXT field "name" onto a MULTI_SELECT field (kinds must match)',
+    );
+  });
+
+  it('accepts a cross-record TEXT source onto a SELECT target (both kind text)', async () => {
     const companyId = '20202020-1c25-4d02-bf25-6aeccf7ea419';
     const def: FormulaDefinitionRecord = {
       id: 'm1',
@@ -268,12 +320,8 @@ describe('handleFormulaChange (save-time validation)', () => {
       updatedFields: ['expression'],
     });
 
-    expect(result.valid).toBe(false);
-    const stored = client.get('formulaDefinition', 'm1')!;
-    expect(stored.enabled).toBe(false);
-    expect(stored.lastError).toBe(
-      'Cannot mirror TEXT field "name" onto a SELECT field (kinds must match)',
-    );
+    expect(result.valid).toBe(true);
+    expect(client.get('formulaDefinition', 'm1')!.enabled).not.toBe(false);
   });
 
   it('preloads kinds for a cross-record operand that is not a bare mirror ref (strict kind gate, Task 3)', async () => {
@@ -764,30 +812,31 @@ describe('validateFormula mirror validation', () => {
   // (b) allowlisted target but the expression is not a bare whole-field ref.
   it('rejects an operator expression onto a mirrorable target', () => {
     const result = validateFormula({
-      candidate: mirror('status + otherField', 'SELECT'),
+      candidate: mirror('status + otherField', 'MULTI_SELECT'),
       existingFormulas: [],
     });
     expect(result.valid).toBe(false);
     expect(errorOf(result)).toBe(
-      'Only a plain field reference can be mirrored onto a SELECT field',
+      'Only a plain field reference can be mirrored onto a MULTI_SELECT field',
     );
   });
 
-  it('rejects a dotted subpath ref onto a mirrorable target', () => {
+  // SELECT joined the engine family (ADR 0029): a non-bare-ref onto a SELECT
+  // target no longer takes the mirror block (1c) — the strict kind gate (1b)
+  // types it instead, and with no fieldKinds accessor the operand kinds are
+  // unknown, which the gate skips rather than rejects.
+  it('is valid for a dotted subpath ref onto a SELECT target (no longer mirror-lane)', () => {
     const result = validateFormula({
       candidate: mirror('amount.amountMicros', 'SELECT'),
       existingFormulas: [],
     });
-    expect(result.valid).toBe(false);
-    expect(errorOf(result)).toBe(
-      'Only a plain field reference can be mirrored onto a SELECT field',
-    );
+    expect(result.valid).toBe(true);
   });
 
   // (c) source kind known via accessor and different from target kind.
   it('rejects a same-record source of a different kind with the exact message', () => {
     const result = validateFormula({
-      candidate: mirror('sourceField', 'SELECT'),
+      candidate: mirror('sourceField', 'MULTI_SELECT'),
       existingFormulas: [],
       fieldKinds: (object) =>
         object === 'opportunity'
@@ -796,21 +845,20 @@ describe('validateFormula mirror validation', () => {
     });
     expect(result.valid).toBe(false);
     expect(errorOf(result)).toBe(
-      'Cannot mirror TEXT field "sourceField" onto a SELECT field (kinds must match)',
+      'Cannot mirror TEXT field "sourceField" onto a MULTI_SELECT field (kinds must match)',
     );
   });
 
-  it('rejects a cross-record source of a different kind (preloaded source object)', () => {
+  // TEXT source and SELECT target are both kind 'text' on the strict kind gate —
+  // membership is tier 2's job, not save-time validation's.
+  it('accepts a cross-record TEXT source onto a SELECT target (both kind text)', () => {
     const result = validateFormula({
       candidate: mirror(`[company:${COMPANY_ID}:name]`, 'SELECT'),
       existingFormulas: [],
       fieldKinds: (object) =>
         object === 'company' ? new Map([['name', 'TEXT']]) : undefined,
     });
-    expect(result.valid).toBe(false);
-    expect(errorOf(result)).toBe(
-      'Cannot mirror TEXT field "name" onto a SELECT field (kinds must match)',
-    );
+    expect(result.valid).toBe(true);
   });
 
   it('accepts a same-kind same-record mirror', () => {
@@ -1102,17 +1150,18 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
 
   it('locked definition: a human edit does not pin an override (mirror lane)', async () => {
     // Mirror = bare same-record field ref onto a non-engine kind (fixture shape
-    // from mirror-target.spec.ts's mirrorFormula helper).
+    // from mirror-target.spec.ts's mirrorFormula helper). SELECT left the mirror
+    // lane (ADR 0029); MULTI_SELECT keeps this test on the lane its title names.
     client.setFieldKinds('opportunity', {
-      sourceField: 'SELECT',
-      mirrorField: 'SELECT',
+      sourceField: 'MULTI_SELECT',
+      mirrorField: 'MULTI_SELECT',
     });
     client.seed('formulaDefinition', [
       {
         id: 'f-mirror',
         targetObject: 'opportunity',
         targetField: 'mirrorField',
-        targetFieldType: 'SELECT',
+        targetFieldType: 'MULTI_SELECT',
         expression: 'sourceField',
         enabled: true,
         allowOverride: false,
@@ -1646,15 +1695,18 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(29);
   });
 
+  // SELECT left the mirror lane (ADR 0029) for the engine family; MULTI_SELECT
+  // is still mirrorable and enum-shaped, so it keeps this cluster on the raw
+  // passthrough lane its titles name.
   it('ignores an app echo on a mirror target (event raw equals the source value)', async () => {
     client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('formulaDefinition', [
       {
         id: 'm1',
         targetObject: 'company',
         targetField: 'mirror',
-        targetFieldType: 'SELECT',
+        targetFieldType: 'MULTI_SELECT',
         expression: 'source',
         enabled: true,
       },
@@ -1676,13 +1728,13 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
 
   it('creates a text override when a HUMAN edits a mirror target away from the source', async () => {
     client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('formulaDefinition', [
       {
         id: 'm1',
         targetObject: 'company',
         targetField: 'mirror',
-        targetFieldType: 'SELECT',
+        targetFieldType: 'MULTI_SELECT',
         expression: 'source',
         enabled: true,
       },
@@ -1776,13 +1828,13 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
 
   it('skips a superseded stale echo on a mirror target (no spurious pin)', async () => {
     client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('formulaDefinition', [
       {
         id: 'm1',
         targetObject: 'company',
         targetField: 'mirror',
-        targetFieldType: 'SELECT',
+        targetFieldType: 'MULTI_SELECT',
         expression: 'source',
         enabled: true,
       },

@@ -564,7 +564,7 @@ describe('recordEvaluationHeartbeat TODAY staleness carve-out (ADR 0015)', () =>
   // guard is uniform, and the zero-write mirror heartbeat is unaffected.
   it('keeps the raw (mirror) lane write-avoidant on a no-op outcome', async () => {
     const stale = formula({
-      targetFieldType: 'SELECT',
+      targetFieldType: 'MULTI_SELECT',
       lastValueText: '"ACTIVE"',
       lastError: '',
       lastEvaluatedAt: '2026-07-04T10:00:00.000Z', // 2h old
@@ -1257,7 +1257,7 @@ describe('recomputeAllRecords hoisted compilation (once per pass)', () => {
 
   it('compiles once per pass on the mirror lane too', async () => {
     const client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('company', [
       { id: 'c1', source: 'ACTIVE', mirror: null },
       { id: 'c2', source: 'CHURNED', mirror: null },
@@ -1268,7 +1268,7 @@ describe('recomputeAllRecords hoisted compilation (once per pass)', () => {
       id: 'fm',
       targetObject: 'company',
       targetField: 'mirror',
-      targetFieldType: 'SELECT',
+      targetFieldType: 'MULTI_SELECT',
       expression: 'source',
       enabled: true,
     });
@@ -1299,7 +1299,7 @@ describe('recomputeAllRecords hoisted compilation (once per pass)', () => {
     // resolves the source field's kind itself. Resolving the resolver's map here
     // would be rent paid for nothing.
     const client = new FakeClient();
-    client.setFieldKinds('company', { source: 'SELECT', mirror: 'SELECT' });
+    client.setFieldKinds('company', { source: 'MULTI_SELECT', mirror: 'MULTI_SELECT' });
     client.seed('company', [{ id: 'c1', source: 'ACTIVE', mirror: null }]);
     const calls = fieldKindsCallCount(client);
 
@@ -1307,7 +1307,7 @@ describe('recomputeAllRecords hoisted compilation (once per pass)', () => {
       id: 'fm',
       targetObject: 'company',
       targetField: 'mirror',
-      targetFieldType: 'SELECT',
+      targetFieldType: 'MULTI_SELECT',
       expression: 'source',
       enabled: true,
     });
@@ -1741,7 +1741,7 @@ describe('gated TEXT-target definition heartbeat churn', () => {
   it('raw lane: a null-source mirror stops rewriting NULL over an empty-string column', async () => {
     const client = new FakeClient();
     const definition = formula({
-      targetFieldType: 'SELECT',
+      targetFieldType: 'MULTI_SELECT',
       expression: 'stage',
       lastValueText: '',
       lastError: '',

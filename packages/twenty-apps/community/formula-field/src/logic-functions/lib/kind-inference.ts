@@ -317,6 +317,7 @@ const EXPECTED_KIND_BY_TARGET: Record<TargetFieldKind, ExpressionKind> = {
   DATE: 'date',
   DATE_TIME: 'datetime',
   TEXT: 'text',
+  SELECT: 'text',
 };
 
 // Save/sweep gate: inference + output gate against the target kind. Returns

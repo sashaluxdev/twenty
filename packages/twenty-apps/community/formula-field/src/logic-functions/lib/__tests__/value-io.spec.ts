@@ -5,8 +5,10 @@ import {
   normalizeComputedValue,
   normalizeStoredValue,
   type TargetFieldKind,
+  tagEngineValue,
   targetFieldKind,
   selectionEntryForFieldKind,
+  usesTextDomain,
 } from 'src/logic-functions/lib/value-io';
 import { MS_PER_DAY } from 'src/engine/date-serial';
 import { isFormulaError } from 'src/engine/errors';
@@ -289,5 +291,49 @@ describe('DATE / DATE_TIME normalize + serialize round-trips (ADR 0011)', () => 
     // And flooring that instant to a DATE yields the UTC day (the 3rd), not the
     // local day (the 4th).
     expect(buildTargetWriteData('due', 'DATE', utcLate).due).toBe('2026-07-03');
+  });
+});
+
+describe('usesTextDomain', () => {
+  it('is true for exactly TEXT, SELECT and raw (drift guard, ADR 0029 D2)', () => {
+    expect(usesTextDomain('TEXT')).toBe(true);
+    expect(usesTextDomain('SELECT')).toBe(true);
+    expect(usesTextDomain('raw')).toBe(true);
+    expect(usesTextDomain('NUMBER')).toBe(false);
+    expect(usesTextDomain('CURRENCY')).toBe(false);
+    expect(usesTextDomain('DATE')).toBe(false);
+    expect(usesTextDomain('DATE_TIME')).toBe(false);
+  });
+});
+
+describe('SELECT write boundary (ADR 0029)', () => {
+  it('targetFieldKind resolves SELECT to itself', () => {
+    expect(targetFieldKind('SELECT')).toBe('SELECT');
+  });
+
+  it('normalizeStoredValue: stored option value verbatim, non-strings null', () => {
+    expect(normalizeStoredValue('HOT', 'SELECT')).toBe('HOT');
+    expect(normalizeStoredValue(null, 'SELECT')).toBeNull();
+    expect(normalizeStoredValue(42, 'SELECT')).toBeNull();
+  });
+
+  it('normalizeComputedValue: verbatim string; blank and null clear', () => {
+    expect(normalizeComputedValue('SELECT', 'HOT')).toBe('HOT');
+    expect(normalizeComputedValue('SELECT', '')).toBeNull();
+    expect(normalizeComputedValue('SELECT', '   ')).toBeNull();
+    expect(normalizeComputedValue('SELECT', null)).toBeNull();
+  });
+
+  it('TEXT keeps the empty string as a real value (unchanged by the SELECT arm)', () => {
+    expect(normalizeComputedValue('TEXT', '')).toBe('');
+  });
+
+  it('tagEngineValue tags SELECT results into the text lane', () => {
+    expect(tagEngineValue('SELECT', 'HOT')).toEqual({ kind: 'text', value: 'HOT' });
+  });
+
+  it('buildTargetWriteData writes the scalar verbatim; null clears', () => {
+    expect(buildTargetWriteData('stage', 'SELECT', 'HOT')).toEqual({ stage: 'HOT' });
+    expect(buildTargetWriteData('stage', 'SELECT', null)).toEqual({ stage: null });
   });
 });

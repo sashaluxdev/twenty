@@ -119,4 +119,11 @@ describe('strictKindGateError', () => {
     expect(strictKindGateError({ ast: parse('amount * 2'), hostObject: 'company',
       targetFieldType: undefined, fieldKinds: lookup })).toBeNull();
   });
+  it('SELECT targets gate as text-kind (ADR 0029 D1)', () => {
+    expect(gate('IF(amount > 1, "A", "B")', 'SELECT')).toBeNull();
+    expect(gate('name', 'SELECT')).toBeNull();
+    expect(gate('amount * 2', 'SELECT')).toMatch(
+      /computes number but the target field holds text/,
+    );
+  });
 });
