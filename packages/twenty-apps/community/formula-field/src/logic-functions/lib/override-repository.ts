@@ -1,5 +1,5 @@
 import { type FormulaClient } from 'src/logic-functions/lib/types';
-import { type TargetFieldKind } from 'src/logic-functions/lib/value-io';
+import { type TargetFieldKind, usesTextDomain } from 'src/logic-functions/lib/value-io';
 import { withRetry } from 'src/logic-functions/lib/with-retry';
 
 // Data access for FormulaOverride rows (feature #2). One row per
@@ -175,15 +175,16 @@ export type OverrideValue = {
 };
 
 // Slot choice, driven by the TARGET KIND rather than by the value's runtime
-// type: the engine's numeric kinds pin the numeric column; TEXT and every mirror
-// ('raw') kind pin the JSON-text column. The text encoding is exactly
-// `JSON.stringify(value ?? null)`, the convention decodeMirrorOverrideValue
-// already reads, so deployed mirror overrides keep round-tripping unchanged.
+// type: the engine's numeric kinds pin the numeric column; every text-domain
+// kind (TEXT, SELECT, and every mirror 'raw') pins the JSON-text column. The
+// text encoding is exactly `JSON.stringify(value ?? null)`, the convention
+// decodeMirrorOverrideValue already reads, so deployed mirror overrides keep
+// round-tripping unchanged.
 export const overrideSlotForKind = (
   kind: TargetFieldKind | 'raw',
   value: unknown,
 ): OverrideValue =>
-  kind === 'TEXT' || kind === 'raw'
+  usesTextDomain(kind)
     ? { text: JSON.stringify(value ?? null) }
     : { numeric: typeof value === 'number' ? value : null };
 

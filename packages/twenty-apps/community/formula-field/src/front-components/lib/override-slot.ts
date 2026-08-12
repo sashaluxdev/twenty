@@ -1,6 +1,10 @@
 import { type EngineValue } from 'src/engine';
 import { decodeMirrorOverrideValue } from 'src/logic-functions/lib/override-repository';
-import { targetFieldKind, type TargetFieldKind } from 'src/logic-functions/lib/value-io';
+import {
+  targetFieldKind,
+  type TargetFieldKind,
+  usesTextDomain,
+} from 'src/logic-functions/lib/value-io';
 
 // WHICH column a record's pinned override lives in, and how to read it back.
 // A FormulaOverride row has two value columns: `overrideValue` (numeric) and
@@ -20,10 +24,11 @@ export const overrideSlotKind = (
   isMirror: boolean,
 ): OverrideSlotKind => (isMirror ? 'raw' : targetFieldKind(targetFieldType));
 
-// TEXT and mirror pins both live in the JSON-text column (the convention
+// TEXT/SELECT and mirror pins all live in the JSON-text column (the convention
 // decodeMirrorOverrideValue reads); the numeric kinds live in overrideValue.
-const usesTextSlot = (slot: OverrideSlotKind): boolean =>
-  slot === 'raw' || slot === 'TEXT';
+// Delegates to value-io's usesTextDomain so a new text-domain target can never
+// fork the read and write conventions (ADR 0029 D2).
+const usesTextSlot = (slot: OverrideSlotKind): boolean => usesTextDomain(slot);
 
 export type OverrideValueColumns = {
   overrideValue?: number | null;
@@ -55,7 +60,7 @@ export const pinnedEngineOverrideValue = (
   slot: OverrideSlotKind,
   row: OverrideValueColumns,
 ): { restorable: boolean; value: EngineValue } => {
-  if (slot !== 'TEXT') {
+  if (!usesTextDomain(slot)) {
     return { restorable: true, value: row.overrideValue ?? null };
   }
   const decoded = decodeMirrorOverrideValue(row.overrideValueText);

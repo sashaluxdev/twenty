@@ -46,6 +46,7 @@ import {
   tagEngineValue,
   type TargetFieldKind,
   targetFieldKind,
+  usesTextDomain,
 } from 'src/logic-functions/lib/value-io';
 import { type EngineValue } from 'src/engine/evaluator';
 
@@ -72,16 +73,17 @@ const storedValuesEqual = (a: EngineValue, b: EngineValue): boolean => {
 };
 
 // The value an ACTIVE override pins, read from the column its target kind
-// actually uses. A TEXT target pins the JSON text slot (overrideValueText, the
-// convention deployed TEXT mirrors already store) and leaves overrideValue null,
-// so reading the numeric column would report every pinned text record as empty.
-// A non-string decode (corrupted or legacy composite text) reports null rather
-// than leaking a non-text value into a text-tagged outcome.
+// actually uses. A text-domain target (TEXT, SELECT) pins the JSON text slot
+// (overrideValueText, the convention deployed TEXT mirrors already store) and
+// leaves overrideValue null, so reading the numeric column would report every
+// pinned text/SELECT record as empty. A non-string decode (corrupted or legacy
+// composite text) reports null rather than leaking a non-text value into a
+// text-tagged outcome.
 const pinnedOverrideValue = (
   targetKind: TargetFieldKind,
   override: OverrideRecord,
 ): EngineValue => {
-  if (targetKind !== 'TEXT') {
+  if (!usesTextDomain(targetKind)) {
     return override.overrideValue;
   }
   const decoded = decodeMirrorOverrideValue(override.overrideValueText).value;
