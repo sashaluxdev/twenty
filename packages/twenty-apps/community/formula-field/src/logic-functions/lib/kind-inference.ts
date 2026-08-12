@@ -1,4 +1,5 @@
 import { type AstNode, type RenderKind } from 'src/engine';
+import { staticTextOutputs } from 'src/engine/static-text-outputs';
 import { ENGINE_FAMILY_KINDS } from 'src/logic-functions/lib/mirror-kinds';
 import {
   targetFieldKind,
@@ -352,4 +353,80 @@ export const strictKindGateError = (args: {
   const suggestion =
     expected === 'text' ? ' Wrap it in TEXT(...) to fix this.' : '';
   return `Formula computes ${result.kind} but the target field holds ${expected}${suggestion}`;
+};
+
+// A SELECT field option as the gates consume it: the stored value plus the
+// display label. Labels feed the did-you-mean hint only — matching is always
+// by value, case-sensitively, like every other string comparison in the
+// language (ADR 0029 D6).
+export type SelectOption = { value: string; label: string };
+
+// The per-pass / per-event resolved option set: the ordered list for messages
+// plus a value Set for O(1) membership at the write boundary. Built once by
+// each hoist point, never per record. Null input or an empty list is
+// "unresolvable" (the platform guarantees a real SELECT field has at least one
+// option), so gates skip rather than reject (ADR 0027 posture).
+export type TargetSelectOptions = {
+  list: ReadonlyArray<SelectOption>;
+  values: ReadonlySet<string>;
+};
+
+export const buildTargetSelectOptions = (
+  list: ReadonlyArray<SelectOption> | null | undefined,
+): TargetSelectOptions | null =>
+  list == null || list.length === 0
+    ? null
+    : { list, values: new Set(list.map((option) => option.value)) };
+
+const MEMBERSHIP_MESSAGE_OPTION_LIMIT = 6;
+
+const membershipGateMessage = (
+  literal: string,
+  targetOptions: TargetSelectOptions,
+): string => {
+  const values = targetOptions.list.map((option) => option.value);
+  const shown =
+    values.slice(0, MEMBERSHIP_MESSAGE_OPTION_LIMIT).join(', ') +
+    (values.length > MEMBERSHIP_MESSAGE_OPTION_LIMIT ? ', …' : '');
+  // The label-vs-value trap: users think in labels, the platform forces
+  // UPPER_SNAKE values. A case-insensitive value/label match names the value
+  // the user almost certainly meant.
+  const lower = literal.toLowerCase();
+  const nearMiss = targetOptions.list.find(
+    (option) =>
+      option.value.toLowerCase() === lower ||
+      option.label.toLowerCase() === lower,
+  );
+  const hint = nearMiss ? ` Did you mean "${nearMiss.value}"?` : '';
+  return `Formula can produce "${literal}", which is not an option of the target field (options: ${shown})${hint}`;
+};
+
+// SELECT membership gate, static tier (ADR 0029 D3): when the formula's text
+// outputs form a closed literal set, every non-blank literal must name a
+// defined option value. Open sets pass (the per-record check owns them); an
+// unresolvable option set skips, never rejects. Blank literals are legal —
+// they normalize to null and clear the field (D4). Runs after the kind gate,
+// so the tree is already text-kind at the root.
+export const selectMembershipGateError = (args: {
+  ast: AstNode;
+  targetFieldType: string | null | undefined;
+  targetOptions: TargetSelectOptions | null | undefined;
+}): string | null => {
+  const { ast, targetFieldType, targetOptions } = args;
+  if (targetFieldType !== 'SELECT' || targetOptions == null) {
+    return null;
+  }
+  const outputs = staticTextOutputs(ast);
+  if (outputs === null) {
+    return null;
+  }
+  for (const literal of outputs) {
+    if (literal.trim() === '') {
+      continue;
+    }
+    if (!targetOptions.values.has(literal)) {
+      return membershipGateMessage(literal, targetOptions);
+    }
+  }
+  return null;
 };
