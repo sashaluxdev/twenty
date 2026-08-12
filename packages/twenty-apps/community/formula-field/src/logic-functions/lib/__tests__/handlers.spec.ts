@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parse } from 'src/engine/parser';
 import { handleFormulaChange } from 'src/logic-functions/lib/handle-formula-change';
@@ -16,6 +16,7 @@ import {
   loadEnabledFormulas,
   recordEvaluationHeartbeat,
 } from 'src/logic-functions/lib/formula-repository';
+import { __setFakeObjectsWithFieldsForTests } from 'src/logic-functions/lib/metadata-objects';
 import { recomputeForRecord } from 'src/logic-functions/lib/recompute';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
@@ -2486,5 +2487,110 @@ describe('handleRecordUpdate per-definition static gate', () => {
     });
 
     expect(client.get('opportunity', 'o1')!.formulaScore).toBe(1);
+  });
+});
+
+describe('handleRecordUpdate SELECT membership (ADR 0029)', () => {
+  const seedSelectMetadata = (values: string[]) => {
+    __setFakeObjectsWithFieldsForTests([
+      {
+        id: 'obj-opportunity',
+        nameSingular: 'opportunity',
+        labelIdentifierFieldMetadataId: null,
+        fields: [
+          {
+            id: 'field-stage',
+            name: 'formulaStage',
+            type: 'SELECT',
+            isActive: true,
+            isSystem: false,
+            options: values.map((value, index) => ({
+              id: `opt-${index}`,
+              value,
+              label: value,
+              color: 'green',
+              position: index,
+            })),
+          },
+        ],
+      },
+    ]);
+  };
+
+  afterEach(() => {
+    __setFakeObjectsWithFieldsForTests(null);
+  });
+
+  it('event recompute writes a member option value', async () => {
+    seedSelectMetadata(['HOT', 'COLD']);
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaStage: 'SELECT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-select',
+        targetObject: 'opportunity',
+        targetField: 'formulaStage',
+        targetFieldType: 'SELECT',
+        expression: 'IF(amount > 100, "HOT", "COLD")',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', amount: 200, formulaStage: null }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', amount: 200, formulaStage: null },
+      updatedFields: ['amount'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    expect(client.get('opportunity', 'o1')!.formulaStage).toBe('HOT');
+  });
+
+  it('option drift freezes the event lane too: no recompute, no pin, no lock revert', async () => {
+    seedSelectMetadata(['HOT']); // COLD was deleted natively
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaStage: 'SELECT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-frozen',
+        targetObject: 'opportunity',
+        targetField: 'formulaStage',
+        targetFieldType: 'SELECT',
+        expression: 'IF(amount > 100, "HOT", "COLD")',
+        enabled: true,
+        allowOverride: false,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', amount: 200, formulaStage: 'OUTSIDE' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', amount: 200, formulaStage: 'OUTSIDE' },
+      updatedFields: ['formulaStage'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    // Frozen on both lanes (user ruling 3): the outside write sticks until the
+    // options are fixed natively; nothing pins, nothing reverts.
+    expect(client.get('opportunity', 'o1')!.formulaStage).toBe('OUTSIDE');
+    expect(
+      client.mutationSelections.some(
+        (selection) => 'createFormulaOverride' in selection,
+      ),
+    ).toBe(false);
+    expect(
+      client.writes.filter((write) => write.startsWith('opportunity:')),
+    ).toHaveLength(0);
   });
 });

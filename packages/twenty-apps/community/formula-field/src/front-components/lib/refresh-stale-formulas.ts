@@ -1,4 +1,6 @@
 import { isStaleTimestamp } from 'src/front-components/lib/format-relative-past';
+import { buildTargetSelectOptions } from 'src/logic-functions/lib/kind-inference';
+import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
 import {
   recomputeAllRecords,
   recomputeForRecord,
@@ -144,6 +146,15 @@ export const refreshStaleTodayFormulas = async ({
             // lookup per stale definition per user visit.
             // (recomputeAllRecordsFn below resolves its own, once per pass.)
             fieldKindsByObject: await resolveKindsForFormula(client, definition),
+            targetOptions:
+              definition.targetFieldType === 'SELECT'
+                ? buildTargetSelectOptions(
+                    await targetFieldOptions(
+                      definition.targetObject ?? '',
+                      definition.targetField ?? '',
+                    ),
+                  )
+                : null,
           });
         }
         if (sweepAllRecords) {

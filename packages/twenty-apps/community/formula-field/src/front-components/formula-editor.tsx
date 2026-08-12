@@ -67,6 +67,8 @@ import {
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { convergeTrashedDefinitionLayout } from 'src/logic-functions/lib/fx-status-field';
 import { loadTrashedFormulas } from 'src/logic-functions/lib/formula-repository';
+import { buildTargetSelectOptions } from 'src/logic-functions/lib/kind-inference';
+import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
 import {
   recomputeForRecord,
   resolveKindsForFormula,
@@ -830,6 +832,15 @@ const FormulaEditor = () => {
               client,
               handedBackFormula,
             ),
+            targetOptions:
+              definition.targetFieldType === 'SELECT'
+                ? buildTargetSelectOptions(
+                    await targetFieldOptions(
+                      definition.targetObject,
+                      definition.targetField,
+                    ),
+                  )
+                : null,
           });
         }
       } finally {

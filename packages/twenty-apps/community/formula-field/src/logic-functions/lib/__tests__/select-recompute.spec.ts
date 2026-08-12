@@ -222,4 +222,23 @@ describe('recomputeForRecord SELECT fallback (ADR 0029)', () => {
     expect(outcome.error).toBeNull();
     expect(client.get('opportunity', 'o1')!.formulaStage).toBe('HOT');
   });
+
+  it('a threaded null option set is never re-resolved: the write goes through ungated', async () => {
+    seedMetadata(['HOT']); // drifted: COLD was deleted natively
+    const client = new FakeClient();
+    seedRecords(client, [{ id: 'o1', amount: 200, formulaStage: null }]);
+
+    const outcome = await recomputeForRecord({
+      client,
+      formula: selectFormula('IF(amount > 100, "HOT", "COLD")'),
+      targetRecordId: 'o1',
+      targetOptions: null,
+    });
+
+    // null means "resolved but unresolvable" (Task 7's contract) — it must
+    // never trigger a re-resolve, and the gate must skip rather than freeze.
+    expect(vi.mocked(targetFieldOptions)).not.toHaveBeenCalled();
+    expect(outcome.error).toBeNull();
+    expect(client.get('opportunity', 'o1')!.formulaStage).toBe('HOT');
+  });
 });
