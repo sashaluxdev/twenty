@@ -1,12 +1,16 @@
 import {
   CURRENCY_CODES,
   type CurrencyFormat,
+  deriveOptionValue,
   type DateDisplayFormat,
   type FormatOptions,
   getOutputFormat,
   isValidCustomUnicodeDateFormat,
   type NumberDisplayType,
   type OutputFormat,
+  SELECT_OPTION_COLORS,
+  selectOptionsProblem,
+  type SelectOptionDraft,
 } from 'src/front-components/lib/formula-field-formats';
 import {
   ChoiceChip,
@@ -14,7 +18,9 @@ import {
   HintText,
   MonoInput,
   MutedText,
+  SecondaryButton,
   StepperButton,
+  TextInput,
 } from 'src/front-components/lib/ui';
 
 // isValidCustomUnicodeDateFormat is used below to flag an incomplete CUSTOM
@@ -125,6 +131,14 @@ export const FormatOptionsFields = ({
   // fall-through below, which would otherwise offer a date display format on a
   // text field.
   if (definition.fieldType === 'TEXT') {
+    return null;
+  }
+
+  // SELECT options are edited by SelectOptionsEditor in the wizard ONLY. This
+  // shared form is also rendered by the field-settings editor, and options are
+  // never editable post-creation (ADR 0029 D7) — so the SELECT arm is empty by
+  // design, not by omission.
+  if (definition.fieldType === 'SELECT') {
     return null;
   }
 
@@ -274,4 +288,104 @@ const f: Record<string, React.CSSProperties> = {
   input: { width: '100%', boxSizing: 'border-box' },
   hint: { marginBottom: '6px' },
   err: { marginTop: '4px' },
+  optionRow: { display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 },
+  optionLabel: { flex: 1 },
+  optionValue: { fontFamily: 'ui-monospace, monospace', minWidth: 80 },
+};
+
+type SelectOptionsEditorProps = {
+  drafts: SelectOptionDraft[];
+  onChange: (drafts: SelectOptionDraft[]) => void;
+};
+
+// One-time options editor for the wizard's `select` format (ADR 0029 D7):
+// options are defined here, at field creation, and the app never edits them
+// again — post-creation management is Twenty's native data model settings.
+// The option VALUE derives from the label (platform UPPER_SNAKE rule) and is
+// shown read-only; row order is the option position.
+export const SelectOptionsEditor = ({
+  drafts,
+  onChange,
+}: SelectOptionsEditorProps) => {
+  const patchRow = (index: number, patch: Partial<SelectOptionDraft>) =>
+    onChange(
+      drafts.map((draft, position) =>
+        position === index ? { ...draft, ...patch } : draft,
+      ),
+    );
+  const moveRow = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= drafts.length) return;
+    const next = [...drafts];
+    const [moved] = next.splice(index, 1);
+    next.splice(target, 0, moved);
+    onChange(next);
+  };
+  const removeRow = (index: number) =>
+    onChange(drafts.filter((_draft, position) => position !== index));
+  const addRow = () =>
+    onChange([
+      ...drafts,
+      {
+        label: '',
+        color: SELECT_OPTION_COLORS[drafts.length % SELECT_OPTION_COLORS.length],
+      },
+    ]);
+  const cycleColor = (index: number) => {
+    const current = SELECT_OPTION_COLORS.indexOf(drafts[index].color);
+    patchRow(index, {
+      color: SELECT_OPTION_COLORS[(current + 1) % SELECT_OPTION_COLORS.length],
+    });
+  };
+  const problem = selectOptionsProblem(drafts);
+
+  return (
+    <div>
+      {drafts.map((draft, index) => (
+        <div key={index} style={f.optionRow}>
+          <StepperButton
+            onClick={() => moveRow(index, -1)}
+            disabled={index === 0}
+          >
+            ↑
+          </StepperButton>
+          <StepperButton
+            onClick={() => moveRow(index, 1)}
+            disabled={index === drafts.length - 1}
+          >
+            ↓
+          </StepperButton>
+          <TextInput
+            value={draft.label}
+            placeholder="Option label"
+            onChange={(event) => patchRow(index, { label: event.target.value })}
+            style={f.optionLabel}
+          />
+          <MutedText style={f.optionValue}>
+            {deriveOptionValue(draft.label) || '—'}
+          </MutedText>
+          <ChoiceChip selected={false} onMouseDown={() => cycleColor(index)}>
+            {draft.color}
+          </ChoiceChip>
+          <StepperButton
+            onClick={() => removeRow(index)}
+            disabled={drafts.length === 1}
+          >
+            ×
+          </StepperButton>
+        </div>
+      ))}
+      <SecondaryButton onClick={addRow}>Add option</SecondaryButton>
+      {problem ? (
+        <ErrText as="div" style={f.err}>
+          {problem}
+        </ErrText>
+      ) : (
+        <HintText as="div" style={f.hint}>
+          Options are created once with the field; edit them later in Twenty's
+          data model settings.
+        </HintText>
+      )}
+    </div>
+  );
 };
