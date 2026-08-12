@@ -33,7 +33,8 @@ through a front component on the record page.
 ### Feature summary
 
 - **Guided "Add formula field" wizard** — pick object → output format (integer /
-  decimal / percent / short / currency / date / datetime / text) → per-format options
+  decimal / percent / short / currency / date / datetime / text / select) →
+  per-format options
   (decimals, currency Short/Full + code, date display style with custom Unicode
   pattern — the same options the native field creator exposes) → name; the value
   field is created at runtime via the metadata API, no redeploy (ADR 0008). Every
@@ -47,8 +48,16 @@ through a front component on the record page.
 - **Output formats** — integer, decimal, percent (all `NUMBER`), currency
   (`CURRENCY`, stored and computed in **micros**, ×1e6), date / datetime
   (`DATE` / `DATE_TIME`, the Excel serial-date model — **epoch-days**, ADR 0011),
-  and text (`TEXT`, a computed string — concatenation, IF branches returning
-  text, or a bare reference to another TEXT field; ADR 0026, no display options).
+  text (`TEXT`, a computed string — concatenation, IF branches returning
+  text, or a bare reference to another TEXT field; ADR 0026, no display options),
+  and select (`SELECT`, a computed string that must name one of the field's
+  options — an IF/SWITCH label ladder, a bare reference to another SELECT
+  field, or blank to clear it; ADR 0029). The options themselves are defined
+  **exactly once**, in the wizard's options editor at field creation; from then
+  on they're managed natively (Data model settings), never by the app —
+  deleting or renaming an option a formula's literal names freezes that
+  definition (write-avoidant, no record scans) rather than erroring on every
+  record, and it self-heals within a minute of fixing the options back up.
 - **Same-record and cross-record references** — read another field on the same
   record, or a field on a specific record of any object by uuid.
 - **Manual per-record overrides** — a human editing the value directly pins that
@@ -494,7 +503,7 @@ at all.
 
 Error codes: `TOKENIZE_ERROR`, `PARSE_ERROR`, `DIVISION_BY_ZERO`,
 `UNKNOWN_VARIABLE`, `NON_NUMERIC_VALUE`, `MAX_DEPTH_EXCEEDED`, `CYCLE_DETECTED`,
-`TEXT_TOO_LONG`.
+`TEXT_TOO_LONG`, `NOT_AN_OPTION`.
 
 ### Limits (DoS guards)
 
