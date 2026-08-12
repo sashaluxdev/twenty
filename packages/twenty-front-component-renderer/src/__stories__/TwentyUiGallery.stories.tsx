@@ -120,42 +120,25 @@ export const IconPreact: Story = createGalleryStory(
   'preact',
 );
 
-// KNOWN ISSUE (TDD): base-ui radio internals call MutationObserver.observe,
-// shipped as an empty stub class by @remote-dom/polyfill.
-const INPUT_EXPECTED_FAILURES = ['Radio', 'RadioGroup', 'CardPicker'];
-export const InputReact: Story = createKnownFailureGalleryStory(
+export const InputReact: Story = createGalleryStory('twenty-ui-input-gallery');
+export const InputPreact: Story = createGalleryStory(
   'twenty-ui-input-gallery',
-  INPUT_EXPECTED_FAILURES,
-);
-export const InputPreact: Story = createKnownFailureGalleryStory(
-  'twenty-ui-input-gallery',
-  INPUT_EXPECTED_FAILURES,
   'preact',
 );
 
-// KNOWN ISSUE (TDD): base-ui Collapsible calls getComputedStyle, missing from
-// the remote-dom Window polyfill. The runtimes diverge (observed
-// deterministically): under Preact only the first Collapsible consumer
-// crashes and later siblings render.
-export const JsonVisualizerReact: Story = createKnownFailureGalleryStory(
+export const JsonVisualizerReact: Story = createGalleryStory(
   'twenty-ui-json-visualizer-gallery',
-  ['JsonTree', 'JsonArrayNode', 'JsonObjectNode', 'JsonNestedNode'],
 );
-export const JsonVisualizerPreact: Story = createKnownFailureGalleryStory(
+export const JsonVisualizerPreact: Story = createGalleryStory(
   'twenty-ui-json-visualizer-gallery',
-  ['JsonTree'],
   'preact',
 );
 
-// KNOWN ISSUE (TDD): same getComputedStyle gap through base-ui Collapsible,
-// with the same React/Preact divergence.
-export const LayoutReact: Story = createKnownFailureGalleryStory(
+export const LayoutReact: Story = createGalleryStory(
   'twenty-ui-layout-gallery',
-  ['AnimatedEaseInOut', 'AnimatedExpandableContainer'],
 );
-export const LayoutPreact: Story = createKnownFailureGalleryStory(
+export const LayoutPreact: Story = createGalleryStory(
   'twenty-ui-layout-gallery',
-  ['AnimatedEaseInOut'],
   'preact',
 );
 
@@ -171,15 +154,11 @@ export const NavigationPreact: Story = createKnownFailureGalleryStory(
   'preact',
 );
 
-// KNOWN ISSUE (TDD): AppTooltip observes document.body with the stubbed-out
-// MutationObserver.
-export const SurfacesReact: Story = createKnownFailureGalleryStory(
+export const SurfacesReact: Story = createGalleryStory(
   'twenty-ui-surfaces-gallery',
-  ['AppTooltip'],
 );
-export const SurfacesPreact: Story = createKnownFailureGalleryStory(
+export const SurfacesPreact: Story = createGalleryStory(
   'twenty-ui-surfaces-gallery',
-  ['AppTooltip'],
   'preact',
 );
 

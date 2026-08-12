@@ -459,6 +459,45 @@ export class FlatViewValidatorService {
       });
     }
 
+    // Every ViewKey value is reserved for an engine-owned singleton view per
+    // object (INDEX table view, FIELDS_WIDGET record-page view).
+    const reservedViewKey = flatViewToValidate.key;
+
+    if (isDefined(reservedViewKey)) {
+      if (flatViewToValidate.isSystemSideEffect !== true) {
+        validationResult.errors.push({
+          code: ViewExceptionCode.INVALID_VIEW_DATA,
+          message: t`The ${reservedViewKey} view key is reserved for the engine-owned default view; remove the key from the view definition`,
+          userFriendlyMessage: msg`The ${reservedViewKey} view key is reserved for the default view`,
+        });
+      }
+
+      const objectAlreadyHasFlatViewWithSameKey =
+        isDefined(optimisticFlatObjectMetadata) &&
+        optimisticFlatObjectMetadata.viewUniversalIdentifiers.some(
+          (viewUniversalIdentifier) => {
+            const flatView = findFlatEntityByUniversalIdentifier({
+              universalIdentifier: viewUniversalIdentifier,
+              flatEntityMaps: optimisticFlatViewMaps,
+            });
+
+            return (
+              isDefined(flatView) &&
+              flatView.key === reservedViewKey &&
+              !isDefined(flatView.deletedAt)
+            );
+          },
+        );
+
+      if (objectAlreadyHasFlatViewWithSameKey) {
+        validationResult.errors.push({
+          code: ViewExceptionCode.INVALID_VIEW_DATA,
+          message: t`Object already has a view with the ${reservedViewKey} key`,
+          userFriendlyMessage: msg`This object already has a default view`,
+        });
+      }
+    }
+
     if (
       isDefined(
         flatViewToValidate.kanbanAggregateOperationFieldMetadataUniversalIdentifier,

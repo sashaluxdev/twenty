@@ -1,0 +1,53 @@
+import { type SlackAssistantAgentMessage } from 'src/logic-functions/types/slack-assistant-agent-message.type';
+import { fetchSlackConversationMessages } from 'src/logic-functions/utils/fetch-slack-conversation-messages';
+import { fetchSlackRequesterName } from 'src/logic-functions/utils/fetch-slack-requester-name';
+import { getSlackClient } from 'src/logic-functions/utils/get-slack-client';
+import { resolveSlackBotUserIdOrThrow } from 'src/logic-functions/utils/resolve-slack-bot-user-id-or-throw';
+
+type SlackAssistantContext = {
+  conversationMessages: SlackAssistantAgentMessage[];
+  requesterName: string | undefined;
+};
+
+export const fetchSlackAssistantContext = async ({
+  slackChannelId,
+  parentMessageTimestamp,
+  slackUserId,
+  excludeMessageTimestamps,
+}: {
+  slackChannelId: string;
+  parentMessageTimestamp: string;
+  slackUserId: string | undefined;
+  excludeMessageTimestamps: string[];
+}): Promise<SlackAssistantContext> => {
+  const slackClientResult = await getSlackClient();
+
+  if (!slackClientResult.success) {
+    return { conversationMessages: [], requesterName: undefined };
+  }
+
+  const { client } = slackClientResult;
+
+  const assistantBotUserId = await resolveSlackBotUserIdOrThrow().catch(
+    (error) => {
+      console.warn(
+        `[slack] failed to resolve the bot user id, past assistant replies are replayed as user turns: ${error instanceof Error ? error.message : String(error)}`,
+      );
+
+      return undefined;
+    },
+  );
+
+  const [conversationMessages, requesterName] = await Promise.all([
+    fetchSlackConversationMessages({
+      client,
+      channelId: slackChannelId,
+      threadTimestamp: parentMessageTimestamp,
+      assistantBotUserId,
+      excludeMessageTimestamps,
+    }),
+    fetchSlackRequesterName({ client, slackUserId }),
+  ]);
+
+  return { conversationMessages, requesterName };
+};
