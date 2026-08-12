@@ -4,11 +4,15 @@ import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { enqueueSnackbar } from 'twenty-sdk/front-component';
 
 import { ensureFormulaTabOnObject } from 'src/front-components/lib/ensure-formula-tab';
-import { FormatOptionsFields } from 'src/front-components/lib/format-options-fields';
+import {
+  FormatOptionsFields,
+  SelectOptionsEditor,
+} from 'src/front-components/lib/format-options-fields';
 import {
   areFormatOptionsValid,
   buildCurrencyDefaultValue,
   buildFieldSettings,
+  buildSelectOptionsPayload,
   cloneMirrorOptions,
   deriveFieldName,
   deriveRecordDisplayLabel,
@@ -140,11 +144,18 @@ export const FormulaSetupWizard = ({
   const [options, setOptions] = useState<FormatOptions>(() => {
     const parsed = parseTargetFieldSettings(draft.targetFieldSettings);
     if (initialFormat) {
-      return optionsFromSettings(
+      const resumed = optionsFromSettings(
         initialFormat,
         parsed?.settings ?? null,
         draft.currencyCode || parsed?.currencyCode,
       );
+      // SELECT drafts resume from their dedicated slot (ADR 0029 D7):
+      // optionsFromSettings never sees them because a select draft carries no
+      // inner settings object.
+      if (initialFormat === 'select' && parsed?.selectOptions) {
+        resumed.selectOptions = parsed.selectOptions;
+      }
+      return resumed;
     }
     return makeFormatOptions('integer');
   });
@@ -391,6 +402,9 @@ export const FormulaSetupWizard = ({
         targetFieldSettings: serializeTargetFieldSettings({
           settings,
           currencyCode: isCurrency ? nextOptions.currencyCode : undefined,
+          ...(formatKey === 'select'
+            ? { selectOptions: nextOptions.selectOptions }
+            : {}),
         }),
       });
     },
@@ -662,6 +676,7 @@ export const FormulaSetupWizard = ({
     try {
       const formatDefinition = getOutputFormat(format);
       const isCurrency = formatDefinition.targetFieldType === 'CURRENCY';
+      const isSelect = formatDefinition.targetFieldType === 'SELECT';
       const settings = buildFieldSettings(format, options);
       const metadataClient = new MetadataApiClient();
 
@@ -686,6 +701,9 @@ export const FormulaSetupWizard = ({
                           options.currencyCode,
                         ),
                       }
+                    : {}),
+                  ...(isSelect
+                    ? { options: buildSelectOptionsPayload(options.selectOptions) }
                     : {}),
                 },
               },
@@ -758,6 +776,10 @@ export const FormulaSetupWizard = ({
       // it. Marking it 'mirror' would point every kind-driven consumer (value
       // IO, the settings editor, the override slot) at the raw lane.
       const isTextTarget = sourceField.type === 'TEXT';
+      // SELECT left the mirror lane too (ADR 0029 D8): the field is still
+      // cloned WITH its options — the one thing only this flow can do — but
+      // the definition rides the engine lane with the membership gate.
+      const isSelectTarget = sourceField.type === 'SELECT';
 
       if (!existingField) {
         await metadataClient.mutation({
@@ -793,7 +815,7 @@ export const FormulaSetupWizard = ({
           targetField: fieldName,
           targetFieldType: sourceField.type,
           currencyCode: '',
-          outputFormat: isTextTarget ? 'text' : 'mirror',
+          outputFormat: isSelectTarget ? 'select' : isTextTarget ? 'text' : 'mirror',
           // Expression is seeded automatically (same-record bare ref or cross-
           // record [object:id:field]); enabling triggers the first passthrough.
           expression: seedMirrorExpression(mirrorDraft),
@@ -893,9 +915,17 @@ export const FormulaSetupWizard = ({
             </div>
           </div>
 
-          {/* TEXT has no options in v1 — FormatOptionsFields renders nothing
-              for it, so the step header would stand alone. */}
-          {format && getOutputFormat(format).fieldType !== 'TEXT' ? (
+          {format === 'select' ? (
+            <div style={layout.step}>
+              <StepTitle style={layout.stepTitle}>2b · Options</StepTitle>
+              <SelectOptionsEditor
+                drafts={options.selectOptions}
+                onChange={(selectOptions) =>
+                  changeOptions({ ...options, selectOptions })
+                }
+              />
+            </div>
+          ) : format && getOutputFormat(format).fieldType !== 'TEXT' ? (
             <div style={layout.step}>
               <StepTitle style={layout.stepTitle}>2b · Format options</StepTitle>
               <FormatOptionsFields

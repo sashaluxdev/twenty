@@ -63,6 +63,11 @@ const formatKeyForType = (
       return 'datetime';
     case 'TEXT':
       return 'text';
+    // Legacy deployed SELECT mirrors still carry outputFormat 'mirror' and
+    // reach this branch by targetFieldType alone — without it they'd fall
+    // through to the NUMBER 'integer' form below.
+    case 'SELECT':
+      return 'select';
     default:
       return isOutputFormat(outputFormat) &&
         getOutputFormat(outputFormat).fieldType === 'NUMBER'
@@ -221,7 +226,11 @@ export const FieldSettingsEditor = ({
     definitionId,
   ]);
 
-  const canSave = loaded && !saving && areFormatOptionsValid(format, options);
+  // SELECT has no editable settings here (options are native-owned, ADR 0029
+  // D7); the draft-row validity rule is a wizard concern and must not veto
+  // label editing.
+  const canSave =
+    loaded && !saving && (format === 'select' || areFormatOptionsValid(format, options));
 
   return (
     <div style={layout.section}>
@@ -288,6 +297,11 @@ export const FieldSettingsEditor = ({
                     setSaved(false);
                   }}
                 />
+              ) : null}
+              {targetFieldType === 'SELECT' ? (
+                <HintText as="div">
+                  Options are managed in Twenty's data model settings, not here.
+                </HintText>
               ) : null}
 
               <div style={layout.actions}>
