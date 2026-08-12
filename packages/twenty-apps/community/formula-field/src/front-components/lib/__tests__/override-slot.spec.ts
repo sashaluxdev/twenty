@@ -5,6 +5,7 @@ import {
   pinnedEngineOverrideValue,
   pinnedOverrideDisplayValue,
 } from 'src/front-components/lib/override-slot';
+import { overrideSlotForKind } from 'src/logic-functions/lib/override-repository';
 
 describe('overrideSlotKind', () => {
   it('routes a mirror row to the raw slot whatever its target kind', () => {
@@ -151,5 +152,33 @@ describe('pinnedEngineOverrideValue', () => {
         overrideValueText: null,
       }),
     ).toEqual({ restorable: true, value: null });
+  });
+});
+
+describe('SELECT engine slot (ADR 0029)', () => {
+  it('routes an engine SELECT row to its own slot', () => {
+    expect(overrideSlotKind('SELECT', false)).toBe('SELECT');
+  });
+
+  it('SELECT pins write into and read from the JSON-text column', () => {
+    expect(overrideSlotForKind('SELECT', 'HOT')).toEqual({ text: '"HOT"' });
+    expect(
+      pinnedOverrideDisplayValue('SELECT', { overrideValueText: '"HOT"' }),
+    ).toBe('HOT');
+    expect(
+      pinnedEngineOverrideValue('SELECT', { overrideValueText: '"HOT"' }),
+    ).toEqual({ restorable: true, value: 'HOT' });
+  });
+
+  it('a deployed raw-slot SELECT-mirror pin round-trips unchanged (back-compat)', () => {
+    // Pre-0.5.0 rows were written by overrideSlotForKind('raw', 'HOT') — the
+    // encoding is byte-identical to the text slot SELECT now uses.
+    expect(overrideSlotForKind('raw', 'HOT')).toEqual({ text: '"HOT"' });
+    expect(
+      pinnedEngineOverrideValue('SELECT', {
+        overrideValue: null,
+        overrideValueText: '"HOT"',
+      }),
+    ).toEqual({ restorable: true, value: 'HOT' });
   });
 });

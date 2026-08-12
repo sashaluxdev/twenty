@@ -5,6 +5,7 @@ import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { appBuild, appDeploy, appInstall, appUninstall } from 'twenty-sdk/cli';
 
 import { APPLICATION_UNIVERSAL_IDENTIFIER } from 'src/application-config';
+import { normalizeStoredValue } from 'src/logic-functions/lib/value-io';
 
 // End-to-end integration test: install the app on the live local workspace, then
 // exercise the acceptance criteria (provisioning, recompute on edit, cross-object
@@ -397,4 +398,98 @@ describe('Formula Field app', () => {
     expect(record?.enabled).toBe(false);
     expect(record?.lastError ?? '').toMatch(/cycle/i);
   }, 90000);
+
+  it('SELECT target (ADR 0029): option value writes, blank clears, null converges', async () => {
+    const metadataClient = new MetadataApiClient();
+    const suffix = `${Date.now() % 1000000}`;
+    const fieldName = `formulaStage${suffix}`;
+    let fieldId: string | null = null;
+    try {
+      const opportunity = await getOpportunityObject();
+
+      const createdField = await metadataClient.mutation({
+        createOneField: {
+          __args: {
+            input: {
+              field: {
+                objectMetadataId: opportunity.id,
+                type: 'SELECT',
+                name: fieldName,
+                label: `Formula Stage ${suffix}`,
+                options: [
+                  { label: 'Hot', value: 'HOT', color: 'red', position: 0 },
+                  { label: 'Cold', value: 'COLD', color: 'blue', position: 1 },
+                ],
+              },
+            },
+          },
+          id: true,
+        },
+      });
+      fieldId = createdField.createOneField.id as string;
+      await sleep(3000); // let the new SELECT field propagate through metadata
+
+      const created = await gql(
+        `mutation($d:OpportunityCreateInput!){ createOpportunity(data:$d){ id } }`,
+        { d: { name: `IT select ${suffix}`, formulaInputA: 5 } },
+      );
+      const oppId = created.createOpportunity.id as string;
+
+      await gql(
+        `mutation($d:FormulaDefinitionCreateInput!){ createFormulaDefinition(data:$d){ id } }`,
+        {
+          d: {
+            name: `IT select ${suffix}`,
+            targetObject: 'opportunity',
+            targetField: fieldName,
+            targetFieldType: 'SELECT',
+            outputFormat: 'select',
+            expression: 'IF(formulaInputA > 3, "HOT", "")',
+            enabled: true,
+          },
+        },
+      );
+
+      const readStage = async () => {
+        const data = await gql(
+          `query($id:UUID!){ opportunity(filter:{id:{eq:$id}}){ ${fieldName} } }`,
+          { id: oppId },
+        );
+        return data.opportunity?.[fieldName] ?? null;
+      };
+
+      // formulaInputA = 5 -> "HOT" is a member and writes through.
+      expect(await waitForValue(readStage, 'HOT')).toBe('HOT');
+
+      // Blank branch -> null -> the field clears (D4), and the raw re-read
+      // normalizes to null — the read half of the convergence loop.
+      await gql(
+        `mutation($id:UUID!,$d:OpportunityUpdateInput!){ updateOpportunity(id:$id,data:$d){ id } }`,
+        { id: oppId, d: { formulaInputA: 1 } },
+      );
+      expect(await waitForValue(readStage, null)).toBeNull();
+      expect(normalizeStoredValue(await readStage(), 'SELECT')).toBeNull();
+
+      // Settled state stays settled: another pass over the null target must
+      // not error-loop (lastError stays empty on the definition).
+      await gql(
+        `mutation($id:UUID!,$d:OpportunityUpdateInput!){ updateOpportunity(id:$id,data:$d){ id } }`,
+        { id: oppId, d: { formulaInputA: 2 } },
+      );
+      await sleep(5000);
+      expect(await readStage()).toBeNull();
+      const definitions = await gql(
+        `query{ formulaDefinitions(first: 200, filter:{targetField:{eq:"${fieldName}"}}){ edges { node { lastError } } } }`,
+      );
+      expect(
+        definitions.formulaDefinitions.edges[0].node.lastError ?? '',
+      ).toBe('');
+    } finally {
+      if (fieldId) {
+        await metadataClient.mutation({
+          deleteOneField: { __args: { input: { id: fieldId } }, id: true },
+        });
+      }
+    }
+  }, 120000);
 });

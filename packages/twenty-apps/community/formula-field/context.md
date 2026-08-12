@@ -1213,6 +1213,15 @@ written at the app root (`README.md`).
   before validation (verified in twenty-server's
   from-create-field-input-to-flat-field-metadatas-to-create.util.ts); send
   `{label, value, color, position}` only.
+- **The app's `select` output format (ADR 0029) sends `options` at create
+  only.** The wizard's options editor is the field's one and only origin for
+  its options; after creation the app never sends an `options` key again —
+  option add/rename/delete happens exclusively through native Data model
+  settings. `NOT_AN_OPTION` (a per-record runtime error when a computed value
+  doesn't name a defined option) and the option-membership freeze (a
+  per-pass static gate that freezes a SELECT-target definition
+  write-avoidantly, both lanes, when its literal set no longer matches the
+  live options) both exist as consequences of that native-only ownership.
 - **Record display labels**: metadata `Object.labelIdentifierFieldMetadataId`
   names the label field (TEXT or FULL_NAME in practice); FULL_NAME needs a
   `{firstName lastName}` sub-selection like any composite. Used by the

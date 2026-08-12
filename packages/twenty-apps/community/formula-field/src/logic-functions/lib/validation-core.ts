@@ -9,7 +9,10 @@ import {
   parse,
 } from 'src/engine';
 import {
+  buildTargetSelectOptions,
   type KindLookup,
+  selectMembershipGateError,
+  type SelectOption,
   strictKindGateError,
 } from 'src/logic-functions/lib/kind-inference';
 import {
@@ -68,6 +71,7 @@ export const validateExpressionCore = ({
   targetField,
   targetFieldType,
   fieldKinds,
+  targetOptions,
   otherFormulas,
 }: {
   expression: string;
@@ -75,6 +79,9 @@ export const validateExpressionCore = ({
   targetField: string;
   targetFieldType?: string;
   fieldKinds?: KindLookup;
+  // The candidate's target SELECT option set, as plain data — this module never
+  // loads it itself (the async fetch is the caller's seam).
+  targetOptions?: ReadonlyArray<SelectOption> | null;
   // The candidate is excluded by the caller — the backend by id, the editor by
   // targetObject+targetField pair.
   otherFormulas: ValidatableFormula[];
@@ -109,6 +116,19 @@ export const validateExpressionCore = ({
   });
   if (kindGateError !== null) {
     return { valid: false, error: kindGateError, dependencies };
+  }
+
+  // 1b'. SELECT membership gate, static tier (ADR 0029 D3): only for SELECT
+  //      targets with a resolvable option set. Open literal sets pass — the
+  //      per-record runtime check owns them; missing options skip, never
+  //      reject (the recompute gates re-check with resolved options).
+  const membershipError = selectMembershipGateError({
+    ast,
+    targetFieldType,
+    targetOptions: buildTargetSelectOptions(targetOptions),
+  });
+  if (membershipError !== null) {
+    return { valid: false, error: membershipError };
   }
 
   // 1c. Mirror validation. A target field the engine family does not cover is in

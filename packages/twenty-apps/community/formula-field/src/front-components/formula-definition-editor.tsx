@@ -24,6 +24,7 @@ import {
 } from 'src/front-components/lib/refresh-stale-formulas';
 import { AWAITING_EXPRESSION_HINT } from 'src/front-components/lib/row-status';
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
+import { type SelectOption } from 'src/logic-functions/lib/kind-inference';
 import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
 import { FormulaSetupWizard } from 'src/front-components/lib/formula-setup-wizard';
 import { validateExpression } from 'src/front-components/lib/validate-expression';
@@ -103,6 +104,7 @@ const validate = (
   expression: string,
   all: Definition[],
   fieldKinds?: Map<string, string>,
+  targetOptions?: ReadonlyArray<SelectOption> | null,
 ): string | null =>
   validateExpression(
     expression,
@@ -117,6 +119,7 @@ const validate = (
       ? (object) => (object === candidate.targetObject ? fieldKinds : undefined)
       : undefined,
     candidate.targetFieldType,
+    targetOptions,
   );
 
 // The "{object}.{field}" a mirror definition copies from, for the read-only
@@ -381,9 +384,8 @@ const FormulaDefinitionEditor = () => {
   // Target object's field kinds (name -> metadata type), so pre-save validation
   // rejects a string comparison against a field that can't hold a string —
   // shown inline before Save, matching the server's save-time check.
-  const { kindsByName: targetFieldKinds } = useObjectFields(
-    definition?.targetObject,
-  );
+  const { fields: targetObjectFields, kindsByName: targetFieldKinds } =
+    useObjectFields(definition?.targetObject);
 
   const load = useCallback(async () => {
     if (!recordId) return;
@@ -492,7 +494,17 @@ const FormulaDefinitionEditor = () => {
 
   const save = useCallback(async () => {
     if (!definition) return;
-    const error = validate(definition, draft, allDefinitions, targetFieldKinds);
+    const error = validate(
+      definition,
+      draft,
+      allDefinitions,
+      targetFieldKinds,
+      definition.targetFieldType === 'SELECT'
+        ? targetObjectFields.find(
+            (field) => field.name === definition.targetField,
+          )?.options ?? null
+        : null,
+    );
     if (error) {
       setDefinition({ ...definition, lastError: error });
       return;
@@ -516,14 +528,31 @@ const FormulaDefinitionEditor = () => {
       setSaving(false);
       setTimeout(load, 1500);
     }
-  }, [definition, draft, allDefinitions, targetFieldKinds, load]);
+  }, [
+    definition,
+    draft,
+    allDefinitions,
+    targetFieldKinds,
+    targetObjectFields,
+    load,
+  ]);
 
   const liveError = useMemo(
     () =>
       definition
-        ? validate(definition, draft, allDefinitions, targetFieldKinds)
+        ? validate(
+            definition,
+            draft,
+            allDefinitions,
+            targetFieldKinds,
+            definition.targetFieldType === 'SELECT'
+              ? targetObjectFields.find(
+                  (field) => field.name === definition.targetField,
+                )?.options ?? null
+              : null,
+          )
         : null,
-    [definition, draft, allDefinitions, targetFieldKinds],
+    [definition, draft, allDefinitions, targetFieldKinds, targetObjectFields],
   );
 
   if (deleted) {

@@ -3,6 +3,7 @@ import {
   type FormulaDependencies,
   type FormulaTarget,
 } from 'src/engine';
+import { type SelectOption } from 'src/logic-functions/lib/kind-inference';
 import { type FormulaDefinitionRecord } from 'src/logic-functions/lib/types';
 import {
   toValidationTarget,
@@ -72,6 +73,10 @@ export type ValidateArgs = {
   // gap in the map, degrades gracefully — the affected check is skipped, keeping
   // validation backward compatible.
   fieldKinds?: (objectName: string) => Map<string, string> | undefined;
+  // The candidate's target SELECT option set, preloaded by the caller
+  // (handle-formula-change's async seam). Absent/null degrades the membership
+  // gate to skip.
+  targetOptions?: ReadonlyArray<SelectOption> | null;
 };
 
 // Runtime safety net (ADR 0004/0005): given the current set of enabled
@@ -115,6 +120,7 @@ export const validateFormula = ({
   candidate,
   existingFormulas,
   fieldKinds,
+  targetOptions,
 }: ValidateArgs): SaveValidationResult => {
   const object = candidate.targetObject ?? '';
   const field = candidate.targetField ?? '';
@@ -158,6 +164,7 @@ export const validateFormula = ({
     targetField: field,
     targetFieldType: targetFieldType ?? undefined,
     fieldKinds,
+    targetOptions,
     otherFormulas: existingFormulas
       .filter((formula) => formula.id !== candidate.id)
       .map(toValidatable),

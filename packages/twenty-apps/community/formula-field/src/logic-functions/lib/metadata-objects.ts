@@ -1,4 +1,5 @@
 import { MetadataApiClient } from 'twenty-client-sdk/metadata';
+import { type SelectOption } from 'src/logic-functions/lib/kind-inference';
 
 // Shared metadata loader: every object with its FULL field list. Centralizes two
 // paging-correctness fixes (finding m3) that were duplicated (and both wrong) in
@@ -264,4 +265,38 @@ const fetchAllObjectsWithFields = async (
   // posture as loadFieldKinds).
   objectsCacheByWorkspace.set(cacheKey, { objects: results, loadedAt: Date.now() });
   return results;
+};
+
+// Option set of a SELECT target field, read from the same 60s cache every
+// other metadata consumer rides (ADR 0029 D5) — no new queries, no new TTLs.
+// Null when the load fails, the object/field is missing, or no usable options
+// exist; callers treat null as skip-never-reject. Direct-call precedent over
+// the FormulaClient abstraction: syncable-fields.ts, formula-status.ts.
+export const targetFieldOptions = async (
+  objectName: string,
+  fieldName: string,
+): Promise<ReadonlyArray<SelectOption> | null> => {
+  let objects: MetadataObjectInfo[];
+  try {
+    objects = await loadAllObjectsWithFields();
+  } catch {
+    return null;
+  }
+  const field = objects
+    .find((candidate) => candidate.nameSingular === objectName)
+    ?.fields.find((candidate) => candidate.name === fieldName);
+  if (!field || !Array.isArray(field.options)) {
+    return null;
+  }
+  const options = field.options
+    .filter(
+      (option): option is { value: string; label?: unknown } =>
+        Boolean(option) &&
+        typeof (option as { value?: unknown }).value === 'string',
+    )
+    .map((option) => ({
+      value: option.value,
+      label: typeof option.label === 'string' ? option.label : option.value,
+    }));
+  return options.length > 0 ? options : null;
 };

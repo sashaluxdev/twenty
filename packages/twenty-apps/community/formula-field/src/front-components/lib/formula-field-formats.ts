@@ -17,7 +17,8 @@ export type OutputFormat =
   | 'currency'
   | 'date'
   | 'datetime'
-  | 'text';
+  | 'text'
+  | 'select';
 
 // The `type` key the native NUMBER settings UI writes.
 export type NumberDisplayType = 'number' | 'percentage' | 'shortNumber';
@@ -32,9 +33,15 @@ export type OutputFormatDefinition = {
   // Shown under the format button in the wizard.
   hint: string;
   // createOneField input pieces.
-  fieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME' | 'TEXT';
+  fieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME' | 'TEXT' | 'SELECT';
   // Value stored on FormulaDefinition.targetFieldType (drives value IO).
-  targetFieldType: 'NUMBER' | 'CURRENCY' | 'DATE' | 'DATE_TIME' | 'TEXT';
+  targetFieldType:
+    | 'NUMBER'
+    | 'CURRENCY'
+    | 'DATE'
+    | 'DATE_TIME'
+    | 'TEXT'
+    | 'SELECT';
   // NUMBER formats: the native `settings.type` this format defaults to.
   numberDisplayType?: NumberDisplayType;
   // Decimals the format seeds when the user has not touched the counter.
@@ -115,6 +122,18 @@ export const OUTPUT_FORMATS: OutputFormatDefinition[] = [
     targetFieldType: 'TEXT',
     defaultDecimals: 0,
   },
+  // SELECT is an engine target (ADR 0029): the formula computes a text value
+  // that must name one of the field's options; blank computes clear the field.
+  // Options are defined exactly once, here in the wizard — post-creation
+  // management is native-only (user ruling 2026-08-10).
+  {
+    key: 'select',
+    label: 'Select',
+    hint: 'one of a fixed set of options',
+    fieldType: 'SELECT',
+    targetFieldType: 'SELECT',
+    defaultDecimals: 0,
+  },
 ];
 
 // Currency codes the wizard/editor offer; JPY is the default when the user does
@@ -140,6 +159,7 @@ export type FormatOptions = {
   currencyCode: string;
   dateDisplayFormat: DateDisplayFormat;
   customUnicodeDateFormat: string;
+  selectOptions: SelectOptionDraft[];
 };
 
 // The default options for a freshly-picked format (seeds the wizard controls).
@@ -152,6 +172,8 @@ export const makeFormatOptions = (format: OutputFormat): FormatOptions => {
     currencyCode: DEFAULT_CURRENCY_CODE,
     dateDisplayFormat: 'USER_SETTINGS',
     customUnicodeDateFormat: '',
+    selectOptions:
+      format === 'select' ? [{ label: '', color: SELECT_OPTION_COLORS[0] }] : [],
   };
 };
 
@@ -169,10 +191,12 @@ export const buildFieldSettings = (
 ): Record<string, unknown> | null => {
   const definition = getOutputFormat(format);
 
-  // TEXT carries no settings at all — guard BEFORE the DATE/DATE_TIME
-  // fall-through below, which would otherwise write a displayFormat onto a text
-  // field. Callers spread settings conditionally, so null means "send none".
-  if (definition.fieldType === 'TEXT') {
+  // TEXT and SELECT carry no settings at all — guard BEFORE the DATE/DATE_TIME
+  // fall-through below, which would otherwise write a displayFormat onto a
+  // text/select field. Callers spread settings conditionally, so null means
+  // "send none"; SELECT's options are a field-level create input (see
+  // buildSelectOptionsPayload), never a settings key.
+  if (definition.fieldType === 'TEXT' || definition.fieldType === 'SELECT') {
     return null;
   }
 
@@ -234,6 +258,9 @@ export const areFormatOptionsValid = (
   options: FormatOptions,
 ): boolean => {
   const definition = getOutputFormat(format);
+  if (definition.fieldType === 'SELECT') {
+    return selectOptionsProblem(options.selectOptions) === null;
+  }
   if (
     (definition.fieldType === 'DATE' || definition.fieldType === 'DATE_TIME') &&
     options.dateDisplayFormat === 'CUSTOM'
@@ -259,6 +286,7 @@ export type TargetFieldSettings = {
   settings: Record<string, unknown> | null;
   currencyCode?: string;
   mirror?: MirrorDraft;
+  selectOptions?: SelectOptionDraft[];
 };
 
 export const serializeTargetFieldSettings = (
@@ -293,6 +321,21 @@ const parseMirrorDraft = (raw: unknown): MirrorDraft | undefined => {
   };
 };
 
+// Recovers persisted option drafts. Any malformed entry voids the whole slot —
+// a corrupted draft degrades to the seeded blank row rather than crashing.
+const parseSelectOptionDrafts = (
+  raw: unknown,
+): SelectOptionDraft[] | undefined => {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const drafts = raw.filter(
+    (candidate): candidate is SelectOptionDraft =>
+      Boolean(candidate) &&
+      typeof (candidate as SelectOptionDraft).label === 'string' &&
+      typeof (candidate as SelectOptionDraft).color === 'string',
+  );
+  return drafts.length === raw.length ? drafts : undefined;
+};
+
 export const parseTargetFieldSettings = (
   raw: string,
 ): TargetFieldSettings | null => {
@@ -302,15 +345,18 @@ export const parseTargetFieldSettings = (
       settings?: Record<string, unknown> | null;
       currencyCode?: unknown;
       mirror?: unknown;
+      selectOptions?: unknown;
     };
     if (!parsed || typeof parsed !== 'object') return null;
     const mirror = parseMirrorDraft(parsed.mirror);
+    const selectOptions = parseSelectOptionDrafts(parsed.selectOptions);
     return {
       settings: (parsed.settings ?? null) as Record<string, unknown> | null,
       ...(typeof parsed.currencyCode === 'string'
         ? { currencyCode: parsed.currencyCode }
         : {}),
       ...(mirror ? { mirror } : {}),
+      ...(selectOptions ? { selectOptions } : {}),
     };
   } catch {
     return null;
@@ -336,6 +382,84 @@ export type MirrorClonedOption = {
   color: string;
   position: number;
 };
+
+// Twenty TagColor names the wizard cycles for new options. The app cannot
+// import twenty-shared (no dependencies, ADR 0024), so a subset is pinned
+// here; the server accepts any member of its full TagColor set.
+export const SELECT_OPTION_COLORS = [
+  'green',
+  'turquoise',
+  'sky',
+  'blue',
+  'purple',
+  'pink',
+  'orange',
+  'yellow',
+  'red',
+  'gray',
+];
+
+// A wizard-draft option row: the value is always re-derived from the label at
+// create time, so drafts persist only what the user typed.
+export type SelectOptionDraft = {
+  label: string;
+  color: string;
+};
+
+// The platform's option-value validator (twenty-server is-snake-case-string):
+// UPPER_SNAKE, starts with a letter, no double underscore.
+export const OPTION_VALUE_PATTERN = /^(?!.*__)[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$/;
+
+// Derives the option VALUE from its label: uppercase, non-alphanumeric runs
+// collapse to single underscores, leading digits/underscores and trailing
+// underscores drop, 63-char cap (re-trimmed so the cap never leaves a
+// trailing underscore).
+export const deriveOptionValue = (label: string): string => {
+  const collapsed = label
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^[_0-9]+/, '')
+    .replace(/_+$/, '');
+  return collapsed.slice(0, 63).replace(/_+$/, '');
+};
+
+export const isValidOptionValue = (value: string): boolean =>
+  value.length > 0 && value.length <= 63 && OPTION_VALUE_PATTERN.test(value);
+
+// The single validity rule shared by the wizard's Create gate and the options
+// editor's inline error line — one message so the two can never disagree.
+export const selectOptionsProblem = (
+  drafts: SelectOptionDraft[],
+): string | null => {
+  if (drafts.length === 0) return 'Add at least one option.';
+  for (const draft of drafts) {
+    const label = draft.label.trim();
+    if (label.length === 0) return 'Every option needs a label.';
+    if (label.length > 63) return `Option label "${label.slice(0, 20)}…" is too long (63 max).`;
+    if (label.includes(',')) return 'Option labels cannot contain commas.';
+  }
+  const values = drafts.map((draft) => deriveOptionValue(draft.label));
+  const invalidIndex = values.findIndex((value) => !isValidOptionValue(value));
+  if (invalidIndex >= 0) {
+    return `"${drafts[invalidIndex].label}" does not derive a usable option value.`;
+  }
+  if (new Set(values).size !== values.length) {
+    return 'Two options derive the same value.';
+  }
+  return null;
+};
+
+// The createOneField options payload: value derived, position = row order,
+// no ids (the server assigns v4 ids before its enum validators run).
+export const buildSelectOptionsPayload = (
+  drafts: SelectOptionDraft[],
+): MirrorClonedOption[] =>
+  drafts.map((draft, index) => ({
+    label: draft.label.trim(),
+    value: deriveOptionValue(draft.label),
+    color: draft.color,
+    position: index,
+  }));
 
 // Clones a source SELECT/MULTI_SELECT option set for the created mirror field:
 // label/value/color/position copied verbatim (the source values already pass the
@@ -364,9 +488,14 @@ export const cloneMirrorOptions = (
 // Narrows a list of candidate source fields to only the mirror allowlist kinds
 // (excludes the engine numeric family and non-mirrorable kinds). Generic over the
 // field shape so the wizard can carry its own metadata alongside `type`.
+// SELECT stays pickable after its lane move: the mirror flow is the only place
+// that clones a source field's options onto the new field (ADR 0029 D8).
 export const pickableMirrorSourceFields = <T extends { type: string }>(
   fields: T[],
-): T[] => fields.filter((field) => isMirrorTargetKind(field.type));
+): T[] =>
+  fields.filter(
+    (field) => isMirrorTargetKind(field.type) || field.type === 'SELECT',
+  );
 
 // Derives a human display label for a fetched source record, given the object's
 // label-identifier field name + kind, so the wizard's record validation can

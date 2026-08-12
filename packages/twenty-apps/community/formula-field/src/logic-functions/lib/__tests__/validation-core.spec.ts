@@ -150,19 +150,19 @@ describe('validateExpressionCore', () => {
   });
 
   // The mirror rule stays intact for the raw kinds it still owns.
-  it('rejects a non-bare-ref expression onto a SELECT target with the mirror message', () => {
+  it('rejects a non-bare-ref expression onto a MULTI_SELECT target with the mirror message', () => {
     const result = validateExpressionCore({
       expression: 'sourceField + 1',
       hostObject: 'opportunity',
       targetField: 'mirrorField',
-      targetFieldType: 'SELECT',
+      targetFieldType: 'MULTI_SELECT',
       otherFormulas: [],
     });
 
     expect(result).toEqual({
       valid: false,
       error:
-        'Only a plain field reference can be mirrored onto a SELECT field',
+        'Only a plain field reference can be mirrored onto a MULTI_SELECT field',
     });
   });
 

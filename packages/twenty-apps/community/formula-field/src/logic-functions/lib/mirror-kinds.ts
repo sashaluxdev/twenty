@@ -16,7 +16,6 @@ import {
 // TEXT is deliberately ABSENT (ADR 0026): the engine expresses text end-to-end,
 // so a bare-ref TEXT target is a one-term engine formula, not a raw passthrough.
 export const MIRRORABLE_KINDS: ReadonlySet<string> = new Set([
-  'SELECT',
   'MULTI_SELECT',
   'BOOLEAN',
   'RATING',
@@ -34,6 +33,7 @@ export const MIRRORABLE_KINDS: ReadonlySet<string> = new Set([
 // one of these keeps today's engine path unchanged — it is NOT mirror mode.
 // The two sets are now disjoint again: TEXT belongs to this one alone, and their
 // UNION (variation sync's syncable allowlist) is unchanged by that move.
+// SELECT moved to the engine family too (ADR 0029), same disjointness contract.
 export const ENGINE_FAMILY_KINDS: ReadonlySet<string> = new Set(ENGINE_FAMILY);
 
 export const isMirrorTargetKind = (kind: string): boolean =>

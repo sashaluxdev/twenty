@@ -24,10 +24,13 @@ describe('buildScanSelection', () => {
 
   beforeEach(() => {
     client = new FakeClient();
+    // SELECT left the mirror lane for the engine family (ADR 0029); MULTI_SELECT
+    // is still mirrorable and enum-shaped, so it stands in for the mirror-lane
+    // tests below.
     client.setFieldKinds('opportunity', {
       amount: 'CURRENCY',
       score: 'NUMBER',
-      stage: 'SELECT',
+      stage: 'MULTI_SELECT',
       name: 'TEXT',
     });
   });
@@ -50,7 +53,7 @@ describe('buildScanSelection', () => {
       definition({
         expression: 'stage',
         targetField: 'stageCopy',
-        targetFieldType: 'SELECT',
+        targetFieldType: 'MULTI_SELECT',
       }),
     );
 
@@ -60,13 +63,13 @@ describe('buildScanSelection', () => {
   });
 
   it('selects only the target field for a cross-record mirror', async () => {
-    client.setFieldKinds('company', { stage: 'SELECT' });
+    client.setFieldKinds('company', { stage: 'MULTI_SELECT' });
     const scan = await buildScanSelection(
       client,
       definition({
         expression: '[company:11111111-1111-4111-8111-111111111111:stage]',
         targetField: 'stageCopy',
-        targetFieldType: 'SELECT',
+        targetFieldType: 'MULTI_SELECT',
       }),
     );
 
@@ -86,7 +89,7 @@ describe('buildScanSelection', () => {
     client.setFieldKinds('opportunity', {
       amount: 'CURRENCY',
       score: 'NUMBER',
-      stage: 'SELECT',
+      stage: 'MULTI_SELECT',
       name: 'TEXT',
       links: 'LINKS',
       linksCopy: 'LINKS',
@@ -123,7 +126,7 @@ describe('buildScanSelection', () => {
       definition({
         expression: 'unknownField',
         targetField: 'copy',
-        targetFieldType: 'SELECT',
+        targetFieldType: 'MULTI_SELECT',
       }),
     );
 

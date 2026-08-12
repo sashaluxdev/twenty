@@ -67,6 +67,8 @@ import {
 import { createDynamicCoreClient } from 'src/logic-functions/lib/dynamic-client';
 import { convergeTrashedDefinitionLayout } from 'src/logic-functions/lib/fx-status-field';
 import { loadTrashedFormulas } from 'src/logic-functions/lib/formula-repository';
+import { buildTargetSelectOptions } from 'src/logic-functions/lib/kind-inference';
+import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
 import {
   recomputeForRecord,
   resolveKindsForFormula,
@@ -245,7 +247,8 @@ const FormulaEditor = () => {
   // server is the backstop (ADR 0027, editor-accepts/server-rejects). Every
   // rendered definition targets the same host object, so one lookup covers all.
   const hostObject = definitions[0]?.targetObject;
-  const { kindsByName: hostFieldKinds } = useObjectFields(hostObject);
+  const { fields: hostFields, kindsByName: hostFieldKinds } =
+    useObjectFields(hostObject);
 
   // validateExpression takes a kinds accessor (objectName -> map). Every rendered
   // definition targets the host object, so close the one host map over it.
@@ -619,6 +622,10 @@ const FormulaEditor = () => {
         definitions,
         hostFieldKindsAccessor,
         definition.targetFieldType,
+        definition.targetFieldType === 'SELECT'
+          ? hostFields.find((field) => field.name === definition.targetField)
+              ?.options ?? null
+          : null,
       );
       if (error) {
         setDefinitions((prev) =>
@@ -653,7 +660,15 @@ const FormulaEditor = () => {
         setTimeout(load, 1500);
       }
     },
-    [drafts, definitions, load, armedSaveId, disarmSave, hostFieldKindsAccessor],
+    [
+      drafts,
+      definitions,
+      load,
+      armedSaveId,
+      disarmSave,
+      hostFieldKindsAccessor,
+      hostFields,
+    ],
   );
 
   const toggleOverride = useCallback(
@@ -744,10 +759,10 @@ const FormulaEditor = () => {
                 },
               }));
             } else {
-              // Only a TEXT row reaches this: its text slot is empty, corrupt or
-              // holds a non-string (a legacy pin over dirty data), so there is
-              // nothing writable to restore — pin the CURRENT value instead of
-              // clearing the field with a phantom null.
+              // Only a text-domain row (TEXT or SELECT) reaches this: its text
+              // slot is empty, corrupt or holds a non-string (a legacy pin over
+              // dirty data), so there is nothing writable to restore — pin the
+              // CURRENT value instead of clearing the field with a phantom null.
               const current = values[definition.targetField] ?? null;
               await upsertOverride(
                 client,
@@ -817,6 +832,15 @@ const FormulaEditor = () => {
               client,
               handedBackFormula,
             ),
+            targetOptions:
+              definition.targetFieldType === 'SELECT'
+                ? buildTargetSelectOptions(
+                    await targetFieldOptions(
+                      definition.targetObject,
+                      definition.targetField,
+                    ),
+                  )
+                : null,
           });
         }
       } finally {
@@ -847,6 +871,10 @@ const FormulaEditor = () => {
         definitions,
         hostFieldKindsAccessor,
         definition.targetFieldType,
+        definition.targetFieldType === 'SELECT'
+          ? hostFields.find((field) => field.name === definition.targetField)
+              ?.options ?? null
+          : null,
       );
       const rowStatus = resolveRowStatus({
         expression: definition.expression,
@@ -1053,6 +1081,7 @@ const FormulaEditor = () => {
     saveExpression,
     toggleOverride,
     hostFieldKinds,
+    hostFields,
     // Not read directly — bumped by refreshStaleTodayFormulas' onStateChange
     // so this memo re-reads sharedRecordRefreshState.inFlight.
     refreshTick,

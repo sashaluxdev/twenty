@@ -98,6 +98,8 @@ describe('refreshStaleTodayFormulas', () => {
       // fakeClient exposes no fieldKinds, so the map resolves empty — the
       // reference still degrades rather than erroring.
       fieldKindsByObject: new Map([['opportunity', new Map()]]),
+      // staleToday targets a NUMBER field — never SELECT, so no options read.
+      targetOptions: null,
     });
 
     // When recordId is omitted, recomputeForRecordFn is never called.
@@ -149,6 +151,8 @@ describe('refreshStaleTodayFormulas', () => {
       fieldKindsByObject: new Map([
         ['opportunity', new Map([['closeDate', 'DATE']])],
       ]),
+      // staleToday targets a NUMBER field — never SELECT, so no options read.
+      targetOptions: null,
     });
   });
 

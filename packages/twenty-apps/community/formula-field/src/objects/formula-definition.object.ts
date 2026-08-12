@@ -75,9 +75,12 @@ export default defineObject({
       name: 'targetFieldType',
       label: 'Target field type',
       description:
-        'Field type of the value field: NUMBER (default), CURRENCY, DATE or ' +
-        'DATE_TIME. Currency values are read and written as amountMicros; ' +
-        'DATE/DATE_TIME use the Excel serial-date model (epoch-days).',
+        'Field type of the value field: NUMBER (default), CURRENCY, DATE, ' +
+        'DATE_TIME, TEXT or SELECT for engine formulas (a SELECT result must ' +
+        'name a defined option value), or a mirrorable kind (BOOLEAN, ' +
+        'MULTI_SELECT, RATING, LINKS, ...) for mirror definitions. Currency ' +
+        'values are read and written as amountMicros; DATE/DATE_TIME use the ' +
+        'Excel serial-date model (epoch-days).',
       icon: 'IconCurrencyDollar',
     },
     {

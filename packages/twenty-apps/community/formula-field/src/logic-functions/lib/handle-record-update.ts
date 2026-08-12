@@ -29,7 +29,13 @@ import {
   overrideSlotForKind,
   upsertOverride,
 } from 'src/logic-functions/lib/override-repository';
-import { strictKindGateError } from 'src/logic-functions/lib/kind-inference';
+import {
+  buildTargetSelectOptions,
+  selectMembershipGateError,
+  strictKindGateError,
+  type TargetSelectOptions,
+} from 'src/logic-functions/lib/kind-inference';
+import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
 import {
   findCyclicTargets,
   isCyclicTarget,
@@ -46,6 +52,7 @@ import {
   tagEngineValue,
   type TargetFieldKind,
   targetFieldKind,
+  usesTextDomain,
 } from 'src/logic-functions/lib/value-io';
 import { type EngineValue } from 'src/engine/evaluator';
 
@@ -72,16 +79,17 @@ const storedValuesEqual = (a: EngineValue, b: EngineValue): boolean => {
 };
 
 // The value an ACTIVE override pins, read from the column its target kind
-// actually uses. A TEXT target pins the JSON text slot (overrideValueText, the
-// convention deployed TEXT mirrors already store) and leaves overrideValue null,
-// so reading the numeric column would report every pinned text record as empty.
-// A non-string decode (corrupted or legacy composite text) reports null rather
-// than leaking a non-text value into a text-tagged outcome.
+// actually uses. A text-domain target (TEXT, SELECT) pins the JSON text slot
+// (overrideValueText, the convention deployed TEXT mirrors already store) and
+// leaves overrideValue null, so reading the numeric column would report every
+// pinned text/SELECT record as empty. A non-string decode (corrupted or legacy
+// composite text) reports null rather than leaking a non-text value into a
+// text-tagged outcome.
 const pinnedOverrideValue = (
   targetKind: TargetFieldKind,
   override: OverrideRecord,
 ): EngineValue => {
-  if (targetKind !== 'TEXT') {
+  if (!usesTextDomain(targetKind)) {
     return override.overrideValue;
   }
   const decoded = decodeMirrorOverrideValue(override.overrideValueText).value;
@@ -249,6 +257,25 @@ export const handleRecordUpdate = async ({
     eventKindObjects,
   );
 
+  // SELECT option sets for the event's affected SELECT targets, once per event
+  // (the kinds map's discipline, ADR 0027 D5). Every read rides the 60s
+  // metadata cache, so N SELECT formulas cost at most one cold pull.
+  const targetOptionsByFormulaId = new Map<string, TargetSelectOptions | null>();
+  for (const formula of eventAffectedFormulas) {
+    if (formula.targetFieldType !== 'SELECT') {
+      continue;
+    }
+    targetOptionsByFormulaId.set(
+      formula.id,
+      buildTargetSelectOptions(
+        await targetFieldOptions(
+          formula.targetObject ?? '',
+          formula.targetField ?? '',
+        ),
+      ),
+    );
+  }
+
   // Per-definition static gate, computed ONCE for the whole event and honoured
   // by both loops below. A definition whose kinds do not check has no correct
   // value for any record, so neither loop may act on it — and skipping it here
@@ -261,12 +288,18 @@ export const handleRecordUpdate = async ({
     if (compiled === undefined) {
       continue;
     }
-    const gateError = strictKindGateError({
-      ast: compiled.ast,
-      hostObject: formula.targetObject ?? '',
-      targetFieldType: formula.targetFieldType,
-      fieldKinds: (object) => eventFieldKindsByObject.get(object),
-    });
+    const gateError =
+      strictKindGateError({
+        ast: compiled.ast,
+        hostObject: formula.targetObject ?? '',
+        targetFieldType: formula.targetFieldType,
+        fieldKinds: (object) => eventFieldKindsByObject.get(object),
+      }) ??
+      selectMembershipGateError({
+        ast: compiled.ast,
+        targetFieldType: formula.targetFieldType,
+        targetOptions: targetOptionsByFormulaId.get(formula.id) ?? null,
+      });
     if (gateError !== null) {
       gateErrorByFormulaId.set(formula.id, gateError);
     }
@@ -505,6 +538,7 @@ export const handleRecordUpdate = async ({
         // and resolved once for the whole event, above.
         fieldKindsByObject: eventFieldKindsByObject,
         compiled,
+        targetOptions: targetOptionsByFormulaId.get(formula.id) ?? null,
       });
       outcomes.push(outcome);
       await recordEvaluationHeartbeat(

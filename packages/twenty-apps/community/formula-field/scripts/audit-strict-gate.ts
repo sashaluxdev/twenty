@@ -69,11 +69,14 @@ const run = async () => {
     '../src/logic-functions/lib/formula-repository'
   );
   const { compileFormula, isFormulaError } = await import('../src/engine');
-  const { strictKindGateError } = await import(
+  const { strictKindGateError, selectMembershipGateError, buildTargetSelectOptions } = await import(
     '../src/logic-functions/lib/kind-inference'
   );
   const { resolveKindsForFormula } = await import(
     '../src/logic-functions/lib/recompute'
+  );
+  const { targetFieldOptions } = await import(
+    '../src/logic-functions/lib/metadata-objects'
   );
 
   const client = createDynamicCoreClient();
@@ -115,12 +118,27 @@ const run = async () => {
       fieldKinds: (objectName) => fieldKindsByObject.get(objectName),
     });
 
-    if (gateError === null) {
+    let verdictError = gateError;
+    if (verdictError === null && formula.targetFieldType === 'SELECT') {
+      // Same two-tier source of truth the recompute pass uses (ADR 0029 D3).
+      verdictError = selectMembershipGateError({
+        ast: compiled.ast,
+        targetFieldType: formula.targetFieldType,
+        targetOptions: buildTargetSelectOptions(
+          await targetFieldOptions(
+            formula.targetObject ?? '',
+            formula.targetField ?? '',
+          ),
+        ),
+      });
+    }
+
+    if (verdictError === null) {
       summary.pass += 1;
       rows.push({ id: formula.id, name, target, verdict: 'PASS' });
     } else {
       summary.gated += 1;
-      rows.push({ id: formula.id, name, target, verdict: `GATED: ${gateError}` });
+      rows.push({ id: formula.id, name, target, verdict: `GATED: ${verdictError}` });
     }
   }
 

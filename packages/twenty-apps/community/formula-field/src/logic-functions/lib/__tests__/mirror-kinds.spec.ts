@@ -13,7 +13,6 @@ const UUID = '20202020-1c25-4d02-bf25-6aeccf7ea419';
 
 describe('MIRRORABLE_KINDS allowlist', () => {
   const allowed = [
-    'SELECT',
     'MULTI_SELECT',
     'BOOLEAN',
     'RATING',
@@ -31,14 +30,15 @@ describe('MIRRORABLE_KINDS allowlist', () => {
     expect(isMirrorTargetKind(kind)).toBe(true);
   });
 
-  it('holds exactly eleven kinds — TEXT left the lane (ADR 0026)', () => {
+  it('holds exactly ten kinds — TEXT left the lane (ADR 0026), SELECT joined it (ADR 0029)', () => {
     expect([...MIRRORABLE_KINDS].sort()).toEqual([...allowed].sort());
   });
 
-  // TEXT joins the engine family's rejected list: a bare-ref TEXT target is now
-  // a one-term ENGINE formula, not a mirror passthrough.
+  // TEXT and SELECT both join the engine family's rejected list: a bare-ref
+  // target on either is now a one-term ENGINE formula, not a mirror passthrough.
   it.each([
     'TEXT',
+    'SELECT',
     'NUMBER',
     'CURRENCY',
     'DATE',
@@ -59,8 +59,9 @@ describe('ENGINE_FAMILY_KINDS', () => {
       'DATE',
       'DATE_TIME',
       'NUMBER',
-      // TEXT is now ONLY here: the engine expresses text end-to-end and the
-      // mirror lane no longer claims the kind.
+      // SELECT joined here too (ADR 0029): the engine expresses text end-to-end
+      // and both TEXT and SELECT write through the same string domain.
+      'SELECT',
       'TEXT',
     ]);
   });
@@ -127,13 +128,20 @@ describe('selectionEntryForMirrorKind', () => {
 });
 
 describe('isMirrorDefinition', () => {
-  it('is a mirror for a bare field onto a mirrorable target', () => {
-    expect(isMirrorDefinition(parse('status'), 'SELECT')).toBe(true);
+  // The lane switch (ADR 0029): a bare SELECT ref is now an engine one-term
+  // formula, not a mirror — MULTI_SELECT stays mirrorable and covers the
+  // bare-ref-onto-mirrorable-target shape instead.
+  it('is not a mirror for a bare field onto a SELECT target', () => {
+    expect(isMirrorDefinition(parse('status'), 'SELECT')).toBe(false);
   });
 
-  it('is a mirror for a bare cross-ref onto a mirrorable target', () => {
+  it('is a mirror for a bare field onto a MULTI_SELECT target', () => {
+    expect(isMirrorDefinition(parse('status'), 'MULTI_SELECT')).toBe(true);
+  });
+
+  it('is not a mirror for a bare cross-ref onto a SELECT target', () => {
     expect(isMirrorDefinition(parse(`[company:${UUID}:select]`), 'SELECT')).toBe(
-      true,
+      false,
     );
   });
 
@@ -151,14 +159,19 @@ describe('isMirrorDefinition', () => {
   });
 
   it('is not a mirror for a dotted subpath even onto a mirrorable target', () => {
-    expect(isMirrorDefinition(parse('amount.amountMicros'), 'SELECT')).toBe(false);
+    expect(isMirrorDefinition(parse('amount.amountMicros'), 'LINKS')).toBe(false);
   });
 
   it('is not a mirror for an IF expression', () => {
-    expect(isMirrorDefinition(parse('IF(status = "x", 1, 0)'), 'SELECT')).toBe(false);
+    expect(isMirrorDefinition(parse('IF(status = "x", 1, 0)'), 'LINKS')).toBe(false);
   });
 
   it('is not a mirror when the target kind is missing', () => {
     expect(isMirrorDefinition(parse('status'), null)).toBe(false);
   });
+});
+
+it('SELECT rides the engine family, not the mirror lane (ADR 0029 D1)', () => {
+  expect(MIRRORABLE_KINDS.has('SELECT')).toBe(false);
+  expect(ENGINE_FAMILY_KINDS.has('SELECT')).toBe(true);
 });

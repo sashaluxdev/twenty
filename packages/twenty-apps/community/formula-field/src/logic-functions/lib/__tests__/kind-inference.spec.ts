@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { parse, type ConcatNode, type TextCastNode } from 'src/engine';
 import {
+  buildTargetSelectOptions,
   inferExpressionKind,
+  selectMembershipGateError,
   strictKindGateError,
   type KindInferenceResult,
   type KindLookup,
@@ -118,5 +120,75 @@ describe('strictKindGateError', () => {
       targetFieldType: null, fieldKinds: lookup })).toBeNull();
     expect(strictKindGateError({ ast: parse('amount * 2'), hostObject: 'company',
       targetFieldType: undefined, fieldKinds: lookup })).toBeNull();
+  });
+  it('SELECT targets gate as text-kind (ADR 0029 D1)', () => {
+    expect(gate('IF(amount > 1, "A", "B")', 'SELECT')).toBeNull();
+    expect(gate('name', 'SELECT')).toBeNull();
+    expect(gate('amount * 2', 'SELECT')).toMatch(
+      /computes number but the target field holds text/,
+    );
+  });
+});
+describe('selectMembershipGateError', () => {
+  const OPTIONS = buildTargetSelectOptions([
+    { value: 'HOT', label: 'Hot' },
+    { value: 'COLD', label: 'Cold' },
+    { value: 'NEW', label: 'New' },
+  ]);
+  const membership = (
+    expression: string,
+    targetOptions = OPTIONS,
+  ): string | null =>
+    selectMembershipGateError({
+      ast: parse(expression),
+      targetFieldType: 'SELECT',
+      targetOptions,
+    });
+
+  it('a closed set of member literals passes', () => {
+    expect(membership('IF(amount > 5, "HOT", "COLD")')).toBeNull();
+  });
+
+  it('a non-member literal is rejected with the bounded option list', () => {
+    expect(membership('IF(amount > 5, "WARM", "COLD")')).toBe(
+      'Formula can produce "WARM", which is not an option of the target field (options: HOT, COLD, NEW)',
+    );
+  });
+
+  it('case-insensitive value or label matches add the did-you-mean hint', () => {
+    expect(membership('"Hot"')).toBe(
+      'Formula can produce "Hot", which is not an option of the target field (options: HOT, COLD, NEW) Did you mean "HOT"?',
+    );
+  });
+
+  it('blank literals are exempt — they clear the field (D4)', () => {
+    expect(membership('IF(amount > 5, "HOT", "")')).toBeNull();
+  });
+
+  it('open sets pass — tier 2 owns them', () => {
+    expect(membership('stage')).toBeNull();
+    expect(membership('IFBLANK(stage, "TYPO")')).toBeNull();
+  });
+
+  it('non-SELECT targets and unresolved/empty options skip', () => {
+    expect(
+      selectMembershipGateError({
+        ast: parse('"TYPO"'),
+        targetFieldType: 'TEXT',
+        targetOptions: OPTIONS,
+      }),
+    ).toBeNull();
+    expect(membership('"TYPO"', null)).toBeNull();
+    expect(buildTargetSelectOptions([])).toBeNull();
+    expect(buildTargetSelectOptions(null)).toBeNull();
+  });
+
+  it('bounds the option list at six values with an ellipsis', () => {
+    const many = buildTargetSelectOptions(
+      ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((value) => ({ value, label: value })),
+    );
+    expect(membership('"NOPE"', many)).toBe(
+      'Formula can produce "NOPE", which is not an option of the target field (options: A, B, C, D, E, F, …)',
+    );
   });
 });
