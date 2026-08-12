@@ -410,12 +410,18 @@ export type SelectOptionDraft = {
 // UPPER_SNAKE, starts with a letter, no double underscore.
 export const OPTION_VALUE_PATTERN = /^(?!.*__)[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$/;
 
-// Derives the option VALUE from its label: uppercase, non-alphanumeric runs
-// collapse to single underscores, leading digits/underscores and trailing
-// underscores drop, 63-char cap (re-trimmed so the cap never leaves a
-// trailing underscore).
+// Derives the option VALUE from its label: diacritics fold first (NFD +
+// strip combining marks, so 'Gagné' keeps its 'e' instead of silently losing
+// it — see ADR 0029), then uppercase, non-alphanumeric runs collapse to
+// single underscores, leading digits/underscores and trailing underscores
+// drop, 63-char cap (re-trimmed so the cap never leaves a trailing
+// underscore). Latin letters with no canonical decomposition (Ø/Æ/Œ/Ł/Đ/Þ/Ð)
+// and non-Latin scripts are untouched by the fold and keep mangling/rejecting
+// as before — documented residue, not a regression.
 export const deriveOptionValue = (label: string): string => {
   const collapsed = label
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, '_')
     .replace(/^[_0-9]+/, '')
@@ -443,8 +449,17 @@ export const selectOptionsProblem = (
   if (invalidIndex >= 0) {
     return `"${drafts[invalidIndex].label}" does not derive a usable option value.`;
   }
-  if (new Set(values).size !== values.length) {
-    return 'Two options derive the same value.';
+  // Post-fold, distinct labels can collide on the same value (e.g. 'Cafe' and
+  // 'Café') while looking different — name both labels so the hint stays
+  // usable.
+  const seenAtLabel = new Map<string, string>();
+  for (const [index, value] of values.entries()) {
+    const label = drafts[index].label.trim();
+    const priorLabel = seenAtLabel.get(value);
+    if (priorLabel !== undefined) {
+      return `Options "${priorLabel}" and "${label}" derive the same value.`;
+    }
+    seenAtLabel.set(value, label);
   }
   return null;
 };
@@ -574,11 +589,16 @@ export const optionsFromSettings = (
   return options;
 };
 
-// Derives a valid field API name from a human label: split on anything
-// non-alphanumeric, camelCase the words, drop leading digits (names must start
-// with a lowercase letter). Returns '' when nothing usable remains.
+// Derives a valid field API name from a human label: diacritics fold first
+// (NFD + strip combining marks — same rule and residue as deriveOptionValue,
+// see ADR 0029; this name is the field's permanent API name, never editable
+// in the wizard), then split on anything non-alphanumeric, camelCase the
+// words, drop leading digits (names must start with a lowercase letter).
+// Returns '' when nothing usable remains.
 export const deriveFieldName = (label: string): string => {
   const words = label
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
     .split(/[^a-zA-Z0-9]+/)
     .flatMap((word) => word.split(/(?=[A-Z][a-z])/))
     .filter((word) => word.length > 0);

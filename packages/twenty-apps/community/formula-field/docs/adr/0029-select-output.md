@@ -200,11 +200,23 @@ since the platform guarantees a created SELECT field has at least one option.
 
 The wizard's format flow gains a 9th `select` entry with an options editor:
 ordered rows of label + color, with the option value auto-derived from the
-label (uppercase, non-alphanumerics collapsed to `_`, no leading digit or
-double underscore, 63-char cap) to satisfy the platform's validator, shown
-read-only per row. The draft persists in `targetFieldSettings` JSON the same
-way the mirror draft does, so the wizard resumes mid-draft. Creation sends
-`options` with no ids — the server assigns v4 ids.
+label to satisfy the platform's validator (UPPER_SNAKE, starts with a
+letter, no double underscore, 63-char cap), shown read-only per row.
+Derivation folds diacritics FIRST — `normalize('NFD')` then strip combining
+marks (`\p{M}`) — so `Gagné → GAGNE` and `Café Noir → CAFE_NOIR` keep their
+letters instead of silently losing them — then uppercases and collapses
+non-alphanumeric runs to `_`. Leading digits/underscores and
+trailing underscores are **stripped, not rejected**: `2nd Stage` derives
+`ND_STAGE`, a usable value, not a validation error. The fold does not reach
+Latin letters with no canonical decomposition (the Ø/Æ/Œ/Ł/Đ/Þ/Ð class), which
+still mangle silently and pass validation — `Søren → S_REN` is the pinned
+residue fixture. Full transliteration would need the `transliteration`
+dependency, forbidden by ADR 0024's no-dependency rule, so this residue is
+accepted rather than fixed; non-Latin scripts (`ホット`, `Проба`) still derive
+`''` and are rejected by the existing "not a usable value" copy. The draft
+persists in `targetFieldSettings` JSON the same way the mirror draft does, so
+the wizard resumes mid-draft. Creation sends `options` with no ids — the
+server assigns v4 ids.
 
 **Post-creation, the app never touches options again.** This is stricter than
 the design's own earlier draft, which had proposed an add-plus-rename

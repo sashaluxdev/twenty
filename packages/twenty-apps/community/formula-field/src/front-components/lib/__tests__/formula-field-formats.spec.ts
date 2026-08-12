@@ -455,6 +455,10 @@ describe('deriveFieldName', () => {
     expect(deriveFieldName('')).toBe('');
   });
 
+  it('folds diacritics before splitting into words', () => {
+    expect(deriveFieldName('Café Noir')).toBe('cafeNoir');
+  });
+
   it('always produces a valid field name when non-empty', () => {
     for (const label of ['Deal score', 'a', 'Total 2024', 'x'.repeat(120)]) {
       const name = deriveFieldName(label);
@@ -505,8 +509,33 @@ describe('deriveOptionValue', () => {
     expect(deriveOptionValue('---')).toBe('');
   });
 
+  it('folds combining diacritics before collapsing (NFD, not rejection)', () => {
+    expect(deriveOptionValue('Gagné')).toBe('GAGNE');
+    expect(deriveOptionValue('Café Noir')).toBe('CAFE_NOIR');
+    expect(deriveOptionValue('Été')).toBe('ETE');
+    expect(deriveOptionValue('Señor')).toBe('SENOR');
+    // Rejection-boundary flip: a bare ring-accented letter used to derive ''.
+    expect(deriveOptionValue('Å')).toBe('A');
+  });
+
+  it('leaves non-decomposable Latin letters mangled (documented residue)', () => {
+    expect(deriveOptionValue('Søren')).toBe('S_REN');
+  });
+
+  it('still rejects non-Latin scripts (no decomposition to fold)', () => {
+    expect(deriveOptionValue('ホット')).toBe('');
+  });
+
   it('every non-empty derivation passes the platform regex', () => {
-    for (const label of ['Hot', '2nd Stage', 'a  b', 'x__y', 'won!']) {
+    for (const label of [
+      'Hot',
+      '2nd Stage',
+      'a  b',
+      'x__y',
+      'won!',
+      'Gagné',
+      'Café Noir',
+    ]) {
       const value = deriveOptionValue(label);
       if (value !== '') {
         expect(value).toMatch(OPTION_VALUE_PATTERN);
@@ -549,7 +578,13 @@ describe('selectOptionsProblem / areFormatOptionsValid(select)', () => {
   it('rejects labels deriving no value or colliding values', () => {
     expect(selectOptionsProblem(drafts('42'))).toMatch(/does not derive/);
     expect(selectOptionsProblem(drafts('Hot!', 'hot'))).toBe(
-      'Two options derive the same value.',
+      'Options "Hot!" and "hot" derive the same value.',
+    );
+  });
+
+  it('names the colliding labels when diacritic folding causes the collision', () => {
+    expect(selectOptionsProblem(drafts('Cafe', 'Café'))).toBe(
+      'Options "Cafe" and "Café" derive the same value.',
     );
   });
 });
