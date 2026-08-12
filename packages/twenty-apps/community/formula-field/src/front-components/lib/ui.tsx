@@ -254,6 +254,15 @@ export const MutedText = styled.span`
   color: ${TOKENS.fontColorTertiary};
 `;
 
+// Composes over MutedText (declared just above) so the derived-value cell
+// (SelectOptionsEditor) gets the monospace stack without gaining its own
+// color rule — muted-only by design, matching MonoInput's pattern. The
+// file's other raw mono styles are documented primary-color exceptions and
+// stay put (YAGNI: this is the only muted-mono call site today).
+export const MonoText = styled(MutedText)`
+  font-family: ui-monospace, monospace;
+`;
+
 export const HintText = styled.span`
   color: ${TOKENS.fontColorTertiary};
   font-size: ${TOKENS.fontSizeXs};

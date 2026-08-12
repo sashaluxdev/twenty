@@ -17,6 +17,7 @@ import {
   ErrText,
   HintText,
   MonoInput,
+  MonoText,
   MutedText,
   SecondaryButton,
   StepperButton,
@@ -290,7 +291,7 @@ const f: Record<string, React.CSSProperties> = {
   err: { marginTop: '4px' },
   optionRow: { display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 },
   optionLabel: { flex: 1 },
-  optionValue: { fontFamily: 'ui-monospace, monospace', minWidth: 80 },
+  optionValue: { minWidth: 80 },
 };
 
 type SelectOptionsEditorProps = {
@@ -361,9 +362,9 @@ export const SelectOptionsEditor = ({
             onChange={(event) => patchRow(index, { label: event.target.value })}
             style={f.optionLabel}
           />
-          <MutedText style={f.optionValue}>
+          <MonoText style={f.optionValue}>
             {deriveOptionValue(draft.label) || '—'}
-          </MutedText>
+          </MonoText>
           <ChoiceChip selected={false} onMouseDown={() => cycleColor(index)}>
             {draft.color}
           </ChoiceChip>
