@@ -4,18 +4,23 @@ import {
   areFormatOptionsValid,
   buildCurrencyDefaultValue,
   buildFieldSettings,
+  buildSelectOptionsPayload,
   cloneMirrorOptions,
   deriveFieldName,
+  deriveOptionValue,
   deriveRecordDisplayLabel,
   getOutputFormat,
   isValidCustomUnicodeDateFormat,
   isValidFieldName,
   makeFormatOptions,
+  OPTION_VALUE_PATTERN,
   optionsFromSettings,
   OUTPUT_FORMATS,
   parseTargetFieldSettings,
   pickableMirrorSourceFields,
   seedMirrorExpression,
+  SELECT_OPTION_COLORS,
+  selectOptionsProblem,
   serializeTargetFieldSettings,
 } from 'src/front-components/lib/formula-field-formats';
 
@@ -30,6 +35,7 @@ describe('OUTPUT_FORMATS', () => {
       'date',
       'datetime',
       'text',
+      'select',
     ]);
   });
 
@@ -455,6 +461,130 @@ describe('deriveFieldName', () => {
       expect(isValidFieldName(name)).toBe(true);
       expect(name.length).toBeLessThanOrEqual(50);
     }
+  });
+});
+
+describe('SELECT output format (ADR 0029)', () => {
+  it('registers select as a SELECT-typed engine format', () => {
+    const select = getOutputFormat('select');
+    expect(select.fieldType).toBe('SELECT');
+    expect(select.targetFieldType).toBe('SELECT');
+  });
+
+  it('carries no settings JSON — options are a field-level input', () => {
+    expect(buildFieldSettings('select', makeFormatOptions('select'))).toBeNull();
+  });
+
+  it('seeds one blank option row', () => {
+    expect(makeFormatOptions('select').selectOptions).toEqual([
+      { label: '', color: SELECT_OPTION_COLORS[0] },
+    ]);
+  });
+});
+
+describe('deriveOptionValue', () => {
+  it('derives the platform UPPER_SNAKE shape from a label', () => {
+    expect(deriveOptionValue('Hot lead!')).toBe('HOT_LEAD');
+    expect(deriveOptionValue('closed — won')).toBe('CLOSED_WON');
+    expect(deriveOptionValue('a__b')).toBe('A_B');
+    expect(deriveOptionValue(' Hot ')).toBe('HOT');
+  });
+
+  it('strips leading digits/underscores and trailing underscores', () => {
+    expect(deriveOptionValue('2nd stage')).toBe('ND_STAGE');
+    expect(deriveOptionValue('__x__')).toBe('X');
+  });
+
+  it('caps at 63 chars without a trailing underscore', () => {
+    expect(deriveOptionValue('a'.repeat(70))).toBe('A'.repeat(63));
+    expect(deriveOptionValue(`${'a'.repeat(62)}-bc`).endsWith('_')).toBe(false);
+  });
+
+  it('returns empty when nothing usable remains', () => {
+    expect(deriveOptionValue('42')).toBe('');
+    expect(deriveOptionValue('---')).toBe('');
+  });
+
+  it('every non-empty derivation passes the platform regex', () => {
+    for (const label of ['Hot', '2nd Stage', 'a  b', 'x__y', 'won!']) {
+      const value = deriveOptionValue(label);
+      if (value !== '') {
+        expect(value).toMatch(OPTION_VALUE_PATTERN);
+      }
+    }
+  });
+});
+
+describe('selectOptionsProblem / areFormatOptionsValid(select)', () => {
+  const drafts = (...labels: string[]) =>
+    labels.map((label) => ({ label, color: 'green' }));
+
+  it('accepts ordered unique labelled options', () => {
+    expect(selectOptionsProblem(drafts('Hot', 'Cold'))).toBeNull();
+    expect(
+      areFormatOptionsValid('select', {
+        ...makeFormatOptions('select'),
+        selectOptions: drafts('Hot', 'Cold'),
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects empty lists, blank labels, commas and over-long labels', () => {
+    expect(selectOptionsProblem([])).toBe('Add at least one option.');
+    expect(selectOptionsProblem(drafts('Hot', ' '))).toBe(
+      'Every option needs a label.',
+    );
+    expect(selectOptionsProblem(drafts('a,b'))).toBe(
+      'Option labels cannot contain commas.',
+    );
+    expect(selectOptionsProblem(drafts('x'.repeat(64)))).toMatch(/too long/);
+    expect(
+      areFormatOptionsValid('select', {
+        ...makeFormatOptions('select'),
+        selectOptions: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects labels deriving no value or colliding values', () => {
+    expect(selectOptionsProblem(drafts('42'))).toMatch(/does not derive/);
+    expect(selectOptionsProblem(drafts('Hot!', 'hot'))).toBe(
+      'Two options derive the same value.',
+    );
+  });
+});
+
+describe('buildSelectOptionsPayload', () => {
+  it('derives value and position, trims labels, sends no ids', () => {
+    expect(
+      buildSelectOptionsPayload([
+        { label: ' Hot ', color: 'red' },
+        { label: 'Cold', color: 'blue' },
+      ]),
+    ).toEqual([
+      { label: 'Hot', value: 'HOT', color: 'red', position: 0 },
+      { label: 'Cold', value: 'COLD', color: 'blue', position: 1 },
+    ]);
+  });
+});
+
+describe('TargetFieldSettings.selectOptions', () => {
+  it('round-trips through serialize/parse', () => {
+    const raw = serializeTargetFieldSettings({
+      settings: null,
+      selectOptions: [{ label: 'Hot', color: 'red' }],
+    });
+    expect(parseTargetFieldSettings(raw)?.selectOptions).toEqual([
+      { label: 'Hot', color: 'red' },
+    ]);
+  });
+
+  it('degrades malformed drafts to absent', () => {
+    const raw = JSON.stringify({
+      settings: null,
+      selectOptions: [{ label: 3 }, 'x'],
+    });
+    expect(parseTargetFieldSettings(raw)?.selectOptions).toBeUndefined();
   });
 });
 
