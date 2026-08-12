@@ -4,6 +4,7 @@ import {
   __clearMetadataCacheForTests,
   __setFakeObjectsWithFieldsForTests,
   loadAllObjectsWithFields,
+  targetFieldOptions,
   type MetadataObjectInfo,
 } from 'src/logic-functions/lib/metadata-objects';
 
@@ -193,5 +194,58 @@ describe('loadAllObjectsWithFields (in-flight dedup + field selection)', () => {
     const [object] = await loadAllObjectsWithFields();
     expect(object.fields[0].label).toBe('Stage');
     expect(object.fields[0].options).toEqual([{ value: 'NEW', label: 'New' }]);
+  });
+});
+
+describe('targetFieldOptions', () => {
+  afterEach(() => {
+    __setFakeObjectsWithFieldsForTests(null);
+  });
+
+  const seedStageOptions = (options: unknown) => {
+    __setFakeObjectsWithFieldsForTests([
+      {
+        id: 'obj-1',
+        nameSingular: 'opportunity',
+        labelIdentifierFieldMetadataId: null,
+        fields: [
+          {
+            id: 'field-1',
+            name: 'formulaStage',
+            type: 'SELECT',
+            isActive: true,
+            isSystem: false,
+            options,
+          },
+        ],
+      },
+    ]);
+  };
+
+  it('returns value/label pairs from the cached field metadata', async () => {
+    seedStageOptions([
+      { id: 'a', value: 'HOT', label: 'Hot', color: 'red', position: 0 },
+      { id: 'b', value: 'COLD', label: 'Cold', color: 'blue', position: 1 },
+    ]);
+    expect(await targetFieldOptions('opportunity', 'formulaStage')).toEqual([
+      { value: 'HOT', label: 'Hot' },
+      { value: 'COLD', label: 'Cold' },
+    ]);
+  });
+
+  it('label falls back to the value; malformed entries drop', async () => {
+    seedStageOptions([{ value: 'HOT' }, { label: 'no value' }, null]);
+    expect(await targetFieldOptions('opportunity', 'formulaStage')).toEqual([
+      { value: 'HOT', label: 'HOT' },
+    ]);
+  });
+
+  it('missing object/field, non-array or empty options resolve to null', async () => {
+    seedStageOptions([]);
+    expect(await targetFieldOptions('opportunity', 'formulaStage')).toBeNull();
+    expect(await targetFieldOptions('nope', 'formulaStage')).toBeNull();
+    expect(await targetFieldOptions('opportunity', 'other')).toBeNull();
+    seedStageOptions(undefined);
+    expect(await targetFieldOptions('opportunity', 'formulaStage')).toBeNull();
   });
 });
