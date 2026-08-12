@@ -2593,4 +2593,52 @@ describe('handleRecordUpdate SELECT membership (ADR 0029)', () => {
       client.writes.filter((write) => write.startsWith('opportunity:')),
     ).toHaveLength(0);
   });
+
+  it('option drift freezes the override-detection funnel too: no pin for a human edit', async () => {
+    seedSelectMetadata(['HOT']); // COLD was deleted natively
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaStage: 'SELECT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f-drifted-override',
+        targetObject: 'opportunity',
+        targetField: 'formulaStage',
+        targetFieldType: 'SELECT',
+        expression: 'IF(amount > 100, "HOT", "COLD")',
+        enabled: true,
+        // allowOverride unset (defaults to true): this definition MUST go
+        // down the override-detection funnel, not the lock-revert branch —
+        // that branch is already covered above and is gated independently
+        // of the membership join (allowOverride === false skips it outright).
+      },
+    ]);
+    // amount <= 100 -> the formula would compute "COLD"; the record already
+    // holds a different value a human wrote directly on the target field.
+    client.seed('opportunity', [
+      { id: 'o1', amount: 5, formulaStage: 'MANUALVALUE' },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', amount: 5, formulaStage: 'MANUALVALUE' },
+      updatedFields: ['formulaStage'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    // Without the membership verdict joined into gateErrorByFormulaId, this
+    // reads as a genuine human pin (computed "COLD" != stored "MANUALVALUE")
+    // and would create an override — the drifted options must freeze this
+    // funnel too, exactly like the event-recompute and lock-revert funnels.
+    expect(
+      client.mutationSelections.some(
+        (selection) => 'createFormulaOverride' in selection,
+      ),
+    ).toBe(false);
+    expect(client.get('opportunity', 'o1')!.formulaStage).toBe('MANUALVALUE');
+  });
 });
