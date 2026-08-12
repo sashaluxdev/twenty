@@ -80,15 +80,20 @@ D3):
 
 **The walker.** A new pure engine function, `staticTextOutputs(ast):
 ReadonlySet<string> | null`, where `null` means "open set" (statically
-undecidable). A `string` node contributes its literal value; an `if` node
-contributes the union of its `then`/`else` outputs (never the condition);
-`ifblank` contributes the union of both arguments; everything else in a value
-position — field refs, crossrefs, `&`, `TEXT()`, `NUMBER()`, arithmetic,
-`SUM`, `TODAY`, number literals — poisons the whole result to `null`. IFS and
-SWITCH desugar to `if` ladders before the walker runs, so label ladders come
-for free. It runs only for SELECT targets, only after the kind gate has
-already passed, and costs O(nodes) — save-time and pass-time only, never per
-record.
+undecidable). Four cases: a `string` node contributes its literal value
+(singleton set); a `null` node contributes **nothing** — the empty set, not
+poison — because a null output clears the field and is always legal; an `if`
+node contributes the union of its `then`/`else` outputs (never the
+condition); `ifblank` contributes the union of both arguments. Everything
+else in a value position — field refs, crossrefs, `&`, `TEXT()`, `NUMBER()`,
+arithmetic, `SUM`, `TODAY`, number literals — is the open-set case: it
+poisons the whole result to `null`. IFS and SWITCH desugar to `if` ladders
+before the walker runs, so label ladders come for free — and specifically, a
+*defaultless* ladder's synthesized `null` node contributes nothing rather
+than poisoning the set, so a defaultless ladder still closes and stays
+statically gateable. It runs only for SELECT targets, only after the kind
+gate has already passed, and costs O(nodes) — save-time and pass-time only,
+never per record.
 
 **Tier 1a — save gate.** With a closed literal set and options in hand, every
 non-blank literal must be a member of the option value set (blank literals
