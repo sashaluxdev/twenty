@@ -374,3 +374,50 @@ describe('validateExpression', () => {
     expect(result).toBeNull();
   });
 });
+
+describe('SELECT membership at save (ADR 0029 tier 1a)', () => {
+  const kinds = new Map([
+    ['amount', 'NUMBER'],
+    ['stage', 'SELECT'],
+  ]);
+  const OPTIONS = [
+    { value: 'HOT', label: 'Hot' },
+    { value: 'COLD', label: 'Cold' },
+  ];
+  const run = (
+    expression: string,
+    targetOptions?: ReadonlyArray<{ value: string; label: string }> | null,
+  ) =>
+    validateExpression(
+      expression,
+      'company',
+      'formulaStage',
+      [],
+      (object) => (object === 'company' ? kinds : undefined),
+      'SELECT',
+      targetOptions,
+    );
+
+  it('a closed member set saves clean', () => {
+    expect(run('IF(amount > 5, "HOT", "COLD")', OPTIONS)).toBeNull();
+  });
+
+  it('a typo is rejected in the editor and at save, with the hint', () => {
+    expect(run('IF(amount > 5, "Hot", "COLD")', OPTIONS)).toBe(
+      'Formula can produce "Hot", which is not an option of the target field (options: HOT, COLD) Did you mean "HOT"?',
+    );
+  });
+
+  it('open sets and missing/empty options pass (tier 2 covers them)', () => {
+    expect(run('stage', OPTIONS)).toBeNull();
+    expect(run('"TYPO"')).toBeNull();
+    expect(run('"TYPO"', null)).toBeNull();
+    expect(run('"TYPO"', [])).toBeNull();
+  });
+
+  it('the kind gate still fires first for non-text expressions', () => {
+    expect(run('amount * 2', OPTIONS)).toMatch(
+      /computes number but the target field holds text/,
+    );
+  });
+});

@@ -5,6 +5,7 @@ import {
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
 import { refreshFormulaStatuses } from 'src/logic-functions/lib/formula-status';
+import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 import { validateFormula } from 'src/logic-functions/lib/save-validation';
 import {
@@ -204,10 +205,19 @@ export const handleFormulaChange = async ({
     // A parse failure surfaces through validateFormula; nothing to preload.
   }
 
+  // The membership gate's async seam (ADR 0029 tier 1a): the sync validator
+  // takes options as data. Unresolvable options degrade to skip — the
+  // recompute gates re-check with resolved options every pass.
+  const targetOptions =
+    after.targetFieldType === 'SELECT' && after.targetObject
+      ? await targetFieldOptions(after.targetObject, after.targetField ?? '')
+      : null;
+
   const result = validateFormula({
     candidate: after,
     existingFormulas: existing,
     fieldKinds: (objectName) => kindsByObject.get(objectName),
+    targetOptions,
   });
 
   if (!result.valid) {

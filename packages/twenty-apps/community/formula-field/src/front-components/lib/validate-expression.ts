@@ -1,3 +1,4 @@
+import { type SelectOption } from 'src/logic-functions/lib/kind-inference';
 import { validateExpressionCore } from 'src/logic-functions/lib/validation-core';
 
 // Live pre-save validation for the record-page editor: parse the draft
@@ -32,6 +33,10 @@ export const validateExpression = (
   // save time are applied here (allowlist, bare-ref-only, same-kind). Trailing +
   // optional so the many existing call sites/tests stay source-compatible.
   targetFieldType?: string,
+  // The target field's SELECT option set, already fetched by the caller (the
+  // editors thread their host-object fields query) so the live check matches
+  // the server byte-for-byte. Absent/null degrades the membership gate to skip.
+  targetOptions?: ReadonlyArray<SelectOption> | null,
 ): string | null => {
   const result = validateExpressionCore({
     expression,
@@ -39,6 +44,7 @@ export const validateExpression = (
     targetField,
     targetFieldType,
     fieldKinds,
+    targetOptions,
     otherFormulas: allDefinitions.filter(
       (definition) =>
         !(
