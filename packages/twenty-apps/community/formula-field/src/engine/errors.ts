@@ -10,7 +10,8 @@ export type FormulaErrorCode =
   | 'NON_NUMERIC_VALUE'
   | 'MAX_DEPTH_EXCEEDED'
   | 'CYCLE_DETECTED'
-  | 'TEXT_TOO_LONG';
+  | 'TEXT_TOO_LONG'
+  | 'NOT_AN_OPTION';
 
 export class FormulaError extends Error {
   readonly code: FormulaErrorCode;

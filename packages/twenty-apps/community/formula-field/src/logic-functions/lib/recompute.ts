@@ -30,12 +30,16 @@ import {
   navigatePath,
 } from 'src/logic-functions/lib/coercion';
 import {
+  buildTargetSelectOptions,
   type ExpressionKind,
   fieldTypeToKind,
+  selectMembershipGateError,
   strictKindGateError,
+  type TargetSelectOptions,
 } from 'src/logic-functions/lib/kind-inference';
 import { currentEpochDay } from 'src/logic-functions/lib/current-epoch-day';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
+import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
 import {
   recordEvaluationHeartbeat,
   updateScanCursor,
@@ -414,6 +418,11 @@ export type RecomputeArgs = {
   // point below reparses the expression per record. Absent -> each compiles its
   // own, the backstop that keeps direct callers working unchanged.
   compiled?: CompiledFormula;
+  // The target SELECT field's option set, resolved ONCE by the caller
+  // (ADR 0029 D5) — the pass and event paths thread it; recomputeForRecord
+  // resolves its own when absent (the kind-gate fallback pattern). Null on
+  // non-SELECT targets.
+  targetOptions?: TargetSelectOptions | null;
 };
 
 // Every object a formula reads: its host object plus each cross-referenced one.
@@ -767,6 +776,7 @@ export const planRecomputeForRecord = async ({
   crossRecordCache,
   fieldKindsByObject,
   compiled,
+  targetOptions,
 }: RecomputeArgs): Promise<RecomputePlan> => {
   const targetField = formula.targetField ?? '';
 
@@ -856,6 +866,25 @@ export const planRecomputeForRecord = async ({
     result = normalizeComputedValue(formula.targetFieldType, computed.value, {
       integerBacked: isIntegerBackedFormat(formula.outputFormat),
     });
+    // Tier 2 (ADR 0029 D3): a SELECT write must name a defined option. Runs
+    // unconditionally for SELECT targets — defense in depth for mid-pass
+    // metadata drift; O(1), no I/O. Null bypasses (clears the field, the
+    // platform's own semantics); unresolved options degrade to skip. Thrown
+    // here so it rides the FormulaError funnel: value NOT written, last value
+    // kept, error on lastError, the record save never blocked — and the
+    // non-member never reaches flushBatchedWrites' per-record retry path.
+    if (
+      formula.targetFieldType === 'SELECT' &&
+      typeof result === 'string' &&
+      targetOptions != null &&
+      !targetOptions.values.has(result)
+    ) {
+      const excerpt = result.length > 80 ? `${result.slice(0, 80)}…` : result;
+      throw new FormulaError(
+        'NOT_AN_OPTION',
+        `"${excerpt}" is not an option of ${targetField}`,
+      );
+    }
   } catch (error) {
     return {
       outcome: {
@@ -933,6 +962,11 @@ export const recomputeForRecord = async (
   // kind-aware gate and then evaluates kind-blind, where a DATE column reads
   // as verbatim text.
   let gateKindsByObject = args.fieldKindsByObject;
+  // Same fallback contract as the kinds: production callers thread this
+  // already (including null, "resolved but unresolvable"); only a truly
+  // absent value falls through to the SELECT branch below, which resolves its
+  // own.
+  let targetOptions = args.targetOptions;
   if (compiled !== undefined) {
     // Every production caller resolves kinds already; the fallback is what keeps
     // a direct caller GATED rather than silently ungated, at one cached
@@ -958,12 +992,43 @@ export const recomputeForRecord = async (
         error: gateError,
       };
     }
+
+    if (formula.targetFieldType === 'SELECT') {
+      // Same fallback contract as the kinds above: every production caller
+      // threads options already — including null, which means "resolved but
+      // unresolvable" and must NOT re-resolve. Only a truly absent value (a
+      // direct caller) resolves its own, at one cached metadata read, keeping
+      // the caller GATED rather than silently ungated.
+      if (targetOptions === undefined) {
+        targetOptions = buildTargetSelectOptions(
+          await targetFieldOptions(
+            formula.targetObject ?? '',
+            formula.targetField ?? '',
+          ),
+        );
+      }
+      const membershipGateError = selectMembershipGateError({
+        ast: compiled.ast,
+        targetFieldType: formula.targetFieldType,
+        targetOptions,
+      });
+      if (membershipGateError !== null) {
+        return {
+          formulaId: formula.id,
+          targetRecordId,
+          changed: false,
+          value: emptyComputedValue(formula, false),
+          error: membershipGateError,
+        };
+      }
+    }
   }
 
   const plan = await planRecomputeForRecord({
     ...args,
     compiled,
     fieldKindsByObject: gateKindsByObject,
+    targetOptions,
   });
   if (plan.write === null) {
     return plan.outcome;
@@ -1049,6 +1114,15 @@ export const recomputeAllRecords = async (
   const fieldKindsByObject = isMirror
     ? undefined
     : await resolveKindsForFormula(client, formula, compiled);
+  // The SELECT option set is a property of the definition's target field:
+  // resolved once per pass (same cache discipline as the kinds read above) and
+  // threaded into the static re-gate and every per-record membership check.
+  const targetSelectOptions =
+    formula.targetFieldType === 'SELECT'
+      ? buildTargetSelectOptions(
+          await targetFieldOptions(targetObject, targetField),
+        )
+      : null;
   // The lane is a property of the definition, not of a record, so it is resolved
   // once per pass and reused for every value-less outcome below.
   const emptyValue = emptyComputedValue(formula, isMirror);
@@ -1078,6 +1152,22 @@ export const recomputeAllRecords = async (
     // Record the problem on the definition row and skip the work — the cyclic
     // skip's posture, shared with the F2 refusal above.
     return refuseWholeDefinition(client, formula, emptyValue, gateError);
+  }
+
+  // Membership re-gate, tier 1b (ADR 0029 D3): deleting an option a closed-set
+  // formula names freezes the whole definition write-avoidantly — one static
+  // check per pass, zero record scans, self-healing within the metadata TTL
+  // once the option is restored natively.
+  const membershipGateError =
+    compiled === undefined
+      ? null
+      : selectMembershipGateError({
+          ast: compiled.ast,
+          targetFieldType: formula.targetFieldType,
+          targetOptions: targetSelectOptions,
+        });
+  if (membershipGateError !== null) {
+    return refuseWholeDefinition(client, formula, emptyValue, membershipGateError);
   }
 
   // Load the overridden record ids once so pinned records are skipped (#2).
@@ -1205,6 +1295,7 @@ export const recomputeAllRecords = async (
           crossRecordCache,
           fieldKindsByObject,
           compiled,
+          targetOptions: targetSelectOptions,
         });
         pageOutcomes.push(plan.outcome);
         if (plan.write !== null) {
