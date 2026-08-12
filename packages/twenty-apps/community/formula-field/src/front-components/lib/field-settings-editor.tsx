@@ -15,6 +15,7 @@ import {
   type OutputFormat,
   serializeTargetFieldSettings,
 } from 'src/front-components/lib/formula-field-formats';
+import { isMirrorTargetKind } from 'src/logic-functions/lib/mirror-kinds';
 import {
   ErrText,
   HintText,
@@ -50,10 +51,13 @@ const isOutputFormat = (value: string): value is OutputFormat =>
 
 // Any format key with the right fieldType works — FormatOptionsFields drives the
 // number display type from the select, not from the format key's default.
+// Returns null for mirror-kind targets (BOOLEAN/MULTI_SELECT/RATING/LINKS…):
+// mirror rows have no display settings to edit here, and defaulting them into
+// the NUMBER form below would write NUMBER settings onto a non-number field.
 const formatKeyForType = (
   targetFieldType: string,
   outputFormat: string,
-): OutputFormat => {
+): OutputFormat | null => {
   switch (targetFieldType) {
     case 'CURRENCY':
       return 'currency';
@@ -69,6 +73,7 @@ const formatKeyForType = (
     case 'SELECT':
       return 'select';
     default:
+      if (isMirrorTargetKind(targetFieldType)) return null;
       return isOutputFormat(outputFormat) &&
         getOutputFormat(outputFormat).fieldType === 'NUMBER'
         ? outputFormat
@@ -85,7 +90,8 @@ export const FieldSettingsEditor = ({
   currencyCode,
 }: FieldSettingsEditorProps) => {
   const format = formatKeyForType(targetFieldType, outputFormat);
-  const isCurrency = getOutputFormat(format).fieldType === 'CURRENCY';
+  const isCurrency =
+    format !== null && getOutputFormat(format).fieldType === 'CURRENCY';
 
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -93,8 +99,10 @@ export const FieldSettingsEditor = ({
   const [fieldId, setFieldId] = useState<string | null>(null);
   const [labelSynced, setLabelSynced] = useState<boolean | null>(null);
   const [label, setLabel] = useState('');
+  // Mirror-kind targets (format === null) have no settings form, so this seed
+  // is never read — 'integer' is an arbitrary placeholder, not a NUMBER write.
   const [options, setOptions] = useState<FormatOptions>(() =>
-    makeFormatOptions(format),
+    makeFormatOptions(format ?? 'integer'),
   );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -142,13 +150,17 @@ export const FieldSettingsEditor = ({
       setFieldId(fieldNode.id);
       setLabel(fieldNode.label ?? targetField);
       setLabelSynced(fieldNode.isLabelSyncedWithName ?? null);
-      setOptions(
-        optionsFromSettings(
-          format,
-          (fieldNode.settings ?? null) as Record<string, unknown> | null,
-          currencyCode,
-        ),
-      );
+      // Mirror-kind targets (format === null) have no settings to read — the
+      // seeded options state is never rendered or saved.
+      if (format !== null) {
+        setOptions(
+          optionsFromSettings(
+            format,
+            (fieldNode.settings ?? null) as Record<string, unknown> | null,
+            currencyCode,
+          ),
+        );
+      }
       setLoaded(true);
     } catch (loadError) {
       setError((loadError as Error).message ?? String(loadError));
@@ -167,7 +179,10 @@ export const FieldSettingsEditor = ({
     setSaved(false);
     setError('');
     try {
-      const settings = buildFieldSettings(format, options);
+      // Mirror-kind targets (format === null) have no settings to build —
+      // send no settings key and no currency defaultValue (isCurrency is
+      // already false for a null format).
+      const settings = format !== null ? buildFieldSettings(format, options) : null;
       const metadataClient = new MetadataApiClient();
       await metadataClient.mutation({
         updateOneField: {
@@ -227,10 +242,12 @@ export const FieldSettingsEditor = ({
   ]);
 
   // SELECT has no editable settings here (options are native-owned, ADR 0029
-  // D7); the draft-row validity rule is a wizard concern and must not veto
-  // label editing.
+  // D7); mirror-kind targets (format === null) likewise have no settings form.
+  // Neither case should veto label editing.
   const canSave =
-    loaded && !saving && (format === 'select' || areFormatOptionsValid(format, options));
+    loaded &&
+    !saving &&
+    (format === null || format === 'select' || areFormatOptionsValid(format, options));
 
   return (
     <div style={layout.section}>
@@ -287,7 +304,7 @@ export const FieldSettingsEditor = ({
                 ) : null}
               </div>
 
-              {loaded ? (
+              {loaded && format !== null ? (
                 <FormatOptionsFields
                   format={format}
                   options={options}
