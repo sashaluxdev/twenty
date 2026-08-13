@@ -2098,6 +2098,11 @@ describe('F3 — blank TEXT result over a round-tripped NULL column (record lane
     });
     expect(plan.write).toBeNull();
     expect(plan.outcome.changed).toBe(false);
+    // Distinguish "converged" from "did not compute at all": every error path
+    // also returns write: null / changed: false, so without these the test
+    // would pass on a build where the expression never evaluated.
+    expect(plan.outcome.error).toBeNull();
+    expect(plan.outcome.value).toEqual({ kind: 'text', value: '' });
   });
 
   it('real value changes still write in both directions (pinning)', async () => {
