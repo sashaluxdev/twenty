@@ -1,5 +1,8 @@
 import { defineRole } from 'twenty-sdk/define';
 
+import { FORMULA_DEFINITION_OBJECT_UNIVERSAL_IDENTIFIER } from 'src/objects/formula-definition.object';
+import { VARIATION_CONFIG_OBJECT_UNIVERSAL_IDENTIFIER } from 'src/objects/variation-config.object';
+
 // Role the app token runs under (logic functions + cron). Scope analysis
 // (finding M1c):
 //
@@ -35,4 +38,14 @@ export default defineRole({
   canSoftDeleteAllObjectRecords: true,
   canDestroyAllObjectRecords: false,
   canUpdateAllSettings: true,
+  objectPermissions: [
+    {
+      objectUniversalIdentifier: FORMULA_DEFINITION_OBJECT_UNIVERSAL_IDENTIFIER,
+      canDestroyObjectRecords: true,
+    },
+    {
+      objectUniversalIdentifier: VARIATION_CONFIG_OBJECT_UNIVERSAL_IDENTIFIER,
+      canDestroyObjectRecords: true,
+    },
+  ],
 });
