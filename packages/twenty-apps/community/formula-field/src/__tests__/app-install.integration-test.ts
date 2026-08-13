@@ -74,7 +74,12 @@ let originalPackageJson = '';
 const bumpVersionForDeploy = () => {
   originalPackageJson = fs.readFileSync(PACKAGE_JSON, 'utf8');
   const parsed = JSON.parse(originalPackageJson);
-  parsed.version = `0.1.${Date.now()}`;
+  // Semver orders major.minor before patch, so the timestamp bump must keep
+  // the package's own major.minor: a hardcoded 0.1.<ts> sorts below any
+  // deployed 0.2+ forever, and the platform's version watermark survives
+  // uninstall (E3, live 2026-08-13).
+  const [major, minor] = String(parsed.version).split('.');
+  parsed.version = `${major}.${minor}.${Date.now()}`;
   fs.writeFileSync(PACKAGE_JSON, `${JSON.stringify(parsed, null, 2)}\n`);
 };
 
