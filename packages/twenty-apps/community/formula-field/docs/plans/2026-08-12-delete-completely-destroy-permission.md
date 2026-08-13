@@ -32,7 +32,7 @@ being denied is not the user.
    (`destroyFormulaDefinition` / `destroyVariationConfig`), gated on
    `canDestroyObjectRecords` (`twenty-orm/repository/permissions.utils.ts:214-220`).
    The app role declares `canDestroyAllObjectRecords: false`
-   (`src/roles/default-role.ts:29-38`, flag at `:36`, unchanged since creation), so the intersection
+   (`src/roles/default-role.ts:32-40`, flag at `:39`, unchanged since creation), so the intersection
    denies it regardless of the user's own role. No user privilege can beat an
    intersection with a role that says no.
 
