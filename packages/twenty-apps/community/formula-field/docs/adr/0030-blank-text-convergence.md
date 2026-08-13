@@ -116,3 +116,11 @@ value.
   `recompute.spec.ts`, `handlers.spec.ts`) so a future change cannot silently
   widen it to SELECT (which shares the text-domain read/write helpers but not
   this equality rule) or narrow it back to strict identity for TEXT.
+- Blank-over-blank is now indistinguishable from the app's own write, so a
+  human edit that leaves a TEXT field blank while the formula also computes
+  blank no longer creates or refreshes an override pin; an existing ACTIVE
+  pin whose holder clears the field goes stale (a later reactivate/restore
+  writes the old pinned value back over the blank). This is inherent to
+  equality-side convergence and accepted: the alternative — folding the
+  widening out of override detection — pins records the user never actually
+  touched.

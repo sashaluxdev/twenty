@@ -736,7 +736,7 @@ workspace-scoped API_KEY JWT). Read it in Node scripts; never mint/forge tokens.
   data — so after a reset create your first formula through the setup wizard on
   a record page (or via `createFormulaDefinition` against an existing field).
 - **"Delete completely" says "Entity performing the request does not have
-  permission."** The app role grants destroy on its two danger-zone objects
+  permission".** The app role grants destroy on its two danger-zone objects
   only (formula definition, variation config), and the server resolves
   permissions as the INTERSECTION of the acting user's role and the app's
   role: a member whose own role lacks destroy on these objects is still

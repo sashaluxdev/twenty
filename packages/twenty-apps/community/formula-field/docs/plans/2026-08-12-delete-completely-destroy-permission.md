@@ -109,11 +109,14 @@ export default defineRole({
 - No shipped app sets `canDestroyObjectRecords: true` per object (repo-wide grep: zero
   matches). The merge code path is shared with the proven read/update/soft-delete
   flags, but we are first through this gate. Mitigation: local live check before cloud.
-- No sync-time validator checks per-object rows: a typo'd `objectUniversalIdentifier`
-  silently creates a useless permission row (`FlatObjectPermissionValidatorService`
-  checks referential integrity of role/object ids, not intent). Mitigation: import the
-  constants, never inline the UUIDs; assert the built `.twenty/output/manifest.json`
-  contains both rows before deploy.
+- No sync-time validator checks per-object rows for INTENT: a typo'd
+  `objectUniversalIdentifier` is caught, but loudly — the platform's flat
+  object-permission validator (`FlatObjectPermissionValidatorService`) raises
+  `OBJECT_METADATA_NOT_FOUND` and fails the whole migration build, so a typo is
+  a hard install failure, not a silent no-op. Mitigation (kept for
+  maintainability, not for this failure mode): import the constants, never
+  inline the UUIDs; assert the built `.twenty/output/manifest.json` contains
+  both rows before deploy.
 - Intersection semantics remain: a non-admin member whose own role lacks destroy on
   these objects still cannot "Delete completely". This is correct least-privilege
   behavior; document it in README troubleshooting.
@@ -145,5 +148,6 @@ export default defineRole({
 ## Deploy
 
 Version bump required (failed installs burn version numbers). Local first; cloud
-publish blocked anyway until the v0.5.0 live-test wave completes (see HANDOVER.md) and
-the F1 backfill rate-limit no-go is resolved.
+publish blocked anyway until the v0.5.0 live-test wave completes (see
+`verification-reports/2026-08-12-select-live/HANDOVER.md` — git-excluded, not
+committed) and the F1 backfill rate-limit no-go is resolved.
