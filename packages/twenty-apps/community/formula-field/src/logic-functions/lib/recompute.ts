@@ -325,6 +325,9 @@ const buildResolver = (
 // exact string equality — no trimming, no case folding. TEXT alone adds blank
 // equivalence (null ≡ ''): the record API reads a SQL-NULL TEXT column back as
 // '', so strict identity rewrites a blank result forever (F3; textValuesConverged).
+// Gated on kind === 'TEXT' specifically, NOT usesTextDomain: SELECT's stored
+// NULL reads back as null with no '' expansion, so it needs no widening and
+// must not get it (F6).
 const valuesEqual = (
   kind: TargetFieldKind,
   a: EngineValue,

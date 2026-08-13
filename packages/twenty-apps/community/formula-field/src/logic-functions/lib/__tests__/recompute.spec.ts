@@ -2080,7 +2080,9 @@ describe('F3 — blank TEXT result over a round-tripped NULL column (record lane
     // o1: computed null vs stored '' → converged (RED before the fix).
     // o2: computed 'low' vs stored 'low' → converged (already green).
     expect(outcomes.filter((o) => o.changed)).toEqual([]);
-    expect(client.writes.filter((w) => w.startsWith('opportunity:'))).toEqual([]);
+    expect(
+      client.writes.filter((w) => w.startsWith('opportunity:')),
+    ).toEqual([]);
   });
 
   it("a genuinely computed '' converges with a round-tripped NULL column (pins the equality-side design)", async () => {
@@ -2136,10 +2138,10 @@ describe('F3 — blank TEXT result over a round-tripped NULL column (record lane
     });
   });
 
-  it('does not widen past TEXT: a NUMBER target still compares strictly', async () => {
-    // Boundary pin: nothing in the blank rule may leak to other kinds. A
-    // stored '' on a NUMBER read normalizes to null; computed 0 must still
-    // write (0 !== null).
+  it('a NUMBER target keeps strict equality: computed 0 still writes over a stored null', async () => {
+    // This does not exercise the blank-widening rule at all (no '' is ever
+    // read here) — it pins that a NUMBER target's plain `a === b` still tells
+    // 0 and null apart, so a genuinely-computed 0 always writes.
     const client = new FakeClient();
     client.setFieldKinds('opportunity', {
       amount: 'NUMBER',
@@ -2158,5 +2160,35 @@ describe('F3 — blank TEXT result over a round-tripped NULL column (record lane
       prefetchedRecord: { id: 'o4', amount: 0, score: null },
     });
     expect(plan.write).toEqual({ recordId: 'o4', data: { score: 0 } });
+  });
+
+  it('does not widen past TEXT: a SELECT target still compares strictly', async () => {
+    // Boundary pin: usesTextDomain groups SELECT with TEXT (both are
+    // string-domain writes), but valuesEqual's blank-widening rule is gated on
+    // kind === 'TEXT' alone, not usesTextDomain (F6) — SELECT's stored NULL
+    // round-trips back as null, with none of the platform's TEXT-column ''
+    // expansion, so a stored '' must never converge with a computed null.
+    // normalizeStoredValue('', 'SELECT') stays '' (still a string, so it does
+    // not fold to null); compared strictly against a computed null, '' !==
+    // null, so the write still happens (RED before F6 if SELECT ever joined
+    // the TEXT branch: textValuesConverged(null, '') is true and would
+    // wrongly suppress this write).
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      stage: 'SELECT',
+    });
+    client.seed('opportunity', [{ id: 'o5', amount: null, stage: '' }]);
+    const plan = await planRecomputeForRecord({
+      client,
+      formula: blankableTextFormula({
+        id: 'f3select',
+        targetField: 'stage',
+        targetFieldType: 'SELECT',
+      }),
+      targetRecordId: 'o5',
+      prefetchedRecord: { id: 'o5', amount: null, stage: '' },
+    });
+    expect(plan.write).toEqual({ recordId: 'o5', data: { stage: null } });
   });
 });

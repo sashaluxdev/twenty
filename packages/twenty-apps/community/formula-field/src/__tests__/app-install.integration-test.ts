@@ -66,20 +66,27 @@ const waitForValue = async <T>(
 };
 
 // The registry rejects re-deploying an already-deployed version, so bump the
-// patch to a monotonic value (ms timestamp) for each run and restore the file
-// afterwards. package.json version is only used for the deploy handshake.
+// version to a monotonic value for each run and restore the file afterwards.
+// package.json version is only used for the deploy handshake.
 const PACKAGE_JSON = path.join(APP_PATH, 'package.json');
 let originalPackageJson = '';
 
 const bumpVersionForDeploy = () => {
   originalPackageJson = fs.readFileSync(PACKAGE_JSON, 'utf8');
   const parsed = JSON.parse(originalPackageJson);
-  // Semver orders major.minor before patch, so the timestamp bump must keep
-  // the package's own major.minor: a hardcoded 0.1.<ts> sorts below any
-  // deployed 0.2+ forever, and the platform's version watermark survives
-  // uninstall (E3, live 2026-08-13).
-  const [major, minor] = String(parsed.version).split('.');
-  parsed.version = `${major}.${minor}.${Date.now()}`;
+  // The platform's version watermark (latestAvailableVersion) survives
+  // uninstall and gates future publishes via semver.lte, so the bump must
+  // land ABOVE the current release without permanently burning a real
+  // release number. A bare patch/timestamp bump (0.5.<ts>) sorts above
+  // every future 0.5.x release forever (E3, live 2026-08-13); a
+  // same-patch prerelease (0.5.1-it.<ts>) sorts BELOW the published 0.5.1
+  // and gets rejected by the registry (recreates the original E3 failure).
+  // A next-patch prerelease (0.5.2-it.<ts>) sorts above the current release
+  // (passes the deploy watermark gate) but below the next real release, so
+  // 0.5.2 stays publishable afterwards. This assumes package.json tracks
+  // the last published release.
+  const [major, minor, patch] = String(parsed.version).split('.').map(Number);
+  parsed.version = `${major}.${minor}.${patch + 1}-it.${Date.now()}`;
   fs.writeFileSync(PACKAGE_JSON, `${JSON.stringify(parsed, null, 2)}\n`);
 };
 

@@ -74,7 +74,9 @@ import { type EngineValue } from 'src/engine/evaluator';
 // and nulls compare strictly — except TEXT blank equivalence (null ≡ ''): the
 // record API reads a SQL-NULL TEXT column back as '', and without it a blank
 // computed value reads as a human edit and pins the record (F3; see
-// textValuesConverged).
+// textValuesConverged). Gated on kind === 'TEXT' specifically, NOT
+// usesTextDomain: SELECT's stored NULL reads back as null with no ''
+// expansion, so it needs no widening and must not get it (F6).
 const storedValuesEqual = (
   kind: TargetFieldKind,
   a: EngineValue,
