@@ -1,10 +1,7 @@
 # Delete Completely: destroy permission spec
 
-Status: OUTSTANDING (diagnosed 2026-08-12, not implemented)
-Design review: NOT DONE — the standing opus code-cross-reference pass was stopped
-mid-run. Unverified-by-review claims to re-check when resuming: the idempotent-retry
-claim (Side effect section) and the lifecycle-trigger-on-destroy claim (Alternatives
-section); both were written from subagent reports, not direct reads.
+Status: IMPLEMENTED on feat/formula-field-fix-wave (live verification pending — plan Task 4)
+Design review: DONE 2026-08-13 (plan review, opus) — both formerly-unverified claims VERIFIED
 Affects: v0.4.x+ danger-zone flows (formula definition + variation config)
 
 ## Problem
@@ -35,7 +32,7 @@ being denied is not the user.
    (`destroyFormulaDefinition` / `destroyVariationConfig`), gated on
    `canDestroyObjectRecords` (`twenty-orm/repository/permissions.utils.ts:214-220`).
    The app role declares `canDestroyAllObjectRecords: false`
-   (`src/roles/default-role.ts:26-34`, unchanged since creation), so the intersection
+   (`src/roles/default-role.ts:29-38`, flag at `:36`, unchanged since creation), so the intersection
    denies it regardless of the user's own role. No user privilege can beat an
    intersection with a role that says no.
 
@@ -102,8 +99,10 @@ export default defineRole({
   workspace object; unnecessary blast radius for an app whose role is otherwise
   deliberately least-privilege on destroy.
 - Switch the final call to soft delete (`deleteFormulaDefinition`): passes under the
-  current role, but "Delete completely" semantics promise hard removal; trash rows
-  would linger and the definition lifecycle trigger fires on destroy, not delete.
+  current role, but "Delete completely" semantics promise hard removal; a soft delete
+  would run the `.deleted` handler, whose semantics are reversible-trash (ADR 0009)
+  and would leave a trash row; only destroy emits `formulaDefinition.destroyed`,
+  whose handler performs the terminal cleanup.
 
 ## Risks and caveats
 
