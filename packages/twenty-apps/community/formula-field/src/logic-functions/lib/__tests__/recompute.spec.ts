@@ -2029,3 +2029,129 @@ describe('recordEvaluationHeartbeat in-memory sync', () => {
     expect(client.mutations).toBe(writesBefore);
   });
 });
+
+describe('F3 — blank TEXT result over a round-tripped NULL column (record lane)', () => {
+  // F3 (live 2026-08-13): the record API reads a SQL-NULL TEXT column back as
+  // '', while a blank engine result is null. Strict identity saw '' !== null
+  // and rewrote null over NULL on every sweep pass — 301 rows/pass in the live
+  // workspace, updatedAt falsified forever. Blank ≡ blank for TEXT ends the
+  // loop; real value changes still write in both directions.
+  // FakeClient does not simulate the platform round-trip (its projection
+  // returns null), so the stored column is seeded as '' — the row exactly as
+  // the record API hands it to the scan.
+  const seedRoundTrippedFixture = (client: FakeClient): void => {
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaLabel: 'TEXT',
+    });
+    client.seed('opportunity', [
+      { id: 'o1', amount: null, formulaLabel: '' },
+      { id: 'o2', amount: 21, formulaLabel: 'low' },
+    ]);
+  };
+  // Text-inferring on both branches (kind gate); IF over a BLANK condition is
+  // BLANK, so amount:null computes null — the exact live-writer shape.
+  const blankableTextFormula = (
+    overrides: Partial<FormulaDefinitionRecord> = {},
+  ): FormulaDefinitionRecord => ({
+    id: 'f3rec',
+    targetObject: 'opportunity',
+    targetField: 'formulaLabel',
+    targetFieldType: 'TEXT',
+    expression: 'IF(amount > 100, "high", "low")',
+    enabled: true,
+    ...overrides,
+  });
+
+  it('computed null over a round-tripped NULL column performs zero record writes', async () => {
+    const client = new FakeClient();
+    seedRoundTrippedFixture(client);
+    client.seed('formulaDefinition', [
+      blankableTextFormula() as Record<string, unknown> & { id: string },
+    ]);
+
+    const outcomes = await recomputeAllRecords(client, blankableTextFormula());
+
+    // Sanity: the definition was scanned, not gate-refused (a refused pass
+    // yields a single synthetic outcome with an error and would green-wash
+    // this test).
+    expect(outcomes.filter((o) => o.error)).toEqual([]);
+    expect(outcomes).toHaveLength(2);
+    // o1: computed null vs stored '' → converged (RED before the fix).
+    // o2: computed 'low' vs stored 'low' → converged (already green).
+    expect(outcomes.filter((o) => o.changed)).toEqual([]);
+    expect(client.writes.filter((w) => w.startsWith('opportunity:'))).toEqual([]);
+  });
+
+  it("a genuinely computed '' converges with a round-tripped NULL column (pins the equality-side design)", async () => {
+    // ADR 0026 D2: an all-blank concat is '' (a determined text), not null.
+    // '' === '' already holds — this pins the cell that read-side folding
+    // would break forever (stored '' folded to null vs computed '').
+    const client = new FakeClient();
+    seedRoundTrippedFixture(client);
+    const formula = blankableTextFormula({ expression: 'formulaLabel & ""' });
+    const plan = await planRecomputeForRecord({
+      client,
+      formula,
+      targetRecordId: 'o1',
+      prefetchedRecord: { id: 'o1', amount: null, formulaLabel: '' },
+    });
+    expect(plan.write).toBeNull();
+    expect(plan.outcome.changed).toBe(false);
+  });
+
+  it('real value changes still write in both directions (pinning)', async () => {
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaLabel: 'TEXT',
+    });
+    client.seed('opportunity', [{ id: 'o3', amount: null, formulaLabel: 'stale' }]);
+    // Direction 1: stored text, computed null → clears the field.
+    const clearPlan = await planRecomputeForRecord({
+      client,
+      formula: blankableTextFormula(),
+      targetRecordId: 'o3',
+      prefetchedRecord: { id: 'o3', amount: null, formulaLabel: 'stale' },
+    });
+    expect(clearPlan.write).toEqual({
+      recordId: 'o3',
+      data: { formulaLabel: null },
+    });
+    // Direction 2: stored blank, computed text → writes the value.
+    const writePlan = await planRecomputeForRecord({
+      client,
+      formula: blankableTextFormula(),
+      targetRecordId: 'o3',
+      prefetchedRecord: { id: 'o3', amount: 500, formulaLabel: '' },
+    });
+    expect(writePlan.write).toEqual({
+      recordId: 'o3',
+      data: { formulaLabel: 'high' },
+    });
+  });
+
+  it('does not widen past TEXT: a NUMBER target still compares strictly', async () => {
+    // Boundary pin: nothing in the blank rule may leak to other kinds. A
+    // stored '' on a NUMBER read normalizes to null; computed 0 must still
+    // write (0 !== null).
+    const client = new FakeClient();
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      score: 'NUMBER',
+    });
+    client.seed('opportunity', [{ id: 'o4', amount: 0, score: null }]);
+    const plan = await planRecomputeForRecord({
+      client,
+      formula: blankableTextFormula({
+        id: 'f3num',
+        targetField: 'score',
+        targetFieldType: 'NUMBER',
+        expression: 'amount * 2',
+      }),
+      targetRecordId: 'o4',
+      prefetchedRecord: { id: 'o4', amount: 0, score: null },
+    });
+    expect(plan.write).toEqual({ recordId: 'o4', data: { score: 0 } });
+  });
+});

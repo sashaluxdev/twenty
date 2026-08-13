@@ -52,6 +52,8 @@ import {
   selectionEntryForFieldKind,
   tagEngineValue,
   targetFieldKind,
+  textValuesConverged,
+  type TargetFieldKind,
 } from 'src/logic-functions/lib/value-io';
 import { loadOverriddenRecordIds } from 'src/logic-functions/lib/override-repository';
 import { pluralize } from 'src/logic-functions/lib/plural';
@@ -320,8 +322,14 @@ const buildResolver = (
 // Convergence check for the no-op guard. Strict identity covers both domains:
 // numbers compare exactly (every kind is rounded to its stored representation
 // first, so a fractional result can never rewrite forever), and text converges on
-// exact string equality — no trimming, no case folding.
-const valuesEqual = (a: EngineValue, b: EngineValue): boolean => a === b;
+// exact string equality — no trimming, no case folding. TEXT alone adds blank
+// equivalence (null ≡ ''): the record API reads a SQL-NULL TEXT column back as
+// '', so strict identity rewrites a blank result forever (F3; textValuesConverged).
+const valuesEqual = (
+  kind: TargetFieldKind,
+  a: EngineValue,
+  b: EngineValue,
+): boolean => (kind === 'TEXT' ? textValuesConverged(a, b) : a === b);
 
 // Whether the definition takes the mirror lane. An unparseable expression is not
 // a mirror; the engine path surfaces the error.
@@ -905,7 +913,7 @@ export const planRecomputeForRecord = async ({
   const currentValue = normalizeStoredValue(currentRaw, targetKind);
 
   // No-op suppression / recursion guard: skip the write when nothing changed.
-  if (valuesEqual(currentValue, result)) {
+  if (valuesEqual(targetKind, currentValue, result)) {
     return { outcome: { ...base, value: tagged, changed: false }, write: null };
   }
 

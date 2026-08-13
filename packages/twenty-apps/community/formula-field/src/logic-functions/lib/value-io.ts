@@ -102,6 +102,20 @@ export const normalizeStoredValue = (
   }
 };
 
+// F3 (live 2026-08-13): the platform stores both '' and null as SQL NULL for
+// TEXT (transform-text-field) and reads SQL NULL back as ''
+// (DEFAULT_TEXT_FIELD_NULL_EQUIVALENT_VALUE), so a stored TEXT value is never
+// distinguishable from blank-vs-empty. Convergence checks against a stored TEXT
+// read must therefore treat blank ≡ blank — null and '' on EITHER side compare
+// equal — or a blank computed value rewrites a NULL column on every pass (the
+// record-lane sibling of formula-repository's storedValueText/F4 fix). This is
+// an EQUALITY rule only, deliberately not a read-side fold: a genuinely
+// computed '' (ADR 0026 D2 all-blank concat, "" literal) written and read back
+// as '' must still converge with itself, which a stored-''-to-null fold breaks
+// forever.
+export const textValuesConverged = (a: EngineValue, b: EngineValue): boolean =>
+  a === b || ((a === null || a === '') && (b === null || b === ''));
+
 // The write boundary's numeric coercion: a text value reaching a numeric target
 // coerces exactly as the resolver used to at resolve time — "42" succeeds,
 // "INV42" throws NON_NUMERIC_VALUE and the caller turns it into an eval error.

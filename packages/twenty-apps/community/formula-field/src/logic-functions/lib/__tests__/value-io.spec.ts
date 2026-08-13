@@ -8,6 +8,7 @@ import {
   tagEngineValue,
   targetFieldKind,
   selectionEntryForFieldKind,
+  textValuesConverged,
   usesTextDomain,
 } from 'src/logic-functions/lib/value-io';
 import { MS_PER_DAY } from 'src/engine/date-serial';
@@ -226,6 +227,21 @@ describe('TEXT target kind', () => {
     expect(buildTargetWriteData('code', 'TEXT', 'ACME')).toEqual({
       code: 'ACME',
     });
+  });
+
+  it('textValuesConverged treats blank as equivalent for TEXT convergence only', () => {
+    // F3: the record API reads a SQL-NULL TEXT column back as '', so null and
+    // '' must converge — in both operand orders.
+    expect(textValuesConverged(null, '')).toBe(true);
+    expect(textValuesConverged('', null)).toBe(true);
+    expect(textValuesConverged(null, null)).toBe(true);
+    expect(textValuesConverged('', '')).toBe(true);
+    expect(textValuesConverged('x', 'x')).toBe(true);
+    // A real value change still differs.
+    expect(textValuesConverged('x', null)).toBe(false);
+    expect(textValuesConverged(null, 'x')).toBe(false);
+    expect(textValuesConverged('x', '')).toBe(false);
+    expect(textValuesConverged('x', 'y')).toBe(false);
   });
 });
 

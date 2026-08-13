@@ -52,6 +52,7 @@ import {
   tagEngineValue,
   type TargetFieldKind,
   targetFieldKind,
+  textValuesConverged,
   usesTextDomain,
 } from 'src/logic-functions/lib/value-io';
 import { type EngineValue } from 'src/engine/evaluator';
@@ -70,10 +71,20 @@ import { type EngineValue } from 'src/engine/evaluator';
 
 // Equality between a written value and the formula's computed value: numbers
 // compare float-tolerantly (a stored value has been through a round-trip), text
-// and nulls compare strictly.
-const storedValuesEqual = (a: EngineValue, b: EngineValue): boolean => {
+// and nulls compare strictly — except TEXT blank equivalence (null ≡ ''): the
+// record API reads a SQL-NULL TEXT column back as '', and without it a blank
+// computed value reads as a human edit and pins the record (F3; see
+// textValuesConverged).
+const storedValuesEqual = (
+  kind: TargetFieldKind,
+  a: EngineValue,
+  b: EngineValue,
+): boolean => {
   if (typeof a === 'number' && typeof b === 'number') {
     return Math.abs(a - b) < 1e-9;
+  }
+  if (kind === 'TEXT') {
+    return textValuesConverged(a, b);
   }
   return a === b;
 };
@@ -419,7 +430,7 @@ export const handleRecordUpdate = async ({
       // Superseded write in flight: the stored value already moved past the
       // value this event reports, so a newer write is converging — treating the
       // stale echo as a human pin would be wrong. Skip it.
-      if (!storedValuesEqual(currentStored, eventValue)) continue;
+      if (!storedValuesEqual(targetKind, currentStored, eventValue)) continue;
 
       // The same write-boundary normalization recompute applies, so the compare
       // happens in the field's own representation. A value the target cannot
@@ -438,7 +449,7 @@ export const handleRecordUpdate = async ({
 
       // The current stored value matches the formula on CURRENT inputs -> it is
       // the app's own recompute, not a human pin.
-      if (storedValuesEqual(computedStored, currentStored)) continue;
+      if (storedValuesEqual(targetKind, computedStored, currentStored)) continue;
 
       await upsertOverride(
         client,

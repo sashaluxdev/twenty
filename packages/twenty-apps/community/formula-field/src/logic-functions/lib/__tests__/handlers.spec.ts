@@ -1566,6 +1566,98 @@ describe('handleRecordUpdate (event-driven recompute)', () => {
     expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
   });
 
+  it('a blank TEXT result over a blank stored column is not mistaken for a human edit', async () => {
+    // F3 event-lane manifestation (code-verified; no live incident observed):
+    // computedStored (null for blank) compared to currentStored ('' for a
+    // round-tripped NULL) under strict identity upserts a spurious override
+    // pin — an ACTIVE pin that recompute then skips forever. Blank ≡ blank
+    // for TEXT prevents it.
+    // Arrange: TEXT-target formula whose inputs make it compute null for this
+    // record (amount: null); stored target column '' both in `after` and in
+    // the fresh read; the target field named in updatedFields (the shape the
+    // app's own clear-echo produces); a human actorWorkspaceMemberId, exactly
+    // as the neighboring pin tests set one.
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaLabel: 'TEXT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f3event',
+        targetObject: 'opportunity',
+        targetField: 'formulaLabel',
+        targetFieldType: 'TEXT',
+        expression: 'IF(amount > 100, "high", "low")',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o1', amount: null, formulaLabel: '' }]);
+
+    // Act: handleRecordUpdate({ client, objectName, recordId, after,
+    //   updatedFields: ['formulaLabel'], actorWorkspaceMemberId }).
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', amount: null, formulaLabel: '' },
+      updatedFields: ['formulaLabel'],
+      actorWorkspaceMemberId: 'wm-1', // a real person made the edit
+    });
+
+    // Assert: no override row — client.get('formulaOverride', 'formulaOverride-0')
+    // undefined AND no createFormulaOverride in client.mutationSelections —
+    // and no 'opportunity:' entry in client.writes.
+    expect(client.get('formulaOverride', 'formulaOverride-0')).toBeUndefined();
+    expect(
+      client.mutationSelections.some((s) => 'createFormulaOverride' in s),
+    ).toBe(false);
+    expect(client.writes.filter((w) => w.startsWith('opportunity:'))).toEqual(
+      [],
+    );
+  });
+
+  it('a human clearing a TEXT field the formula computes a value for still pins (pinning)', async () => {
+    // Same event shape, but the formula computes 'high' (amount: 500) while
+    // the cleared column reads ''. computedStored 'high' vs currentStored ''
+    // differ under both the old and new rule — the pin must still be created.
+    client.setFieldKinds('opportunity', {
+      amount: 'NUMBER',
+      formulaLabel: 'TEXT',
+    });
+    client.seed('formulaDefinition', [
+      {
+        id: 'f3event2',
+        targetObject: 'opportunity',
+        targetField: 'formulaLabel',
+        targetFieldType: 'TEXT',
+        expression: 'IF(amount > 100, "high", "low")',
+        enabled: true,
+      },
+    ]);
+    client.seed('opportunity', [{ id: 'o2', amount: 500, formulaLabel: '' }]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o2',
+      after: { id: 'o2', amount: 500, formulaLabel: '' },
+      updatedFields: ['formulaLabel'],
+      actorWorkspaceMemberId: 'wm-1', // a real person made the edit
+    });
+
+    // Assert: createFormulaOverride mutation present, override row exists.
+    expect(
+      client.mutationSelections.some((s) => 'createFormulaOverride' in s),
+    ).toBe(true);
+    const override = client.get('formulaOverride', 'formulaOverride-0');
+    expect(override).toBeDefined();
+    expect(override!.recordId).toBe('o2');
+    expect(override!.targetField).toBe('formulaLabel');
+    // Pins the CURRENT stored value (what the human actually left in the
+    // field, '' — the cleared column), not the formula's computed 'high'.
+    expect(override!.overrideValueText).toBe(JSON.stringify(''));
+  });
+
   it('does not recompute a record that already has an override', async () => {
     client.seed('opportunity', [
       { id: 'o1', formulaInputA: 5, formulaInputB: 10, formulaScore: 99 },
