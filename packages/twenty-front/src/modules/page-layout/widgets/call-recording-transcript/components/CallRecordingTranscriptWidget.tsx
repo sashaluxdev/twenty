@@ -1,35 +1,22 @@
-import { useObjectMetadataItems } from '@/object-metadata/hooks/useObjectMetadataItems';
-import { CallRecordingTranscriptBody } from '@/page-layout/widgets/call-recording-transcript/components/CallRecordingTranscriptBody';
+import { CallRecordingWidgetUnavailableDisplay } from '@/page-layout/widgets/calendar-event-call-recording/components/CallRecordingWidgetUnavailableDisplay';
+import { useIsCalendarEventCallRecordingWidgetVisible } from '@/page-layout/widgets/calendar-event-call-recording/hooks/useIsCalendarEventCallRecordingWidgetVisible';
 import { CallRecordingTranscriptWidgetContent } from '@/page-layout/widgets/call-recording-transcript/components/CallRecordingTranscriptWidgetContent';
-import { styled } from '@linaria/react';
-import { CoreObjectNameSingular } from 'twenty-shared/types';
-
-const StyledWidgetContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  overflow: auto;
-  width: 100%;
-`;
+import { StyledWidgetScrollContainer } from '@/ui/layout/components/WidgetContentContainer';
 
 export const CallRecordingTranscriptWidget = () => {
-  const { objectMetadataItems } = useObjectMetadataItems();
+  const isWidgetVisible = useIsCalendarEventCallRecordingWidgetVisible();
 
-  const hasCallRecordingObjectMetadata = objectMetadataItems.some(
-    (objectMetadataItem) =>
-      objectMetadataItem.nameSingular === CoreObjectNameSingular.CallRecording,
-  );
+  if (!isWidgetVisible) {
+    return (
+      <StyledWidgetScrollContainer>
+        <CallRecordingWidgetUnavailableDisplay />
+      </StyledWidgetScrollContainer>
+    );
+  }
 
   return (
-    <StyledWidgetContainer>
-      {hasCallRecordingObjectMetadata ? (
-        <CallRecordingTranscriptWidgetContent />
-      ) : (
-        <CallRecordingTranscriptBody
-          callRecordingTranscriptState={{ state: 'UNAVAILABLE' }}
-        />
-      )}
-    </StyledWidgetContainer>
+    <StyledWidgetScrollContainer>
+      <CallRecordingTranscriptWidgetContent />
+    </StyledWidgetScrollContainer>
   );
 };

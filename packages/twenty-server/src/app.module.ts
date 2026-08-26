@@ -33,13 +33,12 @@ import { MiddlewareModule } from 'src/engine/middlewares/middleware.module';
 import { JwtModule } from 'src/engine/core-modules/jwt/jwt.module';
 import { UserSessionModule } from 'src/engine/core-modules/user-session/user-session.module';
 import { RestCoreMiddleware } from 'src/engine/middlewares/rest-core.middleware';
-import { GlobalWorkspaceDataSourceModule } from 'src/engine/twenty-orm/global-workspace-datasource/global-workspace-datasource.module';
-import { TwentyORMModule } from 'src/engine/twenty-orm/twenty-orm.module';
+import { TwentyOrmModule } from 'src/engine/twenty-orm/twenty-orm.module';
 import { WorkspaceCacheStorageModule } from 'src/engine/workspace-cache-storage/workspace-cache-storage.module';
 import { UnhandledExceptionFilter } from 'src/filters/unhandled-exception.filter';
 import { ModulesModule } from 'src/modules/modules.module';
 
-import { ClickHouseModule } from './database/clickHouse/clickHouse.module';
+import { ClickHouseModule } from './database/clickhouse/clickhouse.module';
 import { CoreEngineModule } from './engine/core-modules/core-engine.module';
 import { I18nModule } from './engine/core-modules/i18n/i18n.module';
 
@@ -60,16 +59,12 @@ const MIGRATED_REST_METHODS = [
       imports: [GraphQLConfigModule, MetricsModule, DataloaderModule],
       useClass: GraphQLConfigService,
     }),
-    TwentyORMModule,
-    GlobalWorkspaceDataSourceModule,
+    TwentyOrmModule,
     ClickHouseModule,
-    // Core engine module, contains all the core modules
     CoreEngineModule,
-    // Modules module, contains all business logic modules
     ModulesModule,
     // Needed for the user workspace middleware
     WorkspaceCacheStorageModule,
-    // Api modules
     CoreGraphQLApiModule,
     MetadataGraphQLApiModule,
     AdminPanelGraphQLApiModule,
@@ -79,9 +74,7 @@ const MIGRATED_REST_METHODS = [
     JwtModule,
     UserSessionModule,
     WorkspaceMetadataVersionModule,
-    // I18n module for translations
     I18nModule,
-    // Conditional modules
     ...AppModule.getConditionalModules(),
   ],
   providers: [
@@ -96,15 +89,6 @@ export class AppModule {
     const modules: DynamicModule[] = [];
     const frontPath = join(__dirname, 'front');
 
-    // NestJS DevTools - can be useful for debugging and profiling
-    /* if (process.env.NODE_ENV === NodeEnvironment.DEVELOPMENT) {
-      modules.push(
-        DevtoolsModule.register({
-          http: true,
-        }),
-      );
-    } */
-
     if (existsSync(frontPath)) {
       modules.push(
         ServeStaticModule.forRoot({
@@ -116,11 +100,6 @@ export class AppModule {
     // Messaque Queue explorer only for sync driver
     // Maybe we don't need to conditionaly register the explorer, because we're creating a jobs module
     // that will expose classes that are only used in the queue worker
-    /*
-    if (process.env.MESSAGE_QUEUE_TYPE === MessageQueueDriverType.Sync) {
-      modules.push(MessageQueueModule.registerExplorer());
-    }
-    */
 
     return modules;
   }
