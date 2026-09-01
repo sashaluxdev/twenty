@@ -23,6 +23,18 @@
 - Commits: conventional style, no AI attribution/co-author trailers (CI rejects them).
 - Version target v0.6.0; new ADR is 0031 (highest existing is 0030).
 
+## Execution Policy (for the executing session)
+
+- Orchestrate via superpowers:subagent-driven-development. Keep workflows SMALL: dispatch in waves, hard concurrency cap of **3 opus + 8 sonnet agents at any moment**. **Fable subagents are banned** — never dispatch one for any task, review, or search.
+- Model assignment: implementers on sonnet (opus only where a task needs real design judgment — Tasks 6, 7, 8 qualify); task reviewers on sonnet for mechanical diffs, opus for Tasks 6, 7, 8; searches/excerpt-fetches on sonnet.
+- Wave structure (parallelize only tasks with disjoint files):
+  - Wave 1: Task 0 ∥ Task 1 ∥ Task 2 (Task 0 needs the dev stack and interactive probing — supervise it closely; it is a STOP gate for Tasks 5+).
+  - Wave 2 (after 1+2): Task 3 ∥ Task 4.
+  - Wave 3 (after Task 0 passes and Task 4): Task 5.
+  - Wave 4: Tasks 6 → 7 → 8 strictly sequential (they share `marker-converge.ts` and the lifecycle files); Task 9 may run in parallel with 7/8 (front-only files) once Task 1 is merged and Task 0's P3 passed.
+  - Wave 5: Task 10, then Task 11.
+- Every task ends committed with its tests green before its reviewer runs; read each report before dispatching the next wave.
+
 ---
 
 ### Task 0: Platform probes (spike — results gate the rest of the plan)
