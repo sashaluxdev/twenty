@@ -13,6 +13,7 @@ import { withRetry } from 'src/logic-functions/lib/with-retry';
 const FORMULA_FIELDS = {
   id: true,
   name: true,
+  order: true,
   targetObject: true,
   targetField: true,
   targetFieldType: true,
