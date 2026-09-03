@@ -121,6 +121,41 @@ export const loadActiveOverridesForRecord = async (
   return rows;
 };
 
+// Every pin row for the object, active or not — deactivated rows persist and
+// mark records that ever held a pin, which the marker sweep needs (spec §5.5).
+export const loadOverridesForObject = async (
+  client: FormulaClient,
+  targetObject: string,
+  pageSize = 500,
+): Promise<OverrideRecord[]> => {
+  const rows: OverrideRecord[] = [];
+  let after: string | undefined;
+
+  for (;;) {
+    const response = await withRetry(() =>
+      client.query({
+        formulaOverrides: {
+          __args: {
+            first: pageSize,
+            filter: { targetObject: { eq: targetObject } },
+            ...(after ? { after } : {}),
+          },
+          edges: { node: OVERRIDE_FIELDS },
+          pageInfo: { hasNextPage: true, endCursor: true },
+        },
+      }),
+    );
+    const connection = response?.formulaOverrides;
+    for (const edge of connection?.edges ?? []) {
+      if (edge?.node?.targetField) rows.push(edge.node as OverrideRecord);
+    }
+    if (!connection?.pageInfo?.hasNextPage) break;
+    after = connection.pageInfo.endCursor ?? undefined;
+  }
+
+  return rows;
+};
+
 // The set of field names with an ACTIVE override on this ONE record — the
 // inverse shape of loadOverriddenRecordIds (one field, many records). The
 // widget uses this to intersect with the syncable set.
@@ -192,16 +227,20 @@ export const overrideSlotForKind = (
 const normalizedText = (value: string | null | undefined): string | null =>
   value === null || value === undefined || value === '' ? null : value;
 
+export type UpsertOverrideResult = 'created' | 'updated' | 'noop';
+
 // Creates or updates an ACTIVE override pinning the given value. Numeric targets
 // pin overrideValue (overrideValueText null); mirror targets pin overrideValueText
-// (overrideValue null).
+// (overrideValue null). The returned signal tells the caller whether a write
+// actually happened, so it can gate follow-on work (e.g. the marker sweep) on
+// real changes rather than re-running it on every no-op call.
 export const upsertOverride = async (
   client: FormulaClient,
   targetObject: string,
   targetField: string,
   recordId: string,
   value: OverrideValue,
-): Promise<void> => {
+): Promise<UpsertOverrideResult> => {
   const overrideValue = value.numeric ?? null;
   const overrideValueText = normalizedText(value.text ?? null);
   const existing = await findOverride(client, targetObject, targetField, recordId);
@@ -222,8 +261,9 @@ export const upsertOverride = async (
           },
         }),
       );
+      return 'updated';
     }
-    return;
+    return 'noop';
   }
   await withRetry(() =>
     client.mutation({
@@ -243,6 +283,7 @@ export const upsertOverride = async (
       },
     }),
   );
+  return 'created';
 };
 
 // Decodes a mirror override's stored text back to its raw value. A parse failure
