@@ -59,7 +59,7 @@ describe('handleRecordUpdate marker step', () => {
       actorWorkspaceMemberId: 'member-1',
     });
 
-    expect(client.writes).toContain('opportunity:o1:fxOverrides="Deal Score"');
+    expect(markerWrites()).toEqual(['opportunity:o1:fxOverrides="Deal Score"']);
   });
 
   it('does zero marker work on an app echo with an inherited actor (ADR 0006)', async () => {
@@ -184,5 +184,42 @@ describe('handleRecordUpdate marker step', () => {
       ),
     ).toHaveLength(0);
     expect(markerWrites()).toHaveLength(0);
+  });
+
+  it('does zero marker work when the object has no marker field', async () => {
+    // Same pin-creating edit as the first test, but the object metadata has no
+    // fxOverrides field: markerFieldExistsOnObject is false, so the step must
+    // return before spending even its own pin query (R5).
+    __setFakeObjectsWithFieldsForTests([
+      {
+        id: 'obj-opportunity',
+        nameSingular: 'opportunity',
+        labelIdentifierFieldMetadataId: null,
+        fields: [
+          { id: 'b', name: 'dealScore', type: 'NUMBER', isActive: true, isSystem: false },
+          { id: 'c', name: 'formulaInputA', type: 'NUMBER', isActive: true, isSystem: false },
+        ],
+      },
+    ]);
+    client.seed('opportunity', [
+      { id: 'o1', formulaInputA: 1, dealScore: 99, fxOverrides: null },
+    ]);
+
+    await handleRecordUpdate({
+      client,
+      objectName: 'opportunity',
+      recordId: 'o1',
+      after: { id: 'o1', formulaInputA: 1, dealScore: 99, fxOverrides: null },
+      updatedFields: ['dealScore'],
+      actorWorkspaceMemberId: 'member-1',
+    });
+
+    expect(markerWrites()).toEqual([]);
+    expect(
+      client.querySelections.filter(
+        (selection) =>
+          selection.formulaOverrides?.__args?.filter?.recordId !== undefined,
+      ),
+    ).toHaveLength(0);
   });
 });

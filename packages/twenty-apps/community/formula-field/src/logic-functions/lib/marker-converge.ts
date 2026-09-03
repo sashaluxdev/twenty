@@ -6,7 +6,7 @@ import {
   MARKER_FIELD_NAME,
 } from 'src/logic-functions/lib/override-marker';
 import {
-  loadActiveOverrideFieldsForRecord,
+  loadActiveOverridesForRecord,
   loadOverridesForObject,
   type OverrideRecord,
 } from 'src/logic-functions/lib/override-repository';
@@ -158,7 +158,8 @@ export const convergeMarkersForColumn = async (
 
 // Single-record convergence for the record-update event lane (spec §5.2). The
 // caller gates this on real pin-state change or a touched marker field, so
-// reaching here already means the marker plausibly moved.
+// reaching here already means the marker plausibly moved. The comparison and
+// the write are the batch helper's — this only supplies its inputs.
 export const convergeMarkerAfterEvent = async ({
   client,
   objectName,
@@ -177,25 +178,32 @@ export const convergeMarkerAfterEvent = async ({
   // before spending any further query.
   if (!(await markerFieldExistsOnObject(objectName))) return;
 
-  const pinnedFields = await loadActiveOverrideFieldsForRecord(
+  const pinRows = await loadActiveOverridesForRecord(
     client,
     objectName,
     recordId,
   );
-  const expected = computeMarkerValue(objectName, definitions, pinnedFields);
 
-  // An absent payload key is UNKNOWN, never assumed blank — assuming blank
-  // inverts the F3 loop in the non-blank cell (spec §5.2).
-  const current =
+  // A present payload key is the current value (null means blank); an absent
+  // key is UNKNOWN, never assumed blank — assuming blank inverts the F3 loop in
+  // the non-blank cell (spec §5.2). Leaving currentValues undefined makes the
+  // helper fetch it, which also drops a record deleted between event and fetch.
+  const currentValues =
     after !== null && after !== undefined && MARKER_FIELD_NAME in after
-      ? ((after[MARKER_FIELD_NAME] as string | null | undefined) ?? null)
-      : ((await loadCurrentMarkerValues(client, objectName, [recordId])).get(
-          recordId,
-        ) ?? null);
+      ? new Map<string, string | null>([
+          [
+            recordId,
+            (after[MARKER_FIELD_NAME] as string | null | undefined) ?? null,
+          ],
+        ])
+      : undefined;
 
-  if (!textValuesConverged(expected, current)) {
-    await flushBatchedWrites(client, objectName, [
-      { recordId, data: { [MARKER_FIELD_NAME]: expected } },
-    ]);
-  }
+  await convergeMarkersForRecords({
+    client,
+    objectName,
+    recordIds: [recordId],
+    definitions,
+    pinRows,
+    currentValues,
+  });
 };
