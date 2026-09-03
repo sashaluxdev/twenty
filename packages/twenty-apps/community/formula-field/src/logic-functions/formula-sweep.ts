@@ -10,6 +10,10 @@ import {
   cleanupCompanionFields,
   type CompanionCleanupResult,
 } from 'src/logic-functions/lib/fx-status-cleanup';
+import {
+  convergeAllMarkers,
+  type MarkerSweepResult,
+} from 'src/logic-functions/lib/marker-sweep';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 import {
   findCyclicTargets,
@@ -19,6 +23,10 @@ import {
 // The function's declared timeoutSeconds is 120; leave headroom for the
 // bookkeeping writes that follow the scans.
 const SWEEP_BUDGET_MS = 100_000;
+
+// The marker pass gets its own slice so the recompute loop below — which may
+// consume the whole remaining budget — cannot starve it, and vice versa.
+const MARKER_BUDGET_MS = 15_000;
 
 // The convergence backstop (ADR 0004). Hourly, re-evaluate every enabled formula
 // across all its target records. Event triggers give latency; this sweep gives
@@ -48,6 +56,26 @@ const handler = async (): Promise<Record<string, unknown>> => {
     // Counters stay zeroed; the cron result still reports the pass ran.
   }
   const formulas = await loadAllEnabledFormulas(client);
+
+  // Overrides marker convergence backstop (spec §5.5): heals markers the event,
+  // widget and lifecycle lanes missed, creates the field for objects that
+  // predate it, and removes it from objects with no definitions left. Wholly
+  // best-effort — a failed marker pass must never block recompute.
+  let markerSweep: MarkerSweepResult = {
+    objects: 0,
+    written: 0,
+    ensured: 0,
+    fieldsDeleted: 0,
+    truncated: false,
+  };
+  try {
+    markerSweep = await convergeAllMarkers(client, formulas, {
+      deadlineAt: Date.now() + MARKER_BUDGET_MS,
+    });
+  } catch {
+    // Counters stay zeroed; the next sweep reconverges.
+  }
+
   const cyclic = findCyclicTargets(formulas);
 
   let evaluated = 0;
@@ -107,6 +135,7 @@ const handler = async (): Promise<Record<string, unknown>> => {
     offline: statusResult.offline,
     upstream: statusResult.upstream,
     companionCleanup,
+    markerSweep,
   };
 };
 
