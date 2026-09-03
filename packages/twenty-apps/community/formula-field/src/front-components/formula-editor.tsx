@@ -19,6 +19,7 @@ import {
   useObjectFields,
 } from 'src/front-components/lib/formula-field-input';
 import { cacheHostObject, getCachedHostObject } from 'src/front-components/lib/host-resolution-cache';
+import { writeMarkerAfterToggle } from 'src/front-components/lib/marker-toggle';
 import {
   overrideSlotKind,
   pinnedEngineOverrideValue,
@@ -843,12 +844,44 @@ const FormulaEditor = () => {
                 : null,
           });
         }
+
+        // `overrides` is this callback's PRE-toggle snapshot (the setOverrides
+        // calls above only queue a re-render), so the toggled field is applied
+        // explicitly instead of trusting the map to have caught up.
+        const activeAfterToggle = new Set(
+          Object.entries(overrides)
+            .filter(([, entry]) => entry?.active)
+            .map(([field]) => field),
+        );
+        if (turnOn) {
+          activeAfterToggle.add(definition.targetField);
+        } else {
+          activeAfterToggle.delete(definition.targetField);
+        }
+        try {
+          // Best-effort: the toggle itself already succeeded, so a failed
+          // marker write must not surface as a failed toggle — the server-side
+          // marker convergence is the backstop.
+          await writeMarkerAfterToggle({
+            client,
+            objectName: definition.targetObject,
+            recordId,
+            // definitionsRef, not the `definitions` state binding: a stale
+            // closure capture (the initial []) would compute an empty marker
+            // and blank the field on every toggle. The ref is already scoped
+            // to the host object, and computeMarkerValue re-filters by it.
+            definitions: definitionsRef.current,
+            activeOverrideFields: activeAfterToggle,
+          });
+        } catch {
+          // No marker field on this object, or a transient write failure.
+        }
       } finally {
         setBusy(null);
         setTimeout(load, 1000);
       }
     },
-    [recordId, values, load],
+    [recordId, values, overrides, load],
   );
 
   const content = useMemo(() => {
