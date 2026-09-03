@@ -1,9 +1,9 @@
-import { companionFieldName } from 'src/logic-functions/lib/fx-status-field';
 import {
-  anotherDefinitionTargets,
   findFields,
   type MetadataQueryClient,
-} from 'src/logic-functions/lib/handle-definition-lifecycle';
+} from 'src/logic-functions/lib/find-fields';
+import { companionFieldName } from 'src/logic-functions/lib/fx-status-field';
+import { anotherDefinitionTargets } from 'src/logic-functions/lib/handle-definition-lifecycle';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 
 // "Delete Completely" (danger zone): permanently destroy a FormulaDefinition and,

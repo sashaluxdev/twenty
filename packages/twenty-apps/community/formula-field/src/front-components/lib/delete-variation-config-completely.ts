@@ -1,7 +1,7 @@
 import {
   findFields,
   type MetadataQueryClient,
-} from 'src/logic-functions/lib/handle-definition-lifecycle';
+} from 'src/logic-functions/lib/find-fields';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 
 // "Delete Completely" (danger zone) for a VariationConfig: permanently destroy

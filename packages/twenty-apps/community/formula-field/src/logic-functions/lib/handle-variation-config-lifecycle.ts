@@ -3,7 +3,7 @@ import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import {
   findFields,
   type MetadataQueryClient,
-} from 'src/logic-functions/lib/handle-definition-lifecycle';
+} from 'src/logic-functions/lib/find-fields';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 import { sweepVariationConfig } from 'src/logic-functions/lib/variation-sync';
 import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-types';
