@@ -70,7 +70,13 @@ const handler = async (): Promise<Record<string, unknown>> => {
   };
   try {
     markerSweep = await convergeAllMarkers(client, formulas, {
-      deadlineAt: Date.now() + MARKER_BUDGET_MS,
+      // Clamped to the sweep's own absolute budget: the steps before this one
+      // may already have eaten most of it, and overrunning here would take the
+      // recompute loop and its bookkeeping writes down with the function.
+      deadlineAt: Math.min(
+        Date.now() + MARKER_BUDGET_MS,
+        startedAt + SWEEP_BUDGET_MS,
+      ),
     });
   } catch {
     // Counters stay zeroed; the next sweep reconverges.

@@ -94,6 +94,30 @@ const metadataStub = () => {
 
 const neverEnsure = vi.fn(async () => 'exists' as const);
 
+// 2026-09-03T01:00:00Z — UTC hour 1, so the rotation offset over two objects is
+// 1 and the pass starts at the SECOND object of the sorted list.
+const HOUR_ONE = Date.UTC(2026, 8, 3, 1, 0, 0);
+const HOUR_ZERO = Date.UTC(2026, 8, 3, 0, 0, 0);
+
+// Clock that advances by `stepMs` on every read, so a test can let the budget
+// expire at a chosen point in the pass. The sweep reads it once for the rotation
+// offset, once before each object, and once per dirty-marker page that has a
+// successor — nowhere else.
+const steppingClock = (startMs: number, stepMs: number): (() => number) => {
+  let current = startMs - stepMs;
+  return () => (current += stepMs);
+};
+
+const companyWithMarker = {
+  ...companyWithoutMarker,
+  fields: [markerField, ...companyWithoutMarker.fields],
+};
+
+const tierDefinition = {
+  ...lockedCompanyDefinition,
+  allowOverride: true,
+};
+
 // Mirrors the existing suites' reset of the metadata-objects test seam so this
 // file's fixtures never leak past it.
 afterEach(() => __setFakeObjectsWithFieldsForTests(null));
@@ -247,6 +271,92 @@ describe('convergeAllMarkers', () => {
     // Cost model: one object-scoped pin query + one NOT_NULL marker scan. o2's
     // blank marker is known from the scan's completeness, so it costs no read.
     expect(client.queries).toBe(2);
+  });
+
+  it('rotates the starting object with the hour of day', async () => {
+    __setFakeObjectsWithFieldsForTests([opportunityWithMarker, companyWithMarker]);
+    const definitions = [scoreDefinition, tierDefinition];
+    const recordQueryOrder = (fake: FakeClient): string[] =>
+      fake.querySelections
+        .map((selection) => Object.keys(selection)[0])
+        .filter((key) => key === 'opportunities' || key === 'companies');
+
+    client.seed('opportunity', [{ id: 'o1', fxOverrides: null }]);
+    client.seed('company', [{ id: 'c1', fxOverrides: null }]);
+    await convergeAllMarkers(client, definitions, {
+      deadlineAt: HOUR_ONE + 30_000,
+      ensure: neverEnsure,
+      now: () => HOUR_ONE,
+    });
+    // Sorted list is ['company', 'opportunity']; offset 1 % 2 starts at the second.
+    expect(recordQueryOrder(client)).toEqual(['opportunities', 'companies']);
+
+    const evenHourClient = new FakeClient();
+    evenHourClient.seed('opportunity', [{ id: 'o1', fxOverrides: null }]);
+    evenHourClient.seed('company', [{ id: 'c1', fxOverrides: null }]);
+    await convergeAllMarkers(evenHourClient, definitions, {
+      deadlineAt: HOUR_ZERO + 30_000,
+      ensure: neverEnsure,
+      now: () => HOUR_ZERO,
+    });
+    expect(recordQueryOrder(evenHourClient)).toEqual(['companies', 'opportunities']);
+  });
+
+  it('stops between objects when the deadline expires mid-pass', async () => {
+    __setFakeObjectsWithFieldsForTests([opportunityWithMarker, companyWithMarker]);
+    client.seed('formulaDefinition', [scoreDefinition, tierDefinition]);
+    client.seed('opportunity', [{ id: 'o1', fxOverrides: 'junk' }]);
+    client.seed('company', [{ id: 'c1', fxOverrides: 'junk' }]);
+
+    // Hour 0 -> offset 0 -> 'company' first. Reads: rotation (t0), company's
+    // deadline check (t0+10s, under), opportunity's (t0+20s, over).
+    const result = await convergeAllMarkers(client, [scoreDefinition, tierDefinition], {
+      deadlineAt: HOUR_ZERO + 15_000,
+      ensure: neverEnsure,
+      now: steppingClock(HOUR_ZERO, 10_000),
+    });
+
+    expect(result.objects).toBe(1);
+    expect(result.truncated).toBe(true);
+    expect(client.writes).toEqual(['company:c1:fxOverrides=""']);
+    expect(client.get('opportunity', 'o1')?.fxOverrides).toBe('junk');
+  });
+
+  it('stops paginating the dirty-marker scan when the deadline expires mid-object', async () => {
+    __setFakeObjectsWithFieldsForTests([opportunityWithMarker]);
+    // 201 dirty records -> two pages at the 200-record page size.
+    client.seed(
+      'opportunity',
+      Array.from({ length: 201 }, (unused, index) => ({
+        id: `o${String(index).padStart(3, '0')}`,
+        fxOverrides: 'junk',
+      })),
+    );
+
+    // A pin candidate that page 1 never reached: its marker value is unknown
+    // after a truncated scan, so it must be deferred, not fetched.
+    client.seed('formulaOverride', [
+      { ...activePin, id: 'p9', name: 'opportunity.dealScore#o200', recordId: 'o200' },
+    ]);
+
+    // Reads: rotation (t0), the object's deadline check (t0+10s, under), then
+    // after page 1 (t0+20s, over) -> the second page is never fetched.
+    const result = await convergeAllMarkers(client, [scoreDefinition], {
+      deadlineAt: HOUR_ZERO + 15_000,
+      ensure: neverEnsure,
+      now: steppingClock(HOUR_ZERO, 10_000),
+    });
+
+    expect(result.truncated).toBe(true);
+    // One scan page and no batched read: a second entry would be either.
+    const markerScans = client.querySelections.filter(
+      (selection) => Object.keys(selection)[0] === 'opportunities',
+    );
+    expect(markerScans).toHaveLength(1);
+    // The page already paid for is still converged, so the dirty set shrinks.
+    expect(result.written).toBe(200);
+    expect(client.writes).toHaveLength(200);
+    expect(client.get('opportunity', 'o200')?.fxOverrides).toBe('junk');
   });
 
   it('respects the deadline: stops between objects and reports truncated', async () => {

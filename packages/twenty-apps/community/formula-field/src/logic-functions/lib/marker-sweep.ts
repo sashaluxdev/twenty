@@ -39,12 +39,15 @@ const DIRTY_MARKER_PAGE_SIZE = 200;
 
 // Every record on the object whose marker is non-blank, with its value. ADR 0030:
 // blank TEXT stores as SQL NULL, so NOT_NULL is exactly "has a marker to repair".
-// The scan is complete (paginated to exhaustion), which is what lets the caller
-// treat "absent from this map" as "marker is blank" without spending a read.
+// A COMPLETE scan is what lets the caller treat "absent from this map" as "marker
+// is blank" without spending a read — so a scan cut short by the deadline says so,
+// and the caller drops that inference for the object.
 const loadDirtyMarkerValues = async (
   client: FormulaClient,
   objectName: string,
-): Promise<Map<string, string | null>> => {
+  deadlineAt: number,
+  now: () => number,
+): Promise<{ values: Map<string, string | null>; truncated: boolean }> => {
   const values = new Map<string, string | null>();
   const pluralName = pluralize(objectName);
   let after: string | undefined;
@@ -75,10 +78,14 @@ const loadDirtyMarkerValues = async (
       }
     }
     if (!connection?.pageInfo?.hasNextPage) break;
+    // A large enough dirty set would otherwise run thousands of sequential pages
+    // and blow the whole function's timeout, taking recompute down with it. The
+    // check costs nothing on the single-page common case.
+    if (now() > deadlineAt) return { values, truncated: true };
     after = connection.pageInfo.endCursor ?? undefined;
   }
 
-  return values;
+  return { values, truncated: false };
 };
 
 // Existence probe, not an enumeration: the cleanup arm only needs to know
@@ -144,9 +151,14 @@ const deleteMarkerField = async (
 // The hourly convergence backstop for the Overrides marker (spec §5.5). Heals
 // whatever the event, widget and lifecycle lanes missed, and is the second site
 // (after definition creation) where the marker field gets created. Grouped per
-// object, best-effort, budget-sliced: no cursor is needed because the candidate
-// set shrinks to zero as markers converge, so a truncated pass finishes over
-// successive sweeps.
+// object, best-effort, budget-sliced.
+//
+// Deliberately cursorless, but NOT order-fixed: what converges is the write set,
+// not the time cost — a fully converged object still pays its two queries every
+// hour — so a fixed iteration order would truncate at the same object every pass
+// and starve every object after it forever. Instead the start offset rotates with
+// the hour of day over a stably sorted object list (stateless: no cursor to store,
+// corrupt, or reset), so each object reaches the head of the list within 24 passes.
 export const convergeAllMarkers = async (
   client: FormulaClient,
   formulas: FormulaDefinitionRecord[],
@@ -154,10 +166,14 @@ export const convergeAllMarkers = async (
     deadlineAt,
     ensure = ensureMarkerFieldExists,
     metadataClient,
+    now = Date.now,
   }: {
     deadlineAt: number;
     ensure?: typeof ensureMarkerFieldExists;
     metadataClient?: MarkerSweepMetadataClient;
+    // Injectable clock: the rotation offset and every budget check read it, so a
+    // test can pin the hour of day and step time deterministically.
+    now?: () => number;
   },
 ): Promise<MarkerSweepResult> => {
   const result: MarkerSweepResult = {
@@ -188,20 +204,33 @@ export const convergeAllMarkers = async (
     definitionsByObject.set(objectName, forObject);
   }
 
-  for (const objectName of new Set([
-    ...markerBearing,
-    ...definitionsByObject.keys(),
-  ])) {
-    if (Date.now() > deadlineAt) {
+  // Sorted so the rotation below is applied to a stable sequence rather than to
+  // whatever order the metadata catalog happened to return.
+  const objectNames = [
+    ...new Set([...markerBearing, ...definitionsByObject.keys()]),
+  ].sort();
+  const offset =
+    objectNames.length === 0
+      ? 0
+      : new Date(now()).getUTCHours() % objectNames.length;
+
+  for (const objectName of [
+    ...objectNames.slice(offset),
+    ...objectNames.slice(0, offset),
+  ]) {
+    if (now() > deadlineAt) {
       result.truncated = true;
       break;
     }
     result.objects += 1;
 
     try {
-      // Legacy null allowOverride reads as allowed, matching the widget.
+      // Legacy null allowOverride reads as allowed, matching the widget; the
+      // enabled gate keeps a mixed definition set from ensuring a field for an
+      // object whose only override-allowed definitions are switched off (R5).
       const overridable = (definitionsByObject.get(objectName) ?? []).filter(
-        (definition) => definition.allowOverride !== false,
+        (definition) =>
+          definition.enabled === true && definition.allowOverride !== false,
       );
 
       if (!markerBearing.has(objectName)) {
@@ -234,24 +263,29 @@ export const convergeAllMarkers = async (
       // Dirty-marker arm — never gated on definitions: a record whose marker
       // outlived its cause (destroyed definition, disabled object, tamper) is
       // reachable only here.
-      const currentValues = await loadDirtyMarkerValues(client, objectName);
+      const { values: currentValues, truncated: scanTruncated } =
+        await loadDirtyMarkerValues(client, objectName, deadlineAt, now);
       const candidateIds = new Set<string>(currentValues.keys());
 
       const activePinnedRecordIds = new Set<string>();
       for (const row of pinRows) {
         if (!eligibleColumns.has(row.targetField)) continue;
+        if (row.active) activePinnedRecordIds.add(row.recordId);
+        // A deadline-truncated scan leaves every unseen record's marker unknown,
+        // so pin candidates are deferred to a later pass rather than each paying
+        // a batched read past the budget to learn its current value.
+        if (scanTruncated) continue;
         // Deactivated rows count as candidates: they mark records that lost
         // their last active pin and may still carry a stale marker.
         candidateIds.add(row.recordId);
-        if (row.active) activePinnedRecordIds.add(row.recordId);
       }
 
       for (const recordId of candidateIds) {
         if (currentValues.has(recordId)) continue;
         if (activePinnedRecordIds.has(recordId)) continue;
-        // Absent from a complete NOT_NULL scan means the marker is blank, and
-        // with no active pin the expected marker is blank too — already
-        // converged, so priming it here saves the batched read.
+        // Only pin candidates reach here, and only from a COMPLETE scan: absent
+        // from it means the marker is blank, and with no active pin the expected
+        // marker is blank too — already converged, so priming it saves the read.
         currentValues.set(recordId, null);
       }
 
@@ -265,6 +299,15 @@ export const convergeAllMarkers = async (
           currentValues,
         });
         result.written += written;
+      }
+
+      if (scanTruncated) {
+        // The pages already paid for are converged rather than thrown away, so
+        // an object too big for one budget slice still shrinks its dirty set
+        // every pass instead of never converging. The pass ends here: the
+        // budget is spent, and the rotation moves the start point next hour.
+        result.truncated = true;
+        break;
       }
 
       // Cleanup arm — an object with zero definitions in ANY state (enabled,
