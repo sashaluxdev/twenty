@@ -4,7 +4,7 @@
 
 **Goal:** One app-managed, view-only TEXT field per target object (`fxOverrides`, label `Overrides`) whose per-record value lists the formula fields currently overridden on that record ("Deal Score, Tier"), blank when none.
 
-**Architecture:** A pure marker-computation function feeds four write lanes — the record-event handler (gated on "this invocation upserted a pin, or the marker itself was edited"), the widget's override toggle, the definition lifecycle handlers (disable/trash/destroy), and an hourly sweep backstop with its own budget slice. Every write is diff-guarded through `textValuesConverged` (the ADR 0004/0030 recursion terminator). The field is created lazily server-side on first pin.
+**Architecture:** A pure marker-computation function feeds four write lanes — the record-event handler (gated on "this invocation upserted a pin, or the marker itself was edited"), the widget's override toggle, the definition lifecycle handlers (disable/trash/destroy), and an hourly sweep backstop with its own budget slice. Every write is diff-guarded through `textValuesConverged` (the ADR 0004/0030 recursion terminator). The field is created server-side when an object's first override-allowed definition is created (user amendment 2026-09-03; the sweep's ensure arm is the retry/migration path), so it can be positioned before any override exists.
 
 **Tech Stack:** TypeScript, twenty-sdk app (logic functions + front components), vitest with the in-repo `FakeClient` fake, `MetadataApiClient` for field metadata.
 
@@ -1138,7 +1138,7 @@ git commit -m "feat(formula-field): lazy app-token creation of the Overrides mar
 - Test: `src/logic-functions/lib/__tests__/handle-record-update-marker.spec.ts` (new file; reuse `handlers.spec.ts`'s fixture idioms)
 
 **Interfaces:**
-- Consumes: `UpsertOverrideResult` (Task 2), `loadActiveOverridesForRecord` (existing), `computeMarkerValue`/`MARKER_FIELD_NAME` (Task 1), `markerFieldExistsOnObject` + `convergeMarkersForRecords`' inner pieces (Task 4), `ensureMarkerFieldExists` (Task 5), `textValuesConverged`, `flushBatchedWrites`.
+- Consumes: `UpsertOverrideResult` (Task 2), `loadActiveOverridesForRecord` (existing), `computeMarkerValue`/`MARKER_FIELD_NAME` (Task 1), `markerFieldExistsOnObject` + `convergeMarkersForRecords`' inner pieces (Task 4), `textValuesConverged`, `flushBatchedWrites`. (Amended 2026-09-03: the event lane does NOT create the field — creation moved to definition creation, Task 7 — so Task 5's ensure helper is not consumed here.)
 - Produces: no new exports; the behavioral contract of spec §5.2.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1331,7 +1331,6 @@ In `handle-record-update.ts`:
 
 ```ts
   let pinChanged = false;
-  let pinCreated = false;
 ```
 
 (b) At both upsert call sites (mirror lane line 392, engine lane line 456), capture the result:
@@ -1345,7 +1344,6 @@ In `handle-record-update.ts`:
           overrideSlotForKind('raw', currentRaw), // engine site: overrideSlotForKind(targetKind, currentStored)
         );
         pinChanged = pinChanged || upsertResult !== 'noop';
-        pinCreated = pinCreated || upsertResult === 'created';
 ```
 
 (c) Immediately before the final `return outcomes;`, append the marker step:
@@ -1363,7 +1361,6 @@ In `handle-record-update.ts`:
         recordId,
         definitions: formulas,
         after,
-        pinCreated,
       });
     } catch {
       // Best-effort: the marker must never fail the record handler; the
@@ -1383,22 +1380,16 @@ export const convergeMarkerAfterEvent = async ({
   recordId,
   definitions,
   after,
-  pinCreated,
 }: {
   client: FormulaClient;
   objectName: string;
   recordId: string;
   definitions: FormulaDefinitionRecord[];
   after: Record<string, unknown> | null | undefined;
-  pinCreated: boolean;
 }): Promise<void> => {
-  let fieldExists = await markerFieldExistsOnObject(objectName);
-  if (!fieldExists && pinCreated) {
-    // First pin on this object: create the field now (spec §5.1); the sweep
-    // retries on failure, so a 'failed' here just means "not yet".
-    fieldExists = (await ensureMarkerFieldExists(objectName)) !== 'failed';
-  }
-  if (!fieldExists) return;
+  // The field is created on definition creation (spec §5.1); a missing field
+  // here means creation lags or the object only has locked definitions — skip.
+  if (!(await markerFieldExistsOnObject(objectName))) return;
 
   const pins = await loadActiveOverridesForRecord(client, objectName, recordId);
   const expected = computeMarkerValue(
@@ -1424,9 +1415,7 @@ export const convergeMarkerAfterEvent = async ({
 };
 ```
 
-(imports for `ensureMarkerFieldExists` and `loadActiveOverridesForRecord` added to `marker-converge.ts`; `handle-record-update.ts` imports `convergeMarkerAfterEvent` and `MARKER_FIELD_NAME` only).
-
-Note the ensure-call catalog interplay: right after `ensureMarkerFieldExists` returns `'created'`, the 60s catalog may still say the field is absent — that is why the code trusts the ensure result (`!== 'failed'`) instead of re-asking `markerFieldExistsOnObject`.
+(import for `loadActiveOverridesForRecord` added to `marker-converge.ts`; `handle-record-update.ts` imports `convergeMarkerAfterEvent` and `MARKER_FIELD_NAME` only).
 
 - [ ] **Step 4: Run the new suite AND the full handlers suite**
 
@@ -1442,22 +1431,37 @@ git commit -m "feat(formula-field): event-lane Overrides marker with pin-upsert 
 
 ---
 
-### Task 7: Lifecycle lanes (disable, trash, destroy)
+### Task 7: Lifecycle lanes (create, disable, trash, destroy)
 
 **Files:**
-- Modify: `src/logic-functions/lib/handle-formula-change.ts` (insert the disable-lane hook ABOVE the first `enabled === false` guard at lines 137-145)
+- Modify: `src/logic-functions/lib/handle-formula-change.ts` (insert the disable-lane hook ABOVE the first `enabled === false` guard at lines 137-145; add the creation-lane ensure hook, amended 2026-09-03, see Step 3)
 - Modify: `src/logic-functions/lib/handle-definition-lifecycle.ts` (`handleDefinitionDeleted` lines 152-166; `handleDefinitionDestroyed` lines 213-257: add `recordId` to the selection, paginate, guard on `anotherDefinitionTargets`, converge after)
 - Test: extend `src/logic-functions/lib/__tests__/handlers.spec.ts` (or its lifecycle sibling — grep for the suite that covers `handleDefinitionDestroyed`) with the cases below.
 
 **Interfaces:**
-- Consumes: `convergeMarkersForColumn`, `convergeMarkersForRecords`, `markerFieldExistsOnObject` (Task 4); `loadOverridesForObject` (Task 2); `loadEnabledFormulas` (`formula-repository`, existing); `anotherDefinitionTargets` (existing), `withRetry` (existing).
-- Produces: no new exports.
+- Consumes: `convergeMarkersForColumn`, `convergeMarkersForRecords`, `markerFieldExistsOnObject` (Task 4); `loadOverridesForObject` (Task 2); `ensureMarkerFieldExists` (Task 5); `loadEnabledFormulas` (`formula-repository`, existing); `anotherDefinitionTargets` (existing), `withRetry` (existing).
+- Produces: no new exports. `handleFormulaChange` gains an optional injectable `ensureMarkerField` parameter (default `ensureMarkerFieldExists`) so tests can observe the creation hook without a real metadata client; existing callers pass nothing.
 
 - [ ] **Step 1: Write the failing tests**
 
 Test cases (write them concretely against the existing suite's fixture helpers):
 
 ```ts
+it('definition creation ensures the marker field for an override-allowed definition', async () => {
+  // Act: handleFormulaChange({ client, after: { ...definition, allowOverride: true }, updatedFields: undefined, ensureMarkerField: spy })
+  //      where spy = vi.fn().mockResolvedValue('created').
+  // Assert: spy called once with 'opportunity'; the handler otherwise proceeds normally.
+});
+
+it('definition creation skips the ensure for a locked definition and for updates', async () => {
+  // Case A: after.allowOverride === false, updatedFields undefined -> spy not called.
+  // Case B: allowOverride true but updatedFields = ['expression'] (an update) -> spy not called.
+});
+
+it('a failed ensure never fails the handler', async () => {
+  // spy resolves 'failed' -> handler result identical to the success case.
+});
+
 it('plain disable converges markers before the disabled-bookkeeping return', async () => {
   // Seed: enabled definition on opportunity.dealScore; active pin on o1;
   // o1.fxOverrides = 'Deal Score'; marker field in the metadata seam.
@@ -1499,7 +1503,25 @@ Expected: new cases FAIL.
 
 - [ ] **Step 3: Implement**
 
-`handle-formula-change.ts` — insert ABOVE the line-137 guard:
+`handle-formula-change.ts` — creation lane (spec §5.1, amended 2026-09-03). Add `ensureMarkerField = ensureMarkerFieldExists` as an optional destructured parameter of `handleFormulaChange` (type `typeof ensureMarkerFieldExists`), and near the top of the handler, before validation and before any early return that a creation can hit:
+
+```ts
+  // Overrides marker field is created with the object's first override-allowed
+  // definition (spec §5.1) so it can be positioned before any pin exists.
+  // Creation events arrive with updatedFields === undefined. Best-effort: the
+  // sweep's ensure arm retries hourly.
+  if (
+    updatedFields === undefined &&
+    after.allowOverride !== false &&
+    after.targetObject
+  ) {
+    await ensureMarkerField(after.targetObject);
+  }
+```
+
+(Verify how `handleFormulaChange` distinguishes create from update today — `on-formula-definition-created.ts` passes `updatedFields: undefined`; if the handler already derives an `isCreation` flag, reuse it instead of re-deriving.)
+
+`handle-formula-change.ts` — disable lane; insert ABOVE the line-137 guard:
 
 ```ts
   // Overrides marker: a definition leaving the enabled set must drop its label
@@ -1634,9 +1656,11 @@ it('dirty-marker arm runs even when the object has zero enabled definitions', as
   // Assert: o1 converged to '' — the spec §5.5 step 1 rule.
 });
 
-it('retries ensure for an object with pins but no marker field', async () => {
-  // Metadata seam WITHOUT fxOverrides on opportunity; one active pin; a stub
-  // metadata client (or spy) proving ensureMarkerFieldExists was invoked.
+it('retries ensure for an object with an override-allowed definition but no marker field', async () => {
+  // Metadata seam WITHOUT fxOverrides on opportunity; one enabled override-allowed
+  // definition (no pins needed); a spy proving ensure was invoked with 'opportunity'.
+  // Counter-case: an object whose only definition is locked (allowOverride false)
+  // must NOT trigger ensure.
   // (Inject the ensure dependency — give convergeAllMarkers an optional
   // `ensure` parameter defaulting to ensureMarkerFieldExists.)
 });
@@ -1689,7 +1713,7 @@ Algorithm per spec §5.5, in this order:
 1. `objects = await loadAllObjectsWithFields()`. Build `markerBearing` = objects whose active fields include `MARKER_FIELD_NAME`; `formulaObjects` = distinct `targetObject`s of `formulas` (enabled set, passed in).
 2. For each object in the union (markerBearing ∪ formulaObjects): if `Date.now() > deadlineAt` → `truncated = true`, break.
 3. Per object: `pinRows = await loadOverridesForObject(client, objectName)`.
-   - Ensure arm: object NOT marker-bearing, but has ≥1 pin row on an enabled override-allowed formula column → `await ensure(objectName)`; count `ensured`; whatever the result, skip convergence this pass (the catalog is stale for a just-created field; next hour converges).
+   - Ensure arm (amended 2026-09-03): object NOT marker-bearing, but has ≥1 enabled `allowOverride !== false` definition in `formulas` → `await ensure(objectName)`; count `ensured`; whatever the result, skip convergence this pass (the catalog is stale for a just-created field; next hour converges). Do not load pin rows for such an object.
    - Pin arm (only when the object has ≥1 enabled `allowOverride !== false` definition): candidate ids = pin rows whose `targetField` is one of those definitions' columns (ANY active state).
    - Dirty-marker arm (marker-bearing objects, unconditional): one record query `{ filter: { [MARKER_FIELD_NAME]: { is: graphqlEnum('NOT_NULL') } } }` selecting `{ id, [MARKER_FIELD_NAME] }` (paginated, same connection shape as `loadCurrentMarkerValues`) — collect ids AND prime a `currentValues` map from the same response. `graphqlEnum` MUST wrap the value: `FakeClient` accepts a quoted `'NOT_NULL'` string too, but the real server rejects it against the enum type (`dynamic-client.ts:31-35`) — a quoted literal ships green and fails live. Import `graphqlEnum` from the same module `variation-sync.ts:978` and `formula-repository.ts:59` import it from.
    - `convergeMarkersForRecords({ client, objectName, recordIds: union, definitions: formulas, pinRows, currentValues })`.
@@ -1888,7 +1912,7 @@ Adapt the spec into the app's ADR voice (mirror ADR 0028's structure: Context / 
 - [ ] **Step 2: README + index + version**
 
 - `docs/adr/README.md`: add `0031` to the index list, matching the existing line format.
-- `README.md`: add an "Overrides marker" subsection under the overrides feature docs: what the field is, that it appears per object once someone overrides, the reveal-once note (per P2's probe result), the "filter by Overrides not-empty for an audit view" tip, and that the field is app-managed/view-only.
+- `README.md`: add an "Overrides marker" subsection under the overrides feature docs: what the field is, that it appears on an object as soon as its first override-allowed formula is created (blank until something is overridden) and can be positioned like any field (P2: it lands directly in the Fields card, no reveal needed), the "filter by Overrides not-empty for an audit view" tip, and that the field is app-managed/view-only.
 - `package.json`: `"version": "0.6.0"`.
 
 - [ ] **Step 3: Commit**
@@ -1908,7 +1932,7 @@ git commit -m "docs(formula-field): ADR 0031 override marker field; bump to 0.6.
 - [ ] **Step 2: Lint** — `yarn lint` — clean (fix with `yarn lint:fix` where mechanical).
 - [ ] **Step 3: Typecheck** — `npx tsgo -p tsconfig.json --noEmit` (app dir) — clean.
 - [ ] **Step 4: Live checklist** (dev stack + `yarn twenty dev --once`, marker field state from Task 0 cleaned or adopted):
-  1. Create a formula (overrides allowed) on an object; override its value on a record in the table UI → within seconds the record's `Overrides` field shows the formula's label.
+  1. Create a formula (overrides allowed) on an object → within seconds the object gains a blank `Overrides` field in the Fields card (positionable). Override the formula's value on a record in the table UI → within seconds that record's `Overrides` field shows the formula's label.
   2. Toggle the override off in the Formulas tab → marker blanks without waiting for the sweep.
   3. Toggle back on → marker returns.
   4. Tamper: write `fxOverrides` directly via API (playwright page-context mutation, as in Task 0 P3) → reverted on the next event or sweep.

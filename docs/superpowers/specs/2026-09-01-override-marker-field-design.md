@@ -1,6 +1,6 @@
 # Override marker field ("Overrides: Deal Score, Tier")
 
-- Status: Draft v2 (reworked after design review), pending user approval
+- Status: Draft v3 (v2 approved; 2026-09-03 user amendment: the field is created on the object's first override-allowed formula, not on its first pin, so it can be positioned before any override exists)
 - Date: 2026-09-01
 - Target release: formula-field v0.6.0 (new ADR 0031 to be written at implementation)
 - Supersedes: the approved-then-invalidated "override toast" direction (the record-page
@@ -43,7 +43,7 @@ Every operation pays rent; here is the ledger. The event-lane gate (§5.2) is
 
 | Operation | Frequency | Cost |
 |---|---|---|
-| Field creation | Once ever per object, on first pin creation | 1 uncached field lookup + 1 `createOneField` |
+| Field creation | Once ever per object, when its first override-allowed definition is created | 1 uncached field lookup + 1 `createOneField` |
 | Event lane marker step | Only when this invocation actually upserted a pin, or `updatedFields` contains the marker | +1 `loadActiveOverridesForRecord` query; current marker value from the event `after` payload (`null` → blank; an absent key falls back to a fetch — cold path, §5.2); write only on diff |
 | App echo events (value-field writes) | Every recompute write | Zero marginal cost: no pin upsert happens and `updatedFields` lacks the marker → step skipped by the gate, regardless of inherited actor |
 | Marker-write echo | One per marker write | The refired event has `updatedFields = [marker]` → one pin query, converged compare, no write. Terminates via the diff guard (§6) |
@@ -52,7 +52,7 @@ Every operation pays rent; here is the ledger. The event-lane gate (§5.2) is
 | Hourly sweep backstop, pin arm | Per object with ≥1 override-allowed enabled definition | 1 object-scoped pin query + batched reads over its candidates; writes only on diffs; own budget slice (§5.5) |
 | Hourly sweep backstop, dirty-marker arm | Per marker-bearing object, unconditionally (this arm is the staleness repair — gating it on definitions is what §5.5 step 1 forbids) | 1 `NOT_NULL`-filtered record query, empty on converged objects; batched reads + diff writes otherwise |
 | Marker-field cleanup (sweep) | Hourly | Rides the shared 60s-cached `loadAllObjectsWithFields` catalog the sweep's consumers already use; zero record I/O when nothing to clean |
-| Steady state, no overrides anywhere | — | No field created; event lane pays only the gate check (in-memory); no marker fields exist, so both sweep arms have nothing to run against |
+| Steady state, no overrides anywhere | — | Marker fields exist only on objects with override-allowed formulas and stay blank; event lane pays only the gate check (in-memory); the dirty-marker arm's NOT_NULL query returns empty |
 
 Rejected on cost grounds: computing the marker inside `recomputeAllRecords`'s
 per-record loop (would need a per-record pin query the loop currently avoids via one
@@ -61,7 +61,8 @@ per-record loop (would need a per-record pin query the loop currently avoids via
 ## 3. Field contract
 
 - API name `fxOverrides`, label `Overrides`, type TEXT, one per target object,
-  created lazily on the first pin creation for that object (§5.1).
+  created when the object's first override-allowed definition is created (§5.1), so
+  the user can position it in the Fields card before any override exists.
 - `isUIEditable: false` **at creation** — confirmed one-shot: `updateOneField`
   whitelist-drops the flag (ADR 0028), so it must be set in the `createOneField` input,
   same as the app's other system-managed fields.
@@ -131,15 +132,21 @@ Marker writes always follow compute-expected → compare (`valuesEqual('TEXT', �
 the §6 normalization) → write only on diff, and run under the app token (server lanes)
 or after an explicit user action (widget lane).
 
-### 5.1 Field creation (server-side, lazy)
+### 5.1 Field creation (server-side, on first override-allowed definition)
 
 `upsertOverride` currently returns `Promise<void>`; this work changes it to report
-whether it created, updated, or no-opped — the same signal also drives the §5.2 gate.
-On a **created** pin in `handle-record-update.ts`: if the 60s-cached catalog lacks
-`fxOverrides` on the object, re-check uncached (`findFields` pattern — mutations need
-live state), then `createOneField` under the app token. Failure is logged and
-non-fatal; the sweep retries the ensure hourly for any object that has pin rows but no
-marker field.
+whether it created, updated, or no-opped — that signal drives the §5.2 gate.
+Field creation itself hooks the definition **creation** path: `handleFormulaChange`
+runs for `formulaDefinition.created` with `updatedFields === undefined`; when that
+holds and `after.allowOverride !== false` and `after.targetObject` is set, it calls the
+ensure helper before validation — uncached `findFields` lookup (mutations need live
+state), then `createOneField` under the app token. Locked definitions do not create
+the field (they can never carry a pin; ADR 0028 makes the lock create-time-only).
+Failure is non-fatal; the sweep retries the ensure hourly for any object that has ≥1
+enabled override-allowed definition but no marker field, which also migrates
+workspaces whose definitions predate this release. Rationale (user, 2026-09-03):
+the field must exist before the first override so it can be positioned in the Fields
+card up front.
 
 Authority: app-token **metadata mutation is precedented** — `fx-status-cleanup.ts`
 runs `updateOneField` and `deleteOneField` under the app token from the sweep, and the
@@ -182,7 +189,9 @@ When it runs:
   scalar the engine lane already trusts `after` for), so the fetch is a defensive
   cold path, not a per-event cost. Marker field missing from the catalog → skip the
   step (creation lags by design).
-- Diff → single write via `flushBatchedWrites` (importable here, no cycle).
+- Diff → single write via `flushBatchedWrites` (importable here, no cycle). The event
+  lane never creates the field: a missing field means creation lags (or the object
+  only has locked definitions) and the step simply skips.
 
 Tamper self-heal: a direct API edit of `fxOverrides` lands in the second gate arm and
 is reverted to the computed string.
@@ -248,15 +257,16 @@ truncated pass completes over successive sweeps. Grouped per object (not per
 definition):
 
 1. The pass runs for **every object that has a marker field** (from the shared cached
-   catalog), plus objects with pin rows but no marker field (ensure step). The *pin*
+   catalog), plus objects with enabled override-allowed definitions but no marker
+   field (ensure step). The *pin*
    arm below is additionally gated on the object having ≥1 override-allowed enabled
    definition; the *dirty-marker* arm is never gated on definitions — its whole job is
    finding records whose marker outlived its cause, including the case where the
    object's last enabled definition was disabled or trashed and the expected marker is
    now blank for everyone. (Gating the whole pass on enabled definitions would make
    exactly those markers permanently unrepairable.)
-2. Ensure step: object has pin rows on formula columns but no marker field → retry
-   §5.1's creation.
+2. Ensure step: object has ≥1 enabled override-allowed definition but no marker
+   field → retry §5.1's creation (covers failed creates and pre-release definitions).
 3. Candidate records = ids from an object-scoped pin query (`{ targetObject: { eq } }`
    on formula target fields, **any** `active` state — deactivated rows persist and
    mark records that lost their last active pin) ∪ ids from a dirty-marker record
