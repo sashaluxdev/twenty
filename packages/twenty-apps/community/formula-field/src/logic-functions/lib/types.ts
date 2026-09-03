@@ -47,6 +47,9 @@ export type FormulaDefinitionRecord = {
   // overrides never honored. Immutable after creation; null (legacy rows and
   // unwidened selections) must read as true (`?? true`) everywhere.
   allowOverride?: boolean | null;
+  // Display position in the record-page Formulas tab; drives the marker's
+  // deterministic label order (spec §4 step 4).
+  order?: number | null;
   lastValue?: number | null;
   // Mirror heartbeat (design 2026-07-06): JSON-stringified, 500-char-truncated
   // last mirrored raw value. Every non-numeric outcome (a mirror passthrough or
