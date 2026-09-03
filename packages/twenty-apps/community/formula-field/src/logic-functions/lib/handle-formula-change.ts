@@ -1,10 +1,12 @@
 import { extractDependencies } from 'src/engine';
 import { deepJsonEqual } from 'src/logic-functions/lib/deep-equal';
+import { ensureMarkerFieldExists } from 'src/logic-functions/lib/ensure-marker-field';
 import {
   loadAllEnabledFormulas,
   updateFormulaBookkeeping,
 } from 'src/logic-functions/lib/formula-repository';
 import { refreshFormulaStatuses } from 'src/logic-functions/lib/formula-status';
+import { convergeMarkersForColumn } from 'src/logic-functions/lib/marker-converge';
 import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
 import { recomputeAllRecords } from 'src/logic-functions/lib/recompute';
 import { validateFormula } from 'src/logic-functions/lib/save-validation';
@@ -103,6 +105,20 @@ export type HandleFormulaChangeArgs = {
   updatedFields: string[] | undefined;
   // The update event's `before` row image. Absent on a create.
   before?: FormulaDefinitionRecord | null;
+  // Injectable so a unit test can observe the creation-lane ensure without a
+  // real metadata client. Production callers pass nothing.
+  ensureMarkerField?: typeof ensureMarkerFieldExists;
+};
+
+// Marker work is best-effort (spec §5): it must never change what the handler
+// returns, so a metadata or read failure is swallowed here and left to the
+// hourly sweep to reconverge.
+const runMarkerStep = async (step: () => Promise<unknown>): Promise<void> => {
+  try {
+    await step();
+  } catch {
+    // The sweep reconverges.
+  }
 };
 
 // Save-time validation (ADR 0005). Runs after a FormulaDefinition is created or
@@ -115,9 +131,24 @@ export const handleFormulaChange = async ({
   after,
   updatedFields,
   before,
+  ensureMarkerField = ensureMarkerFieldExists,
 }: HandleFormulaChangeArgs): Promise<Record<string, unknown>> => {
   if (!after?.id) {
     return { handled: false };
+  }
+
+  // Overrides marker field is created with the object's first override-allowed
+  // definition (spec §5.1) so it can be positioned before any pin exists.
+  // Creation events arrive with updatedFields === undefined. Best-effort: the
+  // sweep's ensure arm retries hourly. Runs above every early return a creation
+  // can hit (a locked-target draft, a disabled create).
+  if (
+    updatedFields === undefined &&
+    after.allowOverride !== false &&
+    after.targetObject
+  ) {
+    const { targetObject } = after;
+    await runMarkerStep(() => ensureMarkerField(targetObject));
   }
 
   const changedFields = resolveChangedFields(updatedFields, before, after);
@@ -125,6 +156,23 @@ export const handleFormulaChange = async ({
   // Recursion guard: ignore our own bookkeeping writes.
   if (isPureBookkeepingUpdate(changedFields)) {
     return { handled: false, reason: 'bookkeeping-only' };
+  }
+
+  // Overrides marker: a definition leaving the enabled set must drop its label
+  // from markers (spec §5.4). Runs above the disabled-bookkeeping recursion
+  // guard deliberately — a plain human disable returns there and would never
+  // reach a later hook. The includes('enabled') gate keeps pure bookkeeping
+  // writes (which that guard exists to absorb) from paying for this.
+  if (
+    after.enabled === false &&
+    changedFields?.includes('enabled') &&
+    after.targetObject &&
+    after.targetField
+  ) {
+    const { targetObject, targetField } = after;
+    await runMarkerStep(() =>
+      convergeMarkersForColumn(client, targetObject, targetField),
+    );
   }
 
   // Second recursion guard: our own "disable on cycle" write sets
