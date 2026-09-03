@@ -36,6 +36,8 @@ import {
   type TargetSelectOptions,
 } from 'src/logic-functions/lib/kind-inference';
 import { targetFieldOptions } from 'src/logic-functions/lib/metadata-objects';
+import { convergeMarkerAfterEvent } from 'src/logic-functions/lib/marker-converge';
+import { MARKER_FIELD_NAME } from 'src/logic-functions/lib/override-marker';
 import {
   findCyclicTargets,
   isCyclicTarget,
@@ -318,6 +320,11 @@ export const handleRecordUpdate = async ({
     }
   }
 
+  // Whether THIS invocation actually moved pin state — the marker step's gate.
+  // A 'noop' upsert means the row was already exactly so, which cannot have
+  // changed the marker, so it must not re-trigger the step (the echo cut-off).
+  let pinChanged = false;
+
   // Manual override detection (#2). A value field changed on this record. We
   // must tell a genuine human edit apart from the app's OWN recompute write —
   // and the actor alone is not enough, because a recompute triggered by a user's
@@ -389,13 +396,14 @@ export const handleRecordUpdate = async ({
 
         // A human pinned a value that differs from the source: store its raw
         // value as JSON text (overrideValueText); overrideValue stays null.
-        await upsertOverride(
+        const mirrorUpsertResult = await upsertOverride(
           client,
           objectName,
           field,
           recordId,
           overrideSlotForKind('raw', currentRaw),
         );
+        pinChanged = pinChanged || mirrorUpsertResult !== 'noop';
         continue;
       }
 
@@ -453,13 +461,14 @@ export const handleRecordUpdate = async ({
       // the app's own recompute, not a human pin.
       if (storedValuesEqual(targetKind, computedStored, currentStored)) continue;
 
-      await upsertOverride(
+      const upsertResult = await upsertOverride(
         client,
         objectName,
         field,
         recordId,
         overrideSlotForKind(targetKind, currentStored),
       );
+      pinChanged = pinChanged || upsertResult !== 'noop';
     }
   }
 
@@ -573,6 +582,25 @@ export const handleRecordUpdate = async ({
       )
     ) {
       outcomes.push(...(await recomputeAllRecords(client, formula)));
+    }
+  }
+
+  // Overrides marker (spec §5.2). Gate: pin state changed in THIS invocation,
+  // or the marker itself was edited (tamper, or our own write's echo). Never
+  // actor-based — app writes inherit the actor (ADR 0006).
+  const markerTouched = updatedFields?.includes(MARKER_FIELD_NAME) ?? false;
+  if (pinChanged || markerTouched) {
+    try {
+      await convergeMarkerAfterEvent({
+        client,
+        objectName,
+        recordId,
+        definitions: formulas,
+        after,
+      });
+    } catch {
+      // Best-effort: the marker must never fail the record handler; the
+      // hourly sweep is its convergence backstop.
     }
   }
 

@@ -6,6 +6,7 @@ import {
   MARKER_FIELD_NAME,
 } from 'src/logic-functions/lib/override-marker';
 import {
+  loadActiveOverrideFieldsForRecord,
   loadOverridesForObject,
   type OverrideRecord,
 } from 'src/logic-functions/lib/override-repository';
@@ -153,4 +154,48 @@ export const convergeMarkersForColumn = async (
     // column's — hence objectPins, filtered only for the candidate ids.
   });
   return { written, records: new Set(columnRecordIds).size };
+};
+
+// Single-record convergence for the record-update event lane (spec §5.2). The
+// caller gates this on real pin-state change or a touched marker field, so
+// reaching here already means the marker plausibly moved.
+export const convergeMarkerAfterEvent = async ({
+  client,
+  objectName,
+  recordId,
+  definitions,
+  after,
+}: {
+  client: FormulaClient;
+  objectName: string;
+  recordId: string;
+  definitions: FormulaDefinitionRecord[];
+  after: Record<string, unknown> | null | undefined;
+}): Promise<void> => {
+  // The field is created on definition creation (spec §5.1); a missing field
+  // here means creation lags or the object only has locked definitions — skip
+  // before spending any further query.
+  if (!(await markerFieldExistsOnObject(objectName))) return;
+
+  const pinnedFields = await loadActiveOverrideFieldsForRecord(
+    client,
+    objectName,
+    recordId,
+  );
+  const expected = computeMarkerValue(objectName, definitions, pinnedFields);
+
+  // An absent payload key is UNKNOWN, never assumed blank — assuming blank
+  // inverts the F3 loop in the non-blank cell (spec §5.2).
+  const current =
+    after !== null && after !== undefined && MARKER_FIELD_NAME in after
+      ? ((after[MARKER_FIELD_NAME] as string | null | undefined) ?? null)
+      : ((await loadCurrentMarkerValues(client, objectName, [recordId])).get(
+          recordId,
+        ) ?? null);
+
+  if (!textValuesConverged(expected, current)) {
+    await flushBatchedWrites(client, objectName, [
+      { recordId, data: { [MARKER_FIELD_NAME]: expected } },
+    ]);
+  }
 };
