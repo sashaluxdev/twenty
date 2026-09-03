@@ -35,3 +35,5 @@ is maintainable without re-deriving the reasoning.
 | [0027](0027-strict-kind-typing.md) | Strict kind typing — static save-time gate, kind-aware runtime resolution | Implemented |
 | [0028](0028-create-time-override-lock.md) | Create-time override lock | Implemented |
 | [0029](0029-select-output.md) | SELECT output — engine lane and the option-membership gate | Implemented |
+| [0030](0030-blank-text-convergence.md) | Blank-TEXT convergence — equality-side widening, not read-side folding | Implemented |
+| [0031](0031-override-marker-field.md) | Override marker field | Implemented |

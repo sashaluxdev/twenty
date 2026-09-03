@@ -70,6 +70,17 @@ through a front component on the record page.
   regardless of whether the formula is enabled yet. The choice is
   **permanent** — the platform only accepts `isUIEditable` at field creation —
   so the wizard warns before you make it (ADR 0028).
+- **Overrides marker**: a per-object, view-only `Overrides` TEXT field
+  (`fxOverrides`) that lists the labels of the formula fields currently
+  overridden on a record (e.g. "Deal Score, Tier"), blank when none. It
+  appears on an object as soon as the object's first override-allowed
+  formula is created, blank until something is actually overridden, and it
+  lands directly in the record page's Fields card with no reveal step
+  needed. From there you can position it, add it as a list-view column, or
+  filter on it like any TEXT field; filtering for "Overrides is not empty"
+  gives a free audit view of every record with an active override. The field
+  is entirely app-managed: it is not editable through the UI and should not
+  be written to directly (ADR 0031).
 - **Operational status + status snackbar** — when an input field is
   deactivated/missing a formula goes OFFLINE; downstream formulas go UPSTREAM.
   The record-page Formulas widget fires a toast on mount and on every status
