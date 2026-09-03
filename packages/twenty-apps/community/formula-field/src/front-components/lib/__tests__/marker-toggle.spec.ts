@@ -66,6 +66,30 @@ describe('writeMarkerAfterToggle', () => {
     });
   });
 
+  it("writes '' when the last override is toggled off and the stored marker is stale ('written')", async () => {
+    // The lane's motivating scenario: a non-empty stored marker must be
+    // cleared explicitly — it does not converge with "no overrides" the way
+    // a NULL marker does (see the 'converged' case below).
+    const client = clientReadingMarker('Discount');
+
+    const outcome = await writeMarkerAfterToggle({
+      client,
+      objectName: 'opportunity',
+      recordId: RECORD_ID,
+      definitions: [definitionRow({ id: 'definition-1', name: 'Discount' })],
+      activeOverrideFields: new Set<string>(),
+    });
+
+    expect(outcome).toBe('written');
+    expect(client.mutation).toHaveBeenCalledTimes(1);
+    expect(client.mutation).toHaveBeenCalledWith({
+      updateOpportunity: {
+        __args: { id: RECORD_ID, data: { fxOverrides: '' } },
+        id: true,
+      },
+    });
+  });
+
   it("does not mutate when converged, blank-vs-null included ('converged')", async () => {
     const alreadyMarked = clientReadingMarker('Discount');
 

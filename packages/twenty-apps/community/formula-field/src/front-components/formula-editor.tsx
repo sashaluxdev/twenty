@@ -147,10 +147,12 @@ const isMirrorRow = (definition: {
 const OverrideToggle = ({
   on,
   busy,
+  disabled,
   onChange,
 }: {
   on: boolean;
   busy: boolean;
+  disabled: boolean;
   onChange: (next: boolean) => void;
 }) => (
   <div style={layout.toggleWrap}>
@@ -159,7 +161,7 @@ const OverrideToggle = ({
       type="button"
       role="switch"
       aria-checked={on}
-      disabled={busy}
+      disabled={disabled}
       on={on}
       onClick={() => onChange(!on)}
       style={{ opacity: busy ? 0.6 : 1 }}
@@ -1073,6 +1075,10 @@ const FormulaEditor = () => {
               <OverrideToggle
                 on={isOverridden}
                 busy={rowBusy}
+                // Gate every row while ANY toggle is in flight: two concurrent
+                // toggles would race on the shared marker write (last writer
+                // wins and can drop the other row's pin from the marker).
+                disabled={busy !== null}
                 onChange={(next) => toggleOverride(definition, next)}
               />
               {isOverridden ? (
