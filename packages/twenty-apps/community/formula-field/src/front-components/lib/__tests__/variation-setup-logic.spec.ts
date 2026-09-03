@@ -191,6 +191,19 @@ describe('countSyncableFields', () => {
 
     expect(result).toBe(1);
   });
+
+  it('excludes the fxOverrides marker from the syncable count', () => {
+    const object = buildTargetObject({
+      fields: [
+        { id: 'a', name: 'notes', type: 'TEXT', isActive: true, isSystem: false },
+        { id: 'b', name: 'fxOverrides', type: 'TEXT', isActive: true, isSystem: false },
+      ],
+    });
+
+    const result = countSyncableFields(object, 'primaryLink');
+
+    expect(result).toBe(1);
+  });
 });
 
 describe('eligibleTargetObjects', () => {

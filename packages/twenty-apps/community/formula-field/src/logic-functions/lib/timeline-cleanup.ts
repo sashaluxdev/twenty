@@ -1,5 +1,6 @@
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
 import { companionFieldName } from 'src/logic-functions/lib/fx-status-field';
+import { MARKER_FIELD_NAME } from 'src/logic-functions/lib/override-marker';
 import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 import { loadAllEnabledVariationConfigs } from 'src/logic-functions/lib/variation-config-repository';
@@ -177,6 +178,10 @@ const loadFormulaManagedByObject = async (
     const fields = managedByObject.get(targetObject) ?? new Set<string>();
     fields.add(targetField);
     fields.add(companionFieldName(targetField));
+    // Any object with at least one definition gets its own Overrides marker
+    // field (spec §3); register it here so the same classifier treats it as
+    // app-managed. Definition-less objects are out of scope (residue note).
+    fields.add(MARKER_FIELD_NAME);
     managedByObject.set(targetObject, fields);
   }
   // A draft definition (empty targetObject/targetField, skipped above) still

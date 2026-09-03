@@ -4,6 +4,7 @@ import {
   ENGINE_FAMILY_KINDS,
   MIRRORABLE_KINDS,
 } from 'src/logic-functions/lib/mirror-kinds';
+import { MARKER_FIELD_NAME } from 'src/logic-functions/lib/override-marker';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
 
 // Variation sync's field allowlist: every kind the mirror engine already knows
@@ -63,6 +64,8 @@ export const computeSyncableFields = async (
     .filter((field) => field.id !== object.labelIdentifierFieldMetadataId)
     .filter((field) => field.name !== relationFieldName)
     .filter((field) => !formulaTargetFields.has(field.name))
+    // The app's own Overrides marker must never sync onto variations (spec §3).
+    .filter((field) => field.name !== MARKER_FIELD_NAME)
     .filter((field) => !field.isUnique)
     .flatMap((field) => {
       // MANY_TO_ONE relations mirror via their FK join column: the server

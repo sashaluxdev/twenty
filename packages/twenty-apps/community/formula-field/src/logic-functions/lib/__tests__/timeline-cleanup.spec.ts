@@ -97,6 +97,25 @@ describe('cleanupFormulaTimelineNoise', () => {
     expect(client.get('timelineActivity', 't1')).toBeUndefined();
   });
 
+  it('classifies the fxOverrides key as formula-managed for objects with definitions', async () => {
+    seedDefinition(client, { targetObject: 'opportunity', targetField: 'dealScore' });
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        name: 'opportunity.updated',
+        properties: { diff: { fxOverrides: { before: null, after: 'Deal Score' } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.deleted).toBe(1);
+    expect(counts.kept).toBe(0);
+    expect(counts.stripped).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeUndefined();
+  });
+
   it('keeps a row whose diff contains only human fields', async () => {
     seedDefinition(client);
     client.seed('timelineActivity', [

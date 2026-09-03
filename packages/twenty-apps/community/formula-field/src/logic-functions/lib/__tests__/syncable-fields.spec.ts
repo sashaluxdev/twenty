@@ -220,4 +220,25 @@ describe('computeSyncableFields', () => {
     expect(fields.map((field) => field.name)).not.toContain('lockedTotal');
     expect(fields.map((field) => field.name)).toContain('employees');
   });
+
+  it('never treats the fxOverrides marker as syncable', async () => {
+    const client = new FakeClient();
+    client.setObjectsWithFields([
+      {
+        id: 'obj-opportunity',
+        nameSingular: 'opportunity',
+        labelIdentifierFieldMetadataId: 'field-name',
+        fields: [
+          { id: 'field-name', name: 'name', type: 'TEXT', isActive: true, isSystem: false },
+          { id: 'field-notes', name: 'notes', type: 'TEXT', isActive: true, isSystem: false },
+          { id: 'field-fx-overrides', name: 'fxOverrides', type: 'TEXT', isActive: true, isSystem: false },
+        ],
+      },
+    ]);
+
+    const fields = await computeSyncableFields(client, 'opportunity', 'primaryLink');
+
+    expect(fields.map((field) => field.name)).toContain('notes');
+    expect(fields.map((field) => field.name)).not.toContain('fxOverrides');
+  });
 });

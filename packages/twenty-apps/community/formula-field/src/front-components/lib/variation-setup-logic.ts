@@ -3,6 +3,7 @@ import {
   ENGINE_FAMILY_KINDS,
   MIRRORABLE_KINDS,
 } from 'src/logic-functions/lib/mirror-kinds';
+import { MARKER_FIELD_NAME } from 'src/logic-functions/lib/override-marker';
 
 // Wizard's pure validation/eligibility core (design 2026-07-07, Plan 2 Task 5).
 // No metadata calls here — the UI layer loads objects/fields and hands them in,
@@ -126,6 +127,8 @@ export const countSyncableFields = (
     .filter((field) => field.id !== object.labelIdentifierFieldMetadataId)
     .filter((field) => field.name !== relationFieldName)
     .filter((field) => field.name !== INVERSE_FIELD_NAME)
+    // The app's own Overrides marker must never sync onto variations (spec §3).
+    .filter((field) => field.name !== MARKER_FIELD_NAME)
     .filter((field) => SYNCABLE_KINDS.has(field.type))
     // A unique value can never be legitimately mirrored onto a second record
     // (it would collide with the primary's own value), and the server's
