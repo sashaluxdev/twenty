@@ -43,7 +43,7 @@ Every operation pays rent; here is the ledger. The event-lane gate (§5.2) is
 
 | Operation | Frequency | Cost |
 |---|---|---|
-| Field creation | Once ever per object, when its first override-allowed definition is created | 1 uncached field lookup + 1 `createOneField` |
+| Field creation (ensure) | On a definition creation that already carries a target object, and on an update whose diff touches `targetObject` or `allowOverride` while the definition is override-allowed with a target. Human-paced: the wizard's real path is one name-only draft creation (skipped — no target) plus one target-setting update | 1 uncached field lookup (the full metadata pull) + 1 `createOneField` when the field is absent. Gating the update arm on those two field names, rather than on "any update", is what keeps expression edits and row-image fallbacks from paying that pull |
 | Event lane marker step | Only when this invocation actually upserted a pin, or `updatedFields` contains the marker | +1 `loadActiveOverridesForRecord` query; current marker value from the event `after` payload (`null` → blank; an absent key falls back to a fetch — cold path, §5.2); write only on diff |
 | App echo events (value-field writes) | Every recompute write | Zero marginal cost: no pin upsert happens and `updatedFields` lacks the marker → step skipped by the gate, regardless of inherited actor |
 | Marker-write echo | One per marker write | The refired event has `updatedFields = [marker]` → one pin query, converged compare, no write. Terminates via the diff guard (§6) |
@@ -51,7 +51,7 @@ Every operation pays rent; here is the ledger. The event-lane gate (§5.2) is
 | Definition disable / trash / destroy | Per event | Pin enumeration for that column (paginated — a fix this work adds, §5.4) + marker convergence for exactly those records |
 | Hourly sweep backstop, pin arm | Per object with ≥1 override-allowed enabled definition | 1 object-scoped pin query + batched reads over its candidates; writes only on diffs; own budget slice (§5.5) |
 | Hourly sweep backstop, dirty-marker arm | Per marker-bearing object, unconditionally (this arm is the staleness repair — gating it on definitions is what §5.5 step 1 forbids) | 1 `NOT_NULL`-filtered record query, empty on converged objects; batched reads + diff writes otherwise |
-| Marker-field cleanup (sweep) | Hourly | Rides the shared 60s-cached `loadAllObjectsWithFields` catalog the sweep's consumers already use; zero record I/O when nothing to clean |
+| Marker-field cleanup (sweep) | Hourly, per marker-bearing object with no enabled definitions | The has-a-field verdict rides the shared 60s-cached `loadAllObjectsWithFields` catalog, but reaching the arm costs a `hasLiveDefinition` `first: 1` probe plus a paginated `loadTrashedFormulas`, and the delete itself an uncached `findFields`: ~1 query/hour for an object whose definitions are merely all disabled, 3+/hour for a definition-less one until the delete lands. An object that still has an enabled definition never reaches the arm (zero record I/O) |
 | Steady state, no overrides anywhere | — | Marker fields exist only on objects with override-allowed formulas and stay blank; event lane pays only the gate check (in-memory); the dirty-marker arm's NOT_NULL query returns empty |
 
 Rejected on cost grounds: computing the marker inside `recomputeAllRecords`'s
@@ -61,8 +61,10 @@ per-record loop (would need a per-record pin query the loop currently avoids via
 ## 3. Field contract
 
 - API name `fxOverrides`, label `Overrides`, type TEXT, one per target object,
-  created when the object's first override-allowed definition is created (§5.1), so
-  the user can position it in the Fields card before any override exists.
+  created when a definition first becomes override-allowed with a target object
+  (§5.1 — creation or a later update, since the wizard sets the target after the
+  draft exists), so the user can position it in the Fields card before any override
+  exists.
 - `isUIEditable: false` **at creation** — confirmed one-shot: `updateOneField`
   whitelist-drops the flag (ADR 0028), so it must be set in the `createOneField` input,
   same as the app's other system-managed fields.
@@ -90,6 +92,18 @@ per-record loop (would need a per-record pin query the loop currently avoids via
   objects that still have definitions, so the final blank-out writes on an object whose
   definitions were all destroyed leave one transient timeline row per record until
   §5.5 step 5 deletes the field — self-limiting, not worth machinery.
+  **Scope of the strip (corrected after the live run):** all of the above applies only
+  to rows the app authored. `cleanupFormulaTimelineNoise` filters its candidates on
+  `workspaceMemberId: { is: NULL }`, so a human-authored row is never fetched and never
+  rewritten — deliberately, since the app must not edit a person's own timeline entry.
+  When a marker write lands close enough to a human edit of the same record, the
+  platform coalesces both into the human's single row, which then carries that human's
+  `workspaceMemberId`; the `fxOverrides` key stays in that row's diff permanently. The
+  live run observed exactly this (one row, diff
+  `{formulaTest: 4→99, fxOverrides: ""→"Formula Test"}`, `createdBySource MANUAL`,
+  untouched by the 10-minute cron). This is a cosmetic co-tenancy in a row the user
+  already expects to describe their own edit, not a leak of app noise: the marker key
+  is only ever there because a human's own edit created the override it names.
 - The field is derived state, never user-authored — safe to delete or rewrite wholesale.
 
 ## 4. Value semantics
@@ -132,16 +146,23 @@ Marker writes always follow compute-expected → compare (`valuesEqual('TEXT', �
 the §6 normalization) → write only on diff, and run under the app token (server lanes)
 or after an explicit user action (widget lane).
 
-### 5.1 Field creation (server-side, on first override-allowed definition)
+### 5.1 Field creation (server-side, on the transition to override-allowed with a target)
 
 `upsertOverride` currently returns `Promise<void>`; this work changes it to report
 whether it created, updated, or no-opped — that signal drives the §5.2 gate.
-Field creation itself hooks the definition **creation** path: `handleFormulaChange`
-runs for `formulaDefinition.created` with `updatedFields === undefined`; when that
-holds and `after.allowOverride !== false` and `after.targetObject` is set, it calls the
-ensure helper before validation — uncached `findFields` lookup (mutations need live
-state), then `createOneField` under the app token. Locked definitions do not create
-the field (they can never carry a pin; ADR 0028 makes the lock create-time-only).
+Field creation itself hooks `handleFormulaChange` above every early return, and fires
+when `after.allowOverride !== false` and `after.targetObject` is set **and** the event
+is either the definition's creation (`resolveChangedFields` returns `undefined`, which
+happens exactly when there is neither an `updatedFields` list nor a `before` image) or
+an update whose changed fields include `targetObject` or `allowOverride`. It then calls
+the ensure helper before validation — uncached `findFields` lookup (mutations need live
+state), then `createOneField` under the app token. The update arm is not defensive
+breadth: it is the only arm the product's own wizard reaches, since the wizard's first
+write is a name-only draft with no `targetObject` and the target arrives in a later
+update, so a creation-only gate never fired on the real user path and the field showed
+up only on the next hourly sweep, up to an hour late (found by the live checklist run,
+2026-09-03; ruling R10). Locked definitions do not create the field (they can never
+carry a pin; ADR 0028 makes the lock create-time-only).
 Failure is non-fatal; the sweep retries the ensure hourly for any object that has ≥1
 enabled override-allowed definition but no marker field, which also migrates
 workspaces whose definitions predate this release. Rationale (user, 2026-09-03):
@@ -252,9 +273,19 @@ pin event.
 New pass after `cleanupCompanionFields`, **before** the per-definition recompute loop,
 with its own deadline slice (~15s of `SWEEP_BUDGET_MS`) so the recompute loop — which
 is allowed to consume the whole remaining budget — cannot starve it, and vice versa.
-Best-effort, no cursor: the candidate set shrinks to zero as markers converge, so a
-truncated pass completes over successive sweeps. Grouped per object (not per
-definition):
+Best-effort and cursorless, but deliberately **not** order-fixed: what converges as
+markers settle is the *write* set, not the time cost — a fully converged
+marker-bearing object still pays its pin query and its `NOT_NULL` dirty scan every
+hour — so a fixed iteration order would truncate at the same object every pass and
+starve every object after it forever, and the pin/dirty arms are the only repair path
+for a record whose marker outlived its cause. The pass therefore rotates its start
+offset over a stably sorted object list by an **epoch-hour counter**
+(`Math.floor(now() / 3_600_000) % objectCount`), which advances every pass whatever
+the object count, so every object reaches the head of the list within N passes for any
+N, with no cursor to store, corrupt or reset. An hour-of-day offset was rejected in
+review: it takes only 24 values, so any workspace with more objects than 24 plus the
+number covered before the deadline starved its tail just as badly. Grouped per object
+(not per definition):
 
 1. The pass runs for **every object that has a marker field** (from the shared cached
    catalog), plus objects with enabled override-allowed definitions but no marker
@@ -282,7 +313,9 @@ definition):
    per-field try/catch: an object with **zero** definitions in any state (live or
    trashed — enumerated with pagination, not the precedent's unpaginated `first: 200`)
    but a surviving `fxOverrides` field → deactivate, then delete. Field discovery
-   rides the shared 60s-cached catalog.
+   rides the shared 60s-cached catalog, but the arm itself is not free: reaching it
+   costs the `hasLiveDefinition` probe plus the paginated trashed load, and the delete
+   an uncached `findFields` (§2's ledger carries the per-hour numbers).
 
 The pin query needs a new object-scoped loader (`loadOverriddenRecordIds` is
 field-scoped); same pagination pattern.
