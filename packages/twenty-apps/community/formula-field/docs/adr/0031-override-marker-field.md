@@ -266,8 +266,11 @@ Both lanes are additionally gated on `allowOverride !== false`. A locked
 definition can never appear in a marker — `computeMarkerValue` filters it
 out — so converging on its disable or trash is a guaranteed no-op that would
 still spend an object-scoped pin load plus an enabled-definition load. The
-destroy lane keeps no such gate: it converges the records whose pins it
-actually deleted, and a locked definition has none to delete.
+destroy lane keeps no such gate. Its unshared branch converges only the
+records whose pins it actually deleted, and a locked definition has none to
+delete; its shared-column branch still converges the column unconditionally,
+so destroying a locked definition that shares a column pays the two loads
+once. Accepted: destroys are rare and shared locked columns rarer.
 
 Destroy (`handleDefinitionDestroyed`) is where the marker's correctness
 requirements exposed three pre-existing defects in the destroy path, which
