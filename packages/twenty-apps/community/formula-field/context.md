@@ -1091,8 +1091,9 @@ Then:
    Est. 2-4 focused agent-days.
 
 
-README (formula grammar, architecture diagram, limitations, runbook) is now
-written at the app root (`README.md`).
+The full reference (formula grammar, architecture diagram, limitations, runbook)
+lives at `docs/reference.md`; the app root `README.md` is the short About-tab
+overview.
 
 ## How to build / deploy / test (local)
 
