@@ -100,7 +100,7 @@ describe('handleRecordUpdate marker step', () => {
       actorWorkspaceMemberId: 'member-1',
     });
 
-    expect(client.writes).toContain('opportunity:o1:fxOverrides=""');
+    expect(markerWrites()).toEqual(['opportunity:o1:fxOverrides=""']);
   });
 
   it('marker-write echo terminates: second invocation converges with zero writes', async () => {

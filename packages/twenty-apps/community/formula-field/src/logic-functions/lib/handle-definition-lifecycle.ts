@@ -116,8 +116,14 @@ export const handleDefinitionDeleted = async (
 
   // The trashed definition has left the enabled set, so its label must leave
   // every marker it appears in (spec §5.4). The pins stay: a restore brings the
-  // overrides — and their labels — back.
-  if (before.targetObject && before.targetField) {
+  // overrides — and their labels — back. A locked definition is skipped:
+  // computeMarkerValue can never have included it, so converging would spend two
+  // loads on a certain no-op.
+  if (
+    before.allowOverride !== false &&
+    before.targetObject &&
+    before.targetField
+  ) {
     const { targetObject, targetField } = before;
     await runMarkerStep(() =>
       convergeMarkersForColumn(client, targetObject, targetField),

@@ -94,10 +94,13 @@ const metadataStub = () => {
 
 const neverEnsure = vi.fn(async () => 'exists' as const);
 
-// 2026-09-03T01:00:00Z — UTC hour 1, so the rotation offset over two objects is
-// 1 and the pass starts at the SECOND object of the sorted list.
-const HOUR_ONE = Date.UTC(2026, 8, 3, 1, 0, 0);
-const HOUR_ZERO = Date.UTC(2026, 8, 3, 0, 0, 0);
+// The rotation offset is an epoch-hour counter, so these two clocks are pinned
+// as consecutive counter values: 496_776 (= 2026-09-03T00:00:00Z, even, so the
+// offset over two objects is 0 and the pass starts at the FIRST object of the
+// sorted list) and 496_777 (odd -> offset 1 -> starts at the SECOND).
+const EPOCH_HOUR_MS = 3_600_000;
+const HOUR_ZERO = 496_776 * EPOCH_HOUR_MS;
+const HOUR_ONE = HOUR_ZERO + EPOCH_HOUR_MS;
 
 // Clock that advances by `stepMs` on every read, so a test can let the budget
 // expire at a chosen point in the pass. The sweep reads it once for the rotation
@@ -273,7 +276,7 @@ describe('convergeAllMarkers', () => {
     expect(client.queries).toBe(2);
   });
 
-  it('rotates the starting object with the hour of day', async () => {
+  it('rotates the starting object with the epoch hour', async () => {
     __setFakeObjectsWithFieldsForTests([opportunityWithMarker, companyWithMarker]);
     const definitions = [scoreDefinition, tierDefinition];
     const recordQueryOrder = (fake: FakeClient): string[] =>
@@ -288,7 +291,8 @@ describe('convergeAllMarkers', () => {
       ensure: neverEnsure,
       now: () => HOUR_ONE,
     });
-    // Sorted list is ['company', 'opportunity']; offset 1 % 2 starts at the second.
+    // Sorted list is ['company', 'opportunity']; epoch hour 496_777 % 2 = 1
+    // starts at the second, and the next hour's counter flips it back.
     expect(recordQueryOrder(client)).toEqual(['opportunities', 'companies']);
 
     const evenHourClient = new FakeClient();
@@ -308,7 +312,7 @@ describe('convergeAllMarkers', () => {
     client.seed('opportunity', [{ id: 'o1', fxOverrides: 'junk' }]);
     client.seed('company', [{ id: 'c1', fxOverrides: 'junk' }]);
 
-    // Hour 0 -> offset 0 -> 'company' first. Reads: rotation (t0), company's
+    // Epoch hour 496_776 -> offset 0 -> 'company' first. Reads: rotation (t0), company's
     // deadline check (t0+10s, under), opportunity's (t0+20s, over).
     const result = await convergeAllMarkers(client, [scoreDefinition, tierDefinition], {
       deadlineAt: HOUR_ZERO + 15_000,

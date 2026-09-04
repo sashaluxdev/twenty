@@ -90,7 +90,7 @@ describe('handleFormulaChange marker creation lane', () => {
     expect(client.get('opportunity', 'o1')!.dealScore).toBe(2);
   });
 
-  it('skips the ensure for a locked definition and for updates', async () => {
+  it('skips the ensure for a locked definition and for unrelated updates', async () => {
     const locked = scoreDefinition({ id: 'locked', allowOverride: false });
     client.seed('formulaDefinition', [locked]);
     const lockedEnsure = vi.fn(async () => 'created' as const);
@@ -111,11 +111,89 @@ describe('handleFormulaChange marker creation lane', () => {
     await handleFormulaChange({
       client,
       after: updated,
+      before: updated,
       updatedFields: ['expression'],
       ensureMarkerField: updateEnsure,
     });
 
     expect(updateEnsure).not.toHaveBeenCalled();
+  });
+
+  it('skips the ensure on a creation with no target object yet', async () => {
+    // The wizard's first write: a name-only draft. Nothing to ensure a field on.
+    const draft = scoreDefinition({
+      id: 'draft',
+      targetObject: null,
+      targetField: null,
+    });
+    client.seed('formulaDefinition', [draft]);
+    const ensureMarkerField = vi.fn(async () => 'created' as const);
+
+    const result = await handleFormulaChange({
+      client,
+      after: draft,
+      updatedFields: undefined,
+      ensureMarkerField,
+    });
+
+    expect(ensureMarkerField).not.toHaveBeenCalled();
+    expect(result.reason).toBe('no-target-field');
+  });
+
+  it('ensures when a later update sets the target object on a draft (R10)', async () => {
+    // The real wizard path: the draft is created with a name only, and
+    // targetObject arrives as an update. Keying the ensure on creation alone
+    // meant the field only ever appeared via the hourly sweep.
+    const draft = scoreDefinition({
+      id: 'draft',
+      targetField: null,
+    });
+    client.seed('formulaDefinition', [draft]);
+    const ensureMarkerField = vi.fn(async () => 'created' as const);
+
+    await handleFormulaChange({
+      client,
+      after: draft,
+      before: scoreDefinition({ id: 'draft', targetObject: null, targetField: null }),
+      updatedFields: ['targetObject'],
+      ensureMarkerField,
+    });
+
+    expect(ensureMarkerField).toHaveBeenCalledTimes(1);
+    expect(ensureMarkerField).toHaveBeenCalledWith('opportunity');
+  });
+
+  it('ensures when allowOverride is flipped on for an already-targeted definition', async () => {
+    const definition = scoreDefinition({ id: 'unlocked' });
+    client.seed('formulaDefinition', [definition]);
+    const ensureMarkerField = vi.fn(async () => 'created' as const);
+
+    await handleFormulaChange({
+      client,
+      after: definition,
+      before: scoreDefinition({ id: 'unlocked', allowOverride: false }),
+      updatedFields: ['allowOverride'],
+      ensureMarkerField,
+    });
+
+    expect(ensureMarkerField).toHaveBeenCalledTimes(1);
+    expect(ensureMarkerField).toHaveBeenCalledWith('opportunity');
+  });
+
+  it('skips the ensure when allowOverride is flipped off', async () => {
+    const definition = scoreDefinition({ id: 'locked-later', allowOverride: false });
+    client.seed('formulaDefinition', [definition]);
+    const ensureMarkerField = vi.fn(async () => 'created' as const);
+
+    await handleFormulaChange({
+      client,
+      after: definition,
+      before: scoreDefinition({ id: 'locked-later' }),
+      updatedFields: ['allowOverride'],
+      ensureMarkerField,
+    });
+
+    expect(ensureMarkerField).not.toHaveBeenCalled();
   });
 
   it('returns the same result whether the ensure succeeds, fails or throws', async () => {
@@ -196,6 +274,24 @@ describe('handleFormulaChange marker disable lane', () => {
       ),
     ).toHaveLength(0);
   });
+
+  it('does zero marker work when a locked definition is disabled', async () => {
+    // A locked definition can never appear in a marker, so converging here is a
+    // guaranteed no-op that would still pay a pin load plus a definition load.
+    const result = await handleFormulaChange({
+      client,
+      after: scoreDefinition({ enabled: false, allowOverride: false }),
+      updatedFields: ['enabled'],
+    });
+
+    expect(result).toEqual({ handled: false, reason: 'disabled-bookkeeping' });
+    expect(markerWrites()).toHaveLength(0);
+    expect(
+      client.querySelections.filter(
+        (selection) => 'formulaOverrides' in selection,
+      ),
+    ).toHaveLength(0);
+  });
 });
 
 describe('handleDefinitionDeleted marker lane (trash)', () => {
@@ -217,6 +313,31 @@ describe('handleDefinitionDeleted marker lane (trash)', () => {
     expect(
       client.mutationSelections.filter(
         (selection) => 'deleteFormulaOverride' in selection,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('does zero marker work when a locked definition is trashed', async () => {
+    const client = new FakeClient();
+    __setFakeObjectsWithFieldsForTests([opportunityWithMarker]);
+    // A locked definition can never appear in a marker, so converging here is a
+    // guaranteed no-op that would still pay a pin load plus a definition load.
+    const trashed = scoreDefinition({
+      allowOverride: false,
+      deletedAt: '2026-09-03T00:00:00.000Z',
+    });
+    client.seed('formulaDefinition', [trashed]);
+    client.seed('formulaOverride', [activePin]);
+    client.seed('opportunity', [{ id: 'o1', fxOverrides: 'Deal Score' }]);
+
+    await handleDefinitionDeleted(client, trashed);
+
+    expect(
+      client.writes.filter((write) => write.includes('fxOverrides')),
+    ).toHaveLength(0);
+    expect(
+      client.querySelections.filter(
+        (selection) => 'formulaOverrides' in selection,
       ),
     ).toHaveLength(0);
   });

@@ -156,9 +156,10 @@ const deleteMarkerField = async (
 // Deliberately cursorless, but NOT order-fixed: what converges is the write set,
 // not the time cost — a fully converged object still pays its two queries every
 // hour — so a fixed iteration order would truncate at the same object every pass
-// and starve every object after it forever. Instead the start offset rotates with
-// the hour of day over a stably sorted object list (stateless: no cursor to store,
-// corrupt, or reset), so each object reaches the head of the list within 24 passes.
+// and starve every object after it forever. Instead the start offset rotates by
+// an epoch-hour counter over a stably sorted object list (stateless: no cursor to
+// store, corrupt, or reset), so each object reaches the head of the list within N
+// passes for any N.
 export const convergeAllMarkers = async (
   client: FormulaClient,
   formulas: FormulaDefinitionRecord[],
@@ -172,7 +173,7 @@ export const convergeAllMarkers = async (
     ensure?: typeof ensureMarkerFieldExists;
     metadataClient?: MarkerSweepMetadataClient;
     // Injectable clock: the rotation offset and every budget check read it, so a
-    // test can pin the hour of day and step time deterministically.
+    // test can pin the epoch hour and step time deterministically.
     now?: () => number;
   },
 ): Promise<MarkerSweepResult> => {
@@ -209,10 +210,13 @@ export const convergeAllMarkers = async (
   const objectNames = [
     ...new Set([...markerBearing, ...definitionsByObject.keys()]),
   ].sort();
+  // Counts hours since the epoch, not the hour of day: a 0..23 offset can only
+  // ever reach the first 23 + (objects covered before the deadline) indices, so
+  // any workspace with more objects than that starves its tail forever.
   const offset =
     objectNames.length === 0
       ? 0
-      : new Date(now()).getUTCHours() % objectNames.length;
+      : Math.floor(now() / 3_600_000) % objectNames.length;
 
   for (const objectName of [
     ...objectNames.slice(offset),

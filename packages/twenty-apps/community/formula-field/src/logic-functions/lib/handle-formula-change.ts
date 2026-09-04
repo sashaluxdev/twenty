@@ -137,21 +137,32 @@ export const handleFormulaChange = async ({
     return { handled: false };
   }
 
-  // Overrides marker field is created with the object's first override-allowed
-  // definition (spec §5.1) so it can be positioned before any pin exists.
-  // Creation events arrive with updatedFields === undefined. Best-effort: the
-  // sweep's ensure arm retries hourly. Runs above every early return a creation
-  // can hit (a locked-target draft, a disabled create).
+  const changedFields = resolveChangedFields(updatedFields, before, after);
+
+  // Overrides marker field is created on the transition to "override-allowed
+  // with a target object" (spec §5.1) so it can be positioned before any pin
+  // exists. Keying on creation alone never fired on the real user path: the
+  // wizard creates a bare name-only draft and sets targetObject in a LATER
+  // update, so the field only ever appeared via the hourly sweep (R10).
+  // `changedFields === undefined` is exactly the creation signal — that is what
+  // resolveChangedFields returns when there is neither an updatedFields list nor
+  // a before image — and the two named fields are the only ones whose change can
+  // reach the transition, so ordinary updates (expression edits, row-image
+  // fallbacks) never pay the uncached metadata pull. Best-effort: the sweep's
+  // ensure arm retries hourly. Runs above every early return a creation or a
+  // draft update can hit (a locked-target draft, a disabled create).
+  const reachesOverrideAllowedTarget =
+    changedFields === undefined ||
+    changedFields.includes('targetObject') ||
+    changedFields.includes('allowOverride');
   if (
-    updatedFields === undefined &&
+    reachesOverrideAllowedTarget &&
     after.allowOverride !== false &&
     after.targetObject
   ) {
     const { targetObject } = after;
     await runMarkerStep(() => ensureMarkerField(targetObject));
   }
-
-  const changedFields = resolveChangedFields(updatedFields, before, after);
 
   // Recursion guard: ignore our own bookkeeping writes.
   if (isPureBookkeepingUpdate(changedFields)) {
@@ -162,10 +173,13 @@ export const handleFormulaChange = async ({
   // from markers (spec §5.4). Runs above the disabled-bookkeeping recursion
   // guard deliberately — a plain human disable returns there and would never
   // reach a later hook. The includes('enabled') gate keeps pure bookkeeping
-  // writes (which that guard exists to absorb) from paying for this.
+  // writes (which that guard exists to absorb) from paying for this, and the
+  // allowOverride gate skips a locked definition: computeMarkerValue can never
+  // have included it, so converging would spend two loads on a certain no-op.
   if (
     after.enabled === false &&
     changedFields?.includes('enabled') &&
+    after.allowOverride !== false &&
     after.targetObject &&
     after.targetField
   ) {
