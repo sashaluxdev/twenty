@@ -29,19 +29,28 @@ export class WorkspaceOrmManager {
   getRepository<T extends ObjectLiteral = ObjectRecord>(
     workspaceEntity: Type<T>,
     permissionOptions?: RolePermissionConfig,
-    repositoryOptions?: { useReplica?: boolean },
+    repositoryOptions?: {
+      useReplica?: boolean;
+      shouldSkipEventEmission?: boolean;
+    },
   ): WorkspaceRepository<T>;
 
   getRepository<T extends ObjectLiteral = ObjectRecord>(
     objectMetadataName: string,
     permissionOptions?: RolePermissionConfig,
-    repositoryOptions?: { useReplica?: boolean },
+    repositoryOptions?: {
+      useReplica?: boolean;
+      shouldSkipEventEmission?: boolean;
+    },
   ): WorkspaceRepository<T>;
 
   getRepository<T extends ObjectLiteral = ObjectRecord>(
     workspaceEntityOrObjectMetadataName: Type<T> | string,
     permissionOptions?: RolePermissionConfig,
-    repositoryOptions?: { useReplica?: boolean },
+    repositoryOptions?: {
+      useReplica?: boolean;
+      shouldSkipEventEmission?: boolean;
+    },
   ): WorkspaceRepository<T> {
     const objectMetadataName = this.resolveObjectMetadataName(
       workspaceEntityOrObjectMetadataName,
@@ -49,7 +58,10 @@ export class WorkspaceOrmManager {
 
     return this.workspaceDataSourceService
       .getDataSource({ useReplica: repositoryOptions?.useReplica ?? false })
-      .getRepository<T>(objectMetadataName, permissionOptions);
+      .getRepository<T>(objectMetadataName, permissionOptions, {
+        shouldSkipEventEmission:
+          repositoryOptions?.shouldSkipEventEmission ?? false,
+      });
   }
 
   private resolveObjectMetadataName<T extends ObjectLiteral>(
@@ -92,7 +104,7 @@ export class WorkspaceOrmManager {
 
     const {
       flatObjectMetadataMaps,
-      flatFieldMetadataMaps,
+      flatFieldMetadataMapsOrm,
       flatIndexMaps,
       featureFlagsMap,
       rolesPermissions: permissionsPerRoleId,
@@ -102,7 +114,7 @@ export class WorkspaceOrmManager {
       flatRowLevelPermissionPredicateGroupMaps,
     } = await this.workspaceCacheService.getOrRecompute(workspaceId, [
       'flatObjectMetadataMaps',
-      'flatFieldMetadataMaps',
+      'flatFieldMetadataMapsOrm',
       'flatIndexMaps',
       'featureFlagsMap',
       'rolesPermissions',
@@ -118,7 +130,7 @@ export class WorkspaceOrmManager {
     return {
       authContext,
       flatObjectMetadataMaps,
-      flatFieldMetadataMaps,
+      flatFieldMetadataMaps: flatFieldMetadataMapsOrm,
       flatIndexMaps,
       flatRowLevelPermissionPredicateMaps,
       flatRowLevelPermissionPredicateGroupMaps,
@@ -135,10 +147,10 @@ export class WorkspaceOrmManager {
   ): Promise<ORMWorkspaceContext> {
     const workspaceId = authContext.workspace.id;
 
-    const { flatObjectMetadataMaps, flatFieldMetadataMaps } =
+    const { flatObjectMetadataMaps, flatFieldMetadataMapsOrm } =
       await this.workspaceCacheService.getOrRecompute(workspaceId, [
         'flatObjectMetadataMaps',
-        'flatFieldMetadataMaps',
+        'flatFieldMetadataMapsOrm',
       ]);
 
     const { idByNameSingular: objectIdByNameSingular } =
@@ -147,7 +159,7 @@ export class WorkspaceOrmManager {
     return {
       authContext,
       flatObjectMetadataMaps,
-      flatFieldMetadataMaps,
+      flatFieldMetadataMaps: flatFieldMetadataMapsOrm,
       flatIndexMaps: {
         byUniversalIdentifier: {},
         universalIdentifierById: {},

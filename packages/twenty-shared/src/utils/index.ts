@@ -65,6 +65,7 @@ export {
 export { isFieldMetadataArrayKind } from './fieldMetadata/isFieldMetadataArrayKind';
 export { isFieldMetadataDateKind } from './fieldMetadata/isFieldMetadataDateKind';
 export { isFieldMetadataEligibleForFieldsWidget } from './fieldMetadata/isFieldMetadataEligibleForFieldsWidget';
+export { isFieldMetadataEligibleForRecordForm } from './fieldMetadata/isFieldMetadataEligibleForRecordForm';
 export { isFieldMetadataEnumKind } from './fieldMetadata/isFieldMetadataEnumKind';
 export { isFieldMetadataNumericKind } from './fieldMetadata/isFieldMetadataNumericKind';
 export { isFieldMetadataSelectKind } from './fieldMetadata/isFieldMetadataSelectKind';
@@ -185,7 +186,7 @@ export {
 export { formatToShortNumber } from './format/formatToShortNumber';
 export { fromArrayToUniqueKeyRecord } from './from-array-to-unique-key-record.util';
 export { fromArrayToValuesByKeyRecord } from './fromArrayToValuesByKeyRecord.util';
-export { getURLSafely } from './getURLSafely';
+export { getUrlSafely } from './getUrlSafely';
 export {
   getNodeTypename,
   getConnectionTypename,
@@ -283,12 +284,15 @@ export { absoluteUrlSchema } from './url/absoluteUrlSchema';
 export { buildSignedPath } from './url/buildSignedPath';
 export { ensureAbsoluteUrl } from './url/ensureAbsoluteUrl';
 export { getAbsoluteUrlOrThrow } from './url/getAbsoluteUrlOrThrow';
+export { getLinkUrlNormalizer } from './url/getLinkUrlNormalizer';
 export { getSafeUrl } from './url/getSafeUrl';
 export { getUrlHostnameOrThrow } from './url/getUrlHostnameOrThrow';
 export { isAbsoluteUrl } from './url/isAbsoluteUrl';
 export { isSafeUrl } from './url/isSafeUrl';
+export { isValidDomain } from './url/isValidDomain';
 export { isValidHostname } from './url/isValidHostname';
 export { isValidUrl } from './url/isValidUrl';
+export { normalizeDomain } from './url/normalizeDomain';
 export { normalizeUrl } from './url/normalizeUrl';
 export { normalizeUrlOrigin } from './url/normalizeUrlOrigin';
 export { safeDecodeURIComponent } from './url/safeDecodeURIComponent';

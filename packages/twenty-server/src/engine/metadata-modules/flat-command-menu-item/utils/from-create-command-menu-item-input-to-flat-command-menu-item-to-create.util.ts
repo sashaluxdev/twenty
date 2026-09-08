@@ -1,8 +1,9 @@
+import { isDefined } from 'twenty-shared/utils';
 import { v4 as uuidv4 } from 'uuid';
 
 import { type FlatApplication } from 'src/engine/core-modules/application/types/flat-application.type';
 import { type CreateCommandMenuItemInput } from 'src/engine/metadata-modules/command-menu-item/dtos/create-command-menu-item.input';
-import { CommandMenuItemAvailabilityType } from 'src/engine/metadata-modules/command-menu-item/enums/command-menu-item-availability-type.enum';
+import { CommandMenuItemAvailabilityType } from 'twenty-shared/types';
 import { EngineComponentKey } from 'src/engine/metadata-modules/command-menu-item/enums/engine-component-key.enum';
 import { isObjectMetadataCommandMenuItemPayload } from 'src/engine/metadata-modules/command-menu-item/utils/is-object-metadata-command-menu-item-payload.util';
 import { type FlatCommandMenuItem } from 'src/engine/metadata-modules/flat-command-menu-item/types/flat-command-menu-item.type';
@@ -27,16 +28,23 @@ export const fromCreateCommandMenuItemInputToFlatCommandMenuItemToCreate = ({
   const id = uuidv4();
   const now = new Date().toISOString();
 
-  const payload =
+  const isNavigation =
     createCommandMenuItemInput.engineComponentKey ===
-    EngineComponentKey.NAVIGATION
-      ? (createCommandMenuItemInput.payload ?? null)
-      : null;
+    EngineComponentKey.NAVIGATION;
 
-  const navigationTargetObjectMetadataId =
-    isObjectMetadataCommandMenuItemPayload(payload)
-      ? payload.objectMetadataItemId
-      : null;
+  const navigationTargetObjectMetadataId = isNavigation
+    ? (createCommandMenuItemInput.navigationTargetObjectMetadataId ??
+      (isObjectMetadataCommandMenuItemPayload(
+        createCommandMenuItemInput.payload,
+      )
+        ? createCommandMenuItemInput.payload.objectMetadataItemId
+        : null))
+    : null;
+
+  const payload =
+    !isNavigation || isDefined(navigationTargetObjectMetadataId)
+      ? null
+      : (createCommandMenuItemInput.payload ?? null);
 
   const {
     availabilityObjectMetadataUniversalIdentifier,
@@ -80,6 +88,8 @@ export const fromCreateCommandMenuItemInputToFlatCommandMenuItemToCreate = ({
       createCommandMenuItemInput.availabilityObjectMetadataId ?? null,
     conditionalAvailabilityExpression:
       createCommandMenuItemInput.conditionalAvailabilityExpression ?? null,
+    conditionalPinnedExpression:
+      createCommandMenuItemInput.conditionalPinnedExpression ?? null,
     availabilityObjectMetadataUniversalIdentifier,
     navigationTargetObjectMetadataId,
     navigationTargetObjectMetadataUniversalIdentifier,

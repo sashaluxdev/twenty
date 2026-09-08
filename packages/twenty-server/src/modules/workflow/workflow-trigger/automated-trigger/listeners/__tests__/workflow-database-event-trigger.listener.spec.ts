@@ -1,6 +1,5 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 
-import { FeatureFlagService } from 'src/engine/core-modules/feature-flag/services/feature-flag.service';
 import { MessageQueueService } from 'src/engine/core-modules/message-queue/services/message-queue.service';
 import { type FlatObjectMetadata } from 'src/engine/metadata-modules/flat-object-metadata/types/flat-object-metadata.type';
 import { WorkspaceOrmManager } from 'src/engine/twenty-orm/workspace-orm.manager';
@@ -15,11 +14,26 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
   let listener: WorkflowDatabaseEventTriggerListener;
   let workspaceOrmManager: jest.Mocked<WorkspaceOrmManager>;
   let messageQueueService: jest.Mocked<MessageQueueService>;
-  let featureFlagService: jest.Mocked<FeatureFlagService>;
   let workspaceCacheService: jest.Mocked<WorkspaceCacheService>;
 
-  const mockRepository = {
-    find: jest.fn(),
+  const setTriggerMap = (
+    listeners: Array<{ workflowId: string; settings: object; type?: unknown }>,
+  ) => {
+    workspaceCacheService.getOrRecompute.mockResolvedValue({
+      workflowAutomatedTriggerMaps: {
+        byWorkflowId: Object.fromEntries(
+          listeners.map((listener) => [
+            listener.workflowId,
+            {
+              type: AutomatedTriggerType.DATABASE_EVENT,
+              coreWorkflowVersionId: `core-version-${listener.workflowId}`,
+              workspaceWorkflowVersionId: `workspace-version-${listener.workflowId}`,
+              ...listener,
+            },
+          ]),
+        ),
+      },
+    } as never);
   };
 
   const createMockFlatObjectMetadata = (
@@ -52,7 +66,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
 
   beforeEach(async () => {
     workspaceOrmManager = {
-      getRepository: jest.fn().mockReturnValue(mockRepository),
+      getRepository: jest.fn().mockReturnValue({ find: jest.fn() }),
       executeInWorkspaceContext: jest
         .fn()
         .mockImplementation((fn: () => any, _authContext?: any) => fn()),
@@ -62,13 +76,10 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
       add: jest.fn(),
     } as any;
 
-    // Default flag off so the existing suite exercises the workspace-entity path.
-    featureFlagService = {
-      isFeatureEnabled: jest.fn().mockResolvedValue(false),
-    } as any;
-
     workspaceCacheService = {
-      getOrRecompute: jest.fn(),
+      getOrRecompute: jest.fn().mockResolvedValue({
+        workflowAutomatedTriggerMaps: { byWorkflowId: {} },
+      } as never),
     } as any;
 
     const module: TestingModule = await Test.createTestingModule({
@@ -81,10 +92,6 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           provide: MessageQueueService,
           useValue: messageQueueService,
-        },
-        {
-          provide: FeatureFlagService,
-          useValue: featureFlagService,
         },
         {
           provide: WorkspaceCacheService,
@@ -146,7 +153,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
     ];
 
     it('should trigger workflow when fields are specified and match updated fields', async () => {
-      mockRepository.find.mockResolvedValue(mockEventListeners);
+      setTriggerMap(mockEventListeners);
 
       await listener.handleObjectRecordUpdateEvent(mockPayload);
 
@@ -155,29 +162,8 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           workspaceId,
           workflowId,
-          payload: mockPayload.events[0],
-        },
-        { retryLimit: 3 },
-      );
-    });
-
-    it('reads listeners from the core trigger map when dispatch-from-core is enabled', async () => {
-      featureFlagService.isFeatureEnabled.mockResolvedValue(true);
-      workspaceCacheService.getOrRecompute.mockResolvedValue({
-        workflowAutomatedTriggerMaps: {
-          byWorkflowId: { [workflowId]: mockEventListeners[0] },
-        },
-      } as any);
-
-      await listener.handleObjectRecordUpdateEvent(mockPayload);
-
-      // Dispatch is driven by the core map, not the workspace entity.
-      expect(mockRepository.find).not.toHaveBeenCalled();
-      expect(messageQueueService.add).toHaveBeenCalledWith(
-        WorkflowTriggerJob.name,
-        {
-          workspaceId,
-          workflowId,
+          coreWorkflowVersionId: `core-version-${workflowId}`,
+          workspaceWorkflowVersionId: `workspace-version-${workflowId}`,
           payload: mockPayload.events[0],
         },
         { retryLimit: 3 },
@@ -185,7 +171,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
     });
 
     it('should trigger workflow when no fields are specified', async () => {
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           ...mockEventListeners[0],
           settings: {
@@ -201,7 +187,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
     });
 
     it('should trigger workflow when fields array is empty', async () => {
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           ...mockEventListeners[0],
           settings: {
@@ -217,7 +203,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
     });
 
     it('should not trigger workflow when fields are specified but none match updated fields', async () => {
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           ...mockEventListeners[0],
           settings: {
@@ -246,7 +232,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         ],
       };
 
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           type: AutomatedTriggerType.DATABASE_EVENT,
           workflowId,
@@ -263,6 +249,8 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           workspaceId,
           workflowId,
+          coreWorkflowVersionId: `core-version-${workflowId}`,
+          workspaceWorkflowVersionId: `workspace-version-${workflowId}`,
           payload: createPayload.events[0],
         },
         { retryLimit: 3 },
@@ -283,7 +271,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         ],
       };
 
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           type: AutomatedTriggerType.DATABASE_EVENT,
           workflowId,
@@ -300,6 +288,8 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           workspaceId,
           workflowId,
+          coreWorkflowVersionId: `core-version-${workflowId}`,
+          workspaceWorkflowVersionId: `workspace-version-${workflowId}`,
           payload: deletePayload.events[0],
         },
         { retryLimit: 3 },
@@ -320,7 +310,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         ],
       };
 
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           type: AutomatedTriggerType.DATABASE_EVENT,
           workflowId,
@@ -337,6 +327,8 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           workspaceId,
           workflowId,
+          coreWorkflowVersionId: `core-version-${workflowId}`,
+          workspaceWorkflowVersionId: `workspace-version-${workflowId}`,
           payload: destroyPayload.events[0],
         },
         { retryLimit: 3 },
@@ -360,7 +352,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         ],
       };
 
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           type: AutomatedTriggerType.DATABASE_EVENT,
           workflowId,
@@ -380,6 +372,8 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           workspaceId,
           workflowId,
+          coreWorkflowVersionId: `core-version-${workflowId}`,
+          workspaceWorkflowVersionId: `workspace-version-${workflowId}`,
           payload: batchPayload.events[0],
         },
         { retryLimit: 3 },
@@ -390,6 +384,8 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           workspaceId,
           workflowId,
+          coreWorkflowVersionId: `core-version-${workflowId}`,
+          workspaceWorkflowVersionId: `workspace-version-${workflowId}`,
           payload: batchPayload.events[1],
         },
         { retryLimit: 3 },
@@ -411,7 +407,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         ],
       };
 
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           ...mockEventListeners[0],
           settings: {
@@ -428,6 +424,8 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         {
           workspaceId,
           workflowId,
+          coreWorkflowVersionId: `core-version-${workflowId}`,
+          workspaceWorkflowVersionId: `workspace-version-${workflowId}`,
           payload: positionOnlyPayload.events[0],
         },
         { retryLimit: 3 },
@@ -449,7 +447,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         ],
       };
 
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           ...mockEventListeners[0],
           settings: {
@@ -479,7 +477,7 @@ describe('WorkflowDatabaseEventTriggerListener', () => {
         ],
       };
 
-      mockRepository.find.mockResolvedValue([
+      setTriggerMap([
         {
           ...mockEventListeners[0],
           settings: {
