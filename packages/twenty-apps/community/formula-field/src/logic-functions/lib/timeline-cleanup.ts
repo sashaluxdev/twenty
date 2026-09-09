@@ -1,5 +1,8 @@
+import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { graphqlEnum } from 'src/logic-functions/lib/dynamic-client';
+import { type MetadataQueryClient } from 'src/logic-functions/lib/find-fields';
 import { companionFieldName } from 'src/logic-functions/lib/fx-status-field';
+import { workspaceCacheKey } from 'src/logic-functions/lib/metadata-objects';
 import { MARKER_FIELD_NAME } from 'src/logic-functions/lib/override-marker';
 import { computeSyncableFields } from 'src/logic-functions/lib/syncable-fields';
 import { type FormulaClient } from 'src/logic-functions/lib/types';
@@ -8,11 +11,17 @@ import { type VariationConfigRecord } from 'src/logic-functions/lib/variation-ty
 import { withRetry } from 'src/logic-functions/lib/with-retry';
 
 // Post-hoc Timeline cleanup: the app's automated formula/mirror writes emit
-// `<object>.updated` timelineActivity rows that flood record Timelines. The
+// `recordUpdated` timelineActivity rows that flood record Timelines. The
 // platform offers no suppression switch, so this module soft-deletes (or strips)
 // the app's own noise rows via the workspace GraphQL API. It is deliberately
 // fail-safe toward KEEPING rows — only rows positively identified as entirely
 // app-managed are deleted (Global Constraints). A later task wires it to a cron.
+//
+// The platform dropped the row's `name` column ("<object>.updated") for a typed
+// contract: `timelineActivityTypeId` (workspace-local) plus a
+// `timelineActivityTypeSnapshot` JSON blob carrying the type's stable
+// universalIdentifier, and the row -> object mapping now comes only from the
+// single populated `target<Object>Id` column.
 //
 // Two flavors of app noise are recognized: formula/mirror writes (a formula's
 // targetField + companion FxStatus field, managed unconditionally) and variation
@@ -38,7 +47,14 @@ export type TimelineCleanupCounts = {
 const LOOKBACK_MS = 48 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
-const UPDATED_SUFFIX = '.updated';
+
+// The standard `recordUpdated` timelineActivityType, identified by its
+// universalIdentifier (twenty-server's
+// standard-timeline-activity-type-definitions.constant.ts). That identifier is
+// the same in every workspace, whereas the row's `timelineActivityTypeId` is
+// workspace-local and must be resolved from metadata at runtime.
+export const RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER =
+  '20202020-0d1a-4f0e-8a55-1c0a2f0a2c02';
 
 // The self-referencing relation field a config provisions defaults to
 // "primaryRecord". Server code reads `config.relationFieldName ?? 'primaryRecord'`
@@ -100,7 +116,7 @@ type RowOutcome = 'deleted' | 'stripped' | 'kept';
 
 type TimelineRow = {
   id: string;
-  name?: unknown;
+  timelineActivityTypeSnapshot?: unknown;
   properties?: unknown;
   happensAt?: unknown;
   // Per-object parent pointer columns (targetCompanyId, …) selected dynamically.
@@ -119,29 +135,52 @@ type ObjectManagedModel = {
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-// The timeline row's `properties` arrives as an object or a JSON string (both are
-// seen in the wild); defensively coerce to an object, or null when unparsable.
-const parseProperties = (
-  properties: unknown,
-): Record<string, unknown> | null => {
-  if (typeof properties === 'string') {
+// A RAW_JSON column on a timeline row (`properties`,
+// `timelineActivityTypeSnapshot`) arrives as an object or a JSON string (both
+// are seen in the wild); defensively coerce to an object, or null when
+// unparsable.
+const parseJsonObject = (value: unknown): Record<string, unknown> | null => {
+  if (typeof value === 'string') {
     try {
-      const parsed: unknown = JSON.parse(properties);
+      const parsed: unknown = JSON.parse(value);
       return isPlainObject(parsed) ? parsed : null;
     } catch {
       return null;
     }
   }
-  return isPlainObject(properties) ? properties : null;
+  return isPlainObject(value) ? value : null;
 };
 
-// Object nameSingular from an `<object>.updated` timeline row name, or null when
-// the name is not an updated-event (so it is left alone).
-const objectFromName = (name: unknown): string | null => {
-  if (typeof name !== 'string' || !name.endsWith(UPDATED_SUFFIX)) {
-    return null;
+// The in-process half of the recordUpdated gate. The server filter matches the
+// workspace-local `timelineActivityTypeId`; this re-checks the row's own
+// snapshot against the stable universalIdentifier, so a routed object-specific
+// type, a stale id, or a widened filter can never reach the classifier.
+const isRecordUpdatedRow = (row: TimelineRow): boolean =>
+  parseJsonObject(row.timelineActivityTypeSnapshot)?.universalIdentifier ===
+  RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER;
+
+// Object nameSingular for a row, read off its parent-pointer columns: core
+// populates exactly one `target<Object>Id` per row. Zero (an object outside the
+// managed set, or an unselected column) or more than one (an ambiguous mapping)
+// yields null, which the caller treats as KEEP. A non-string value counts
+// toward the tally but never resolves, so it too fails safe.
+const objectFromParentColumns = (
+  row: TimelineRow,
+  objectNames: string[],
+): string | null => {
+  let populatedCount = 0;
+  let resolved: string | null = null;
+  for (const objectName of objectNames) {
+    const value = row[parentRecordIdSelectionFor(objectName)];
+    if (value == null) {
+      continue;
+    }
+    populatedCount += 1;
+    if (typeof value === 'string' && value.length > 0) {
+      resolved = objectName;
+    }
   }
-  return name.slice(0, -UPDATED_SUFFIX.length);
+  return populatedCount === 1 ? resolved : null;
 };
 
 // Loads every FormulaDefinition (regardless of `enabled` — a disabled formula's
@@ -259,7 +298,7 @@ const buildManagedModel = async (
     }
   }
 
-  // The definition records themselves churn <object>.updated rows from engine
+  // The definition records themselves churn recordUpdated rows from engine
   // bookkeeping (ADR 0022). Register them as app-owned key sets so the same
   // classifier covers them. Only when the app has any definitions/configs at
   // all — otherwise model stays empty and the cron never queries timeline.
@@ -388,6 +427,101 @@ const stripKeysFromRow = async (
   }
 };
 
+// Same TTL and in-flight-dedup shape as the metadata objects cache: the
+// recordUpdated type id never changes for the life of a workspace, so this
+// holds the cleanup at one extra request per run (and none at all for a run
+// inside the TTL). Keyed by workspace because one worker process serves many.
+const RECORD_UPDATED_TYPE_ID_TTL_MS = 60_000;
+
+type RecordUpdatedTypeIdCacheEntry = {
+  id: string | null;
+  loadedAt: number;
+};
+const recordUpdatedTypeIdByWorkspace = new Map<
+  string,
+  RecordUpdatedTypeIdCacheEntry
+>();
+const inFlightRecordUpdatedTypeIdByWorkspace = new Map<
+  string,
+  Promise<string | null>
+>();
+
+// Test-only: clears the memoized type id (process-global module state, like the
+// metadata objects cache). Called from vitest.setup.ts for every spec.
+export const __resetRecordUpdatedTypeIdCacheForTests = (): void => {
+  recordUpdatedTypeIdByWorkspace.clear();
+  inFlightRecordUpdatedTypeIdByWorkspace.clear();
+};
+
+const fetchRecordUpdatedTypeId = async (
+  metadataClient: MetadataQueryClient,
+  cacheKey: string,
+): Promise<string | null> => {
+  let types: Array<Record<string, unknown> | null>;
+  try {
+    const response = await metadataClient.query({
+      timelineActivityTypes: {
+        id: true,
+        universalIdentifier: true,
+        isActive: true,
+      },
+    });
+    const returned: unknown = response?.timelineActivityTypes;
+    types = Array.isArray(returned) ? returned : [];
+  } catch (error) {
+    // Never silent: an unresolvable type id turns every run into a no-op, which
+    // is exactly the failure mode that hid the broken `name` filter for 17
+    // days. Not cached either, so the next run retries reality.
+    console.warn(
+      '[formula-field] timeline cleanup could not load timelineActivityTypes; keeping every row this run',
+      error,
+    );
+    return null;
+  }
+
+  const match = types.find(
+    (type) =>
+      type?.universalIdentifier === RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER &&
+      // An absent isActive reads as active, the coercion metadata-objects.ts
+      // applies to the same nullable metadata flag.
+      type?.isActive !== false &&
+      typeof type?.id === 'string',
+  );
+  const id = (match?.id as string | undefined) ?? null;
+  // Only a successful load is cached (a throw returns above), same posture as
+  // loadAllObjectsWithFields. A null here is a real workspace fact (no active
+  // recordUpdated type), so it is cached too; the caller warns per run.
+  recordUpdatedTypeIdByWorkspace.set(cacheKey, { id, loadedAt: Date.now() });
+  return id;
+};
+
+// The workspace-local `timelineActivityTypeId` of the standard recordUpdated
+// type, or null when it cannot be resolved (the caller then scans nothing). The
+// metadata client is injectable so unit tests and front components can hand in
+// their own, the same seam findFields uses.
+export const resolveRecordUpdatedTypeId = async (
+  metadataClient: MetadataQueryClient = new MetadataApiClient(),
+): Promise<string | null> => {
+  const cacheKey = workspaceCacheKey();
+  const cached = recordUpdatedTypeIdByWorkspace.get(cacheKey);
+  if (cached && Date.now() - cached.loadedAt < RECORD_UPDATED_TYPE_ID_TTL_MS) {
+    return cached.id;
+  }
+
+  const inFlight = inFlightRecordUpdatedTypeIdByWorkspace.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const fetchPromise = fetchRecordUpdatedTypeId(metadataClient, cacheKey);
+  inFlightRecordUpdatedTypeIdByWorkspace.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRecordUpdatedTypeIdByWorkspace.delete(cacheKey);
+  }
+};
+
 // Classifies a single timeline row and applies the cleanup. Fail-safe: a row
 // whose diff is missing/empty/unparsable, or belongs to an object with no
 // managed fields, or whose changed fields are all human, is KEPT untouched.
@@ -397,7 +531,7 @@ const processRow = async (
   model: Map<string, ObjectManagedModel>,
   verdictCache: Map<string, boolean>,
 ): Promise<RowOutcome> => {
-  const parsedProperties = parseProperties(row.properties);
+  const parsedProperties = parseJsonObject(row.properties);
   const rawDiff = parsedProperties ? parsedProperties.diff : undefined;
   const diff = isPlainObject(rawDiff) ? rawDiff : {};
   const keys = Object.keys(diff);
@@ -405,7 +539,13 @@ const processRow = async (
     return 'kept';
   }
 
-  const objectName = objectFromName(row.name);
+  // Belt and braces on the server's timelineActivityTypeId filter: only a row
+  // whose own snapshot says recordUpdated is a candidate.
+  if (!isRecordUpdatedRow(row)) {
+    return 'kept';
+  }
+
+  const objectName = objectFromParentColumns(row, [...model.keys()]);
   const managed = objectName ? model.get(objectName) : undefined;
   if (!objectName || !managed) {
     return 'kept';
@@ -462,6 +602,8 @@ const processRow = async (
   // record is itself a variation; the same field name on a PRIMARY can be
   // human-authored. An unresolvable parent (missing column, failed read,
   // vanished record) fails safe to keep.
+  // objectName was resolved FROM this column, so it holds a non-empty string
+  // here; the narrowing stays as the type-level guard.
   const parentColumn = parentRecordIdSelectionFor(objectName);
   const parentRecordIdValue = row[parentColumn];
   const parentRecordId =
@@ -488,17 +630,22 @@ const processRow = async (
   return stripKeysFromRow(client, row, parsedProperties, diff, keys, formulaKeys);
 };
 
-// Soft-deletes (or strips) the app's own automated `<object>.updated` timeline
+// Soft-deletes (or strips) the app's own automated `recordUpdated` timeline
 // noise. Human-authored rows are never even fetched (the query filters
 // workspaceMemberId IS NULL). Returns per-outcome counts for logging.
 //
 // `options` lets callers override the lookback window and page cap (spec F4)
 // — the one-time retro-purge script needs an unbounded lookback and a higher
 // page cap; the 10-minute cron omits options entirely, so its behavior is
-// unchanged (defaults fall back to LOOKBACK_MS / MAX_PAGES).
+// unchanged (defaults fall back to LOOKBACK_MS / MAX_PAGES). `metadataClient`
+// is the test/front seam for the recordUpdated type-id lookup.
 export const cleanupFormulaTimelineNoise = async (
   client: FormulaClient,
-  options: { lookbackMs?: number; maxPages?: number } = {},
+  options: {
+    lookbackMs?: number;
+    maxPages?: number;
+    metadataClient?: MetadataQueryClient;
+  } = {},
 ): Promise<TimelineCleanupCounts> => {
   const lookbackMs = options.lookbackMs ?? LOOKBACK_MS;
   const maxPages = options.maxPages ?? MAX_PAGES;
@@ -517,15 +664,38 @@ export const cleanupFormulaTimelineNoise = async (
     return counts;
   }
 
+  // Resolved AFTER the model check so a workspace with no definitions still
+  // costs zero requests.
+  const recordUpdatedTypeId = await resolveRecordUpdatedTypeId(
+    options.metadataClient,
+  );
+  // No resolvable type id -> no safe candidate filter, so the (large)
+  // timelineActivities table is not queried at all and every row is kept.
+  // Warned here rather than in the resolver so a run served by the memo (which
+  // caches a null verdict) is never the silent kind.
+  if (recordUpdatedTypeId === null) {
+    console.warn(
+      '[formula-field] timeline cleanup could not resolve the recordUpdated timelineActivityType id; keeping every row this run',
+    );
+    return counts;
+  }
+
   const objectNames = [...model.keys()];
-  const names = objectNames.map((object) => `${object}${UPDATED_SUFFIX}`);
   // Select every candidate parent-pointer column so each row exposes its own
   // record id (one boolean per queried object; only the row's own is populated).
   const parentColumns = objectNames.map((object) =>
     parentRecordIdSelectionFor(object),
   );
   const filter = {
-    name: { in: names },
+    // Only recordUpdated rows are candidates. The id is workspace-local, hence
+    // the metadata lookup; processRow re-checks each row's own snapshot.
+    timelineActivityTypeId: { eq: recordUpdatedTypeId },
+    // A row belongs to a managed object iff that object's parent-pointer column
+    // is populated. `or` is a bracketed group ANDed with the sibling keys, so
+    // this narrows candidates to the managed objects without widening anything.
+    or: parentColumns.map((column) => ({
+      [column]: { is: graphqlEnum('NOT_NULL') },
+    })),
     // Human-authored rows carry a workspaceMemberId; app/API writes do not. Only
     // the app's own rows are ever fetched. NULL is a FilterIs enum, emitted
     // unquoted via graphqlEnum (the raw serializer quotes strings, which the
@@ -540,6 +710,8 @@ export const cleanupFormulaTimelineNoise = async (
   const verdictCache = new Map<string, boolean>();
 
   let after: string | undefined;
+  // Only a natural exit clears this; running out of pages leaves rows behind.
+  let truncated = true;
   for (let page = 0; page < maxPages; page += 1) {
     const response = await withRetry(() =>
       client.query({
@@ -552,7 +724,7 @@ export const cleanupFormulaTimelineNoise = async (
           edges: {
             node: {
               id: true,
-              name: true,
+              timelineActivityTypeSnapshot: true,
               properties: true,
               happensAt: true,
               ...Object.fromEntries(
@@ -584,12 +756,20 @@ export const cleanupFormulaTimelineNoise = async (
     }
 
     if (!connection?.pageInfo?.hasNextPage) {
-      return counts;
+      truncated = false;
+      break;
     }
     after = connection.pageInfo.endCursor ?? undefined;
   }
+  counts.truncated = truncated;
 
-  // Exited via the maxPages cap with rows still remaining.
-  counts.truncated = true;
+  // Never silent: model.size > 0 here (the early return above), so scanning
+  // nothing means the candidate filter no longer matches reality — the failure
+  // mode that hid the platform's `name` -> typed contract change for 17 days.
+  if (counts.scanned === 0) {
+    console.warn(
+      `[formula-field] timeline cleanup scanned 0 rows for ${model.size} managed objects`,
+    );
+  }
   return counts;
 };

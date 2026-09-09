@@ -17,4 +17,10 @@ beforeEach(async () => {
     'src/logic-functions/lib/metadata-objects'
   );
   __clearMetadataCacheForTests();
+  // The memoized recordUpdated type id in timeline-cleanup.ts is the same kind
+  // of process-global module state, with the same 60s TTL trap.
+  const { __resetRecordUpdatedTypeIdCacheForTests } = await import(
+    'src/logic-functions/lib/timeline-cleanup'
+  );
+  __resetRecordUpdatedTypeIdCacheForTests();
 });
