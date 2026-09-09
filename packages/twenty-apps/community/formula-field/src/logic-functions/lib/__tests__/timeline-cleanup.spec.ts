@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
 import {
+  RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER,
   cleanupFormulaTimelineNoise,
   parentRecordIdSelectionFor,
 } from 'src/logic-functions/lib/timeline-cleanup';
@@ -19,7 +20,74 @@ vi.mock('src/logic-functions/lib/dynamic-client', async (importOriginal) => ({
   createDynamicCoreClient: () => handlerMocks.client,
 }));
 
+// The workspace-local id of the `recordUpdated` type. Every candidate row now
+// carries it, and the lib resolves it from metadata, so the default metadata
+// client is mocked here to report it — the cron handler test goes through that
+// default path (it passes no options). Hoisted because the mock factory below
+// runs while this module's own imports are still evaluating. The universal
+// identifier is spelled out there for the same reason; a test below pins it
+// against the exported constant.
+const { RECORD_UPDATED_TYPE_ID } = vi.hoisted(() => ({
+  RECORD_UPDATED_TYPE_ID: 'tat-record-updated',
+}));
+
+vi.mock('twenty-client-sdk/metadata', () => ({
+  // Non-arrow so the source's `new MetadataApiClient()` constructs it.
+  MetadataApiClient: vi.fn(function () {
+    return {
+      query: async () => ({
+        timelineActivityTypes: [
+          {
+            id: RECORD_UPDATED_TYPE_ID,
+            universalIdentifier: '20202020-0d1a-4f0e-8a55-1c0a2f0a2c02',
+            isActive: true,
+          },
+        ],
+      }),
+    };
+  }),
+}));
+
 import timelineCleanupFunction from 'src/logic-functions/timeline-cleanup';
+
+// The typed snapshot core stamps on a `recordUpdated` row (shape pinned by
+// twenty-shared's TimelineActivityTypeSnapshot).
+const recordUpdatedSnapshot = (): Record<string, unknown> => ({
+  id: RECORD_UPDATED_TYPE_ID,
+  universalIdentifier: RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER,
+  name: 'recordUpdated',
+  label: 'updated',
+  action: 'updated',
+});
+
+// A metadata client stub for the injection seam (options.metadataClient).
+const fakeMetadataClient = (
+  types: Array<Record<string, unknown>>,
+): { query: (selection: unknown) => Promise<unknown> } => ({
+  query: async () => ({ timelineActivityTypes: types }),
+});
+
+// Feeds the classifier rows the server filter would have excluded, so the
+// in-process G2/G3 gates can be exercised on their own: a widened or drifted
+// server filter must never turn into a delete.
+const injectTimelineRows = (
+  client: FakeClient,
+  rows: Array<Record<string, unknown>>,
+): void => {
+  const realQuery = client.query.bind(client);
+  client.query = vi.fn(async (selection: any) => {
+    if ('timelineActivities' in selection) {
+      client.querySelections.push(selection);
+      return {
+        timelineActivities: {
+          edges: rows.map((node) => ({ node })),
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      };
+    }
+    return realQuery(selection);
+  });
+};
 
 // Seeds a FormulaDefinition so its targetField (+ companion status field) counts
 // as app-managed for the given object.
@@ -48,6 +116,19 @@ const recentIso = (): string => new Date().toISOString();
 const timelineQuery = (client: FakeClient): any =>
   client.querySelections.find((selection) => 'timelineActivities' in selection);
 
+// The lib warns on its never-silent paths (an unresolvable type id, a run that
+// scanned nothing). Silenced by default so the suite output stays readable; the
+// tests that care assert on the spy.
+let warnSpy: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+  warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  warnSpy.mockRestore();
+});
+
 describe('cleanupFormulaTimelineNoise', () => {
   let client: FakeClient;
 
@@ -60,7 +141,9 @@ describe('cleanupFormulaTimelineNoise', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: { diff: { revenue: { before: 1, after: 2 } } },
         happensAt: recentIso(),
       },
@@ -79,7 +162,9 @@ describe('cleanupFormulaTimelineNoise', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: {
           diff: {
             revenue: { before: 1, after: 2 },
@@ -102,7 +187,9 @@ describe('cleanupFormulaTimelineNoise', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'opportunity.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetOpportunityId: 'o1',
         properties: { diff: { fxOverrides: { before: null, after: 'Deal Score' } } },
         happensAt: recentIso(),
       },
@@ -121,7 +208,9 @@ describe('cleanupFormulaTimelineNoise', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: { diff: { name: { before: 'A', after: 'B' } } },
         happensAt: recentIso(),
       },
@@ -140,7 +229,9 @@ describe('cleanupFormulaTimelineNoise', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: {
           diff: {
             revenue: { before: 1, after: 2 },
@@ -180,20 +271,37 @@ describe('cleanupFormulaTimelineNoise', () => {
     seedDefinition(client);
     client.seed('timelineActivity', [
       // empty properties object
-      { id: 't-empty', name: 'company.updated', properties: {}, happensAt: recentIso() },
+      {
+        id: 't-empty',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
+        properties: {},
+        happensAt: recentIso(),
+      },
       // missing properties entirely
-      { id: 't-missing', name: 'company.updated', happensAt: recentIso() },
+      {
+        id: 't-missing',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
+        happensAt: recentIso(),
+      },
       // unparsable JSON string
       {
         id: 't-bad-json',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: '{not valid json',
         happensAt: recentIso(),
       },
       // empty diff inside otherwise-valid properties
       {
         id: 't-empty-diff',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: { diff: {} },
         happensAt: recentIso(),
       },
@@ -212,7 +320,9 @@ describe('cleanupFormulaTimelineNoise', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: JSON.stringify({ diff: { revenue: { before: 1, after: 2 } } }),
         happensAt: recentIso(),
       },
@@ -224,14 +334,17 @@ describe('cleanupFormulaTimelineNoise', () => {
     expect(client.get('timelineActivity', 't1')).toBeUndefined();
   });
 
-  it('never touches rows for objects with no formula definitions and builds the documented filter', async () => {
+  it('never fetches rows for objects with no formula definitions and builds the documented filter', async () => {
     seedDefinition(client, { targetObject: 'company', targetField: 'revenue' });
-    // A person row whose object has no formula definition. The real server would
-    // exclude it via the name-in filter; the classifier keeps it regardless.
+    // A person row whose object has no formula definition: no managed object's
+    // parent-pointer column is populated, so the `or` group excludes it at the
+    // server and it is never even scanned.
     client.seed('timelineActivity', [
       {
         id: 'p1',
-        name: 'person.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetPersonId: 'person-1',
         properties: { diff: { revenue: { before: 1, after: 2 } } },
         happensAt: recentIso(),
       },
@@ -239,19 +352,33 @@ describe('cleanupFormulaTimelineNoise', () => {
 
     const counts = await cleanupFormulaTimelineNoise(client);
 
+    expect(counts.scanned).toBe(0);
     expect(counts.deleted).toBe(0);
-    expect(counts.kept).toBe(1);
     expect(client.get('timelineActivity', 'p1')).toBeDefined();
 
-    // Filter shape: name limited to defined objects PLUS the two definition
-    // objects (always registered when any definition exists), workspaceMemberId
-    // IS NULL (unquoted enum), and a lookback window.
+    // Filter shape: candidates are recordUpdated rows (workspace-local type id)
+    // parented on one of the managed objects (an `or` over their parent-pointer
+    // columns, ANDed with the sibling keys), authored by no workspace member
+    // (unquoted NULL enum), inside the lookback window. The removed `name`
+    // column must not reappear.
     const filter = timelineQuery(client).timelineActivities.__args.filter;
-    expect(filter.name).toEqual({
-      in: ['company.updated', 'formulaDefinition.updated', 'variationConfig.updated'],
-    });
+    expect(filter.name).toBeUndefined();
+    expect(filter.timelineActivityTypeId).toEqual({ eq: RECORD_UPDATED_TYPE_ID });
+    expect(filter.or).toEqual([
+      { targetCompanyId: { is: { __graphqlEnum: 'NOT_NULL' } } },
+      { targetFormulaDefinitionId: { is: { __graphqlEnum: 'NOT_NULL' } } },
+      { targetVariationConfigId: { is: { __graphqlEnum: 'NOT_NULL' } } },
+    ]);
     expect(filter.workspaceMemberId).toEqual({ is: { __graphqlEnum: 'NULL' } });
     expect(typeof filter.happensAt.gte).toBe('string');
+  });
+
+  it('pins the standard recordUpdated type universalIdentifier', () => {
+    // Sourced from twenty-server's standard-timeline-activity-type-definitions
+    // constant; the metadata mock above spells out the same literal.
+    expect(RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER).toBe(
+      '20202020-0d1a-4f0e-8a55-1c0a2f0a2c02',
+    );
   });
 
   it('returns zero counts and issues no timelineActivities query when there are no definitions', async () => {
@@ -273,7 +400,9 @@ describe('cleanupFormulaTimelineNoise', () => {
     // rows are human-only so nothing is mutated and pagination stays stable.
     const rows = Array.from({ length: 2001 }, (_unused, index) => ({
       id: `t${String(index).padStart(5, '0')}`,
-      name: 'company.updated',
+      timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+      timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+      targetCompanyId: 'c1',
       properties: { diff: { name: { before: 'a', after: 'b' } } },
       happensAt: recentIso(),
     }));
@@ -292,13 +421,17 @@ describe('cleanupFormulaTimelineNoise', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: { diff: { revenue: { before: 1, after: 2 } } },
         happensAt: recentIso(),
       },
       {
         id: 't2',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: { diff: { revenue: { before: 3, after: 4 } } },
         happensAt: recentIso(),
       },
@@ -369,6 +502,262 @@ const seedVariationConfig = (client: FakeClient): void => {
 const parentReadCount = (client: FakeClient, objectName: string): number =>
   client.querySelections.filter((selection) => objectName in selection).length;
 
+describe('cleanupFormulaTimelineNoise — typed contract gates (G2/G3)', () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = new FakeClient();
+    seedDefinition(client, { targetObject: 'company', targetField: 'revenue' });
+  });
+
+  // The server filter matches on the workspace-local type id; the snapshot is
+  // the stable, workspace-independent fact. A row whose id says recordUpdated
+  // but whose snapshot says otherwise (routing, a stale id, a reused row) must
+  // not be touched, however app-owned its diff looks.
+  it('keeps a recordCreated-snapshot row whose diff is entirely app-managed', async () => {
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: {
+          id: 'tat-record-created',
+          universalIdentifier: '20202020-0d1a-4f0e-8a55-1c0a2f0a2c01',
+          name: 'recordCreated',
+          label: 'was created by',
+          action: 'created',
+        },
+        targetCompanyId: 'c1',
+        properties: {
+          diff: {
+            revenue: { before: 1, after: 2 },
+            revenueFxStatus: { before: 'OK', after: 'OFFLINE' },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.scanned).toBe(1);
+    expect(counts.kept).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(counts.stripped).toBe(0);
+    expect(client.mutations).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeDefined();
+  });
+
+  it('keeps a routed object-specific update row (non-recordUpdated snapshot)', async () => {
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: {
+          id: 'tat-task-updated',
+          universalIdentifier: '7f2c9b41-5d3e-4a68-9c10-8b6d4e2f0a33',
+          name: 'taskUpdated',
+          label: 'updated',
+          action: 'updated',
+        },
+        targetCompanyId: 'c1',
+        properties: { diff: { revenue: { before: 1, after: 2 } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.kept).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(client.mutations).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeDefined();
+  });
+
+  it('keeps a row with a null snapshot', async () => {
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: null,
+        targetCompanyId: 'c1',
+        properties: { diff: { revenue: { before: 1, after: 2 } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.kept).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(client.mutations).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeDefined();
+  });
+
+  // G3: the row -> object mapping is the SINGLE populated parent column. Two
+  // populated columns make the mapping ambiguous, so the row is not classified.
+  // `lastError` is app-owned bookkeeping on BOTH candidate objects, so picking
+  // either one would delete the row — only the ambiguity guard keeps it.
+  it('keeps a row with two populated parent columns', async () => {
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetFormulaDefinitionId: 'def-1',
+        targetVariationConfigId: 'vc-1',
+        properties: { diff: { lastError: { before: null, after: 'BOOM' } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.scanned).toBe(1);
+    expect(counts.kept).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(client.mutations).toBe(0);
+    expect(client.get('timelineActivity', 't1')).toBeDefined();
+  });
+
+  it('keeps a row with no populated parent column', async () => {
+    // The `or` group would exclude this row at the server, so it is injected
+    // directly: the in-process gate is the second line of defense.
+    injectTimelineRows(client, [
+      {
+        id: 't1',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        properties: { diff: { revenue: { before: 1, after: 2 } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts.scanned).toBe(1);
+    expect(counts.kept).toBe(1);
+    expect(counts.deleted).toBe(0);
+    expect(client.mutations).toBe(0);
+  });
+
+  // G2, last paragraph: with no resolvable recordUpdated type id there is no
+  // safe candidate filter, so the (large) timelineActivities table is not
+  // queried at all and the run is a warned no-op.
+  it('returns zero counts and issues no timelineActivities query when the type id cannot be resolved', async () => {
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
+        properties: { diff: { revenue: { before: 1, after: 2 } } },
+        happensAt: recentIso(),
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client, {
+      metadataClient: fakeMetadataClient([
+        {
+          id: 'tat-record-created',
+          universalIdentifier: '20202020-0d1a-4f0e-8a55-1c0a2f0a2c01',
+          isActive: true,
+        },
+      ]),
+    });
+
+    expect(counts).toEqual({
+      scanned: 0,
+      deleted: 0,
+      stripped: 0,
+      kept: 0,
+      truncated: false,
+    });
+    expect(timelineQuery(client)).toBeUndefined();
+    expect(client.get('timelineActivity', 't1')).toBeDefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('could not resolve the recordUpdated'),
+    );
+  });
+
+  it('ignores an inactive recordUpdated type, and warns on every run', async () => {
+    const metadataClient = fakeMetadataClient([
+      {
+        id: RECORD_UPDATED_TYPE_ID,
+        universalIdentifier: RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER,
+        isActive: false,
+      },
+    ]);
+
+    const counts = await cleanupFormulaTimelineNoise(client, { metadataClient });
+    // The second run is served by the memo, which caches the null verdict — it
+    // must still say so out loud.
+    await cleanupFormulaTimelineNoise(client, { metadataClient });
+
+    expect(counts.scanned).toBe(0);
+    expect(timelineQuery(client)).toBeUndefined();
+    expect(
+      warnSpy.mock.calls.filter((call: unknown[]) =>
+        String(call[0]).includes('could not resolve the recordUpdated'),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('keeps every row when the metadata lookup fails', async () => {
+    const counts = await cleanupFormulaTimelineNoise(client, {
+      metadataClient: {
+        query: async () => {
+          throw new Error('metadata boom');
+        },
+      },
+    });
+
+    expect(counts.scanned).toBe(0);
+    expect(timelineQuery(client)).toBeUndefined();
+    // The failure detail (with the error) plus the run-level verdict.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('could not load timelineActivityTypes'),
+      expect.any(Error),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('could not resolve the recordUpdated'),
+    );
+  });
+
+  // G4: the type id is workspace-stable, so it costs at most one extra request
+  // per run — and a second run inside the TTL costs none.
+  it('memoizes the type-id lookup across runs', async () => {
+    let metadataQueries = 0;
+    const metadataClient = {
+      query: async () => {
+        metadataQueries += 1;
+        return {
+          timelineActivityTypes: [
+            {
+              id: RECORD_UPDATED_TYPE_ID,
+              universalIdentifier: RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER,
+              isActive: true,
+            },
+          ],
+        };
+      },
+    };
+
+    await cleanupFormulaTimelineNoise(client, { metadataClient });
+    await cleanupFormulaTimelineNoise(client, { metadataClient });
+
+    expect(metadataQueries).toBe(1);
+  });
+
+  // The silent-zero mode is what hid the broken `name` filter for 17 days.
+  it('warns when a run scans nothing while objects are managed', async () => {
+    await cleanupFormulaTimelineNoise(client);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('scanned 0 rows'),
+    );
+  });
+});
+
 describe('parentRecordIdSelectionFor', () => {
   it('pins the server naming: target${Capitalized}Id for standard AND custom objects', () => {
     // Standard objects match the typed columns on
@@ -396,7 +785,8 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-var',
         properties: {
           diff: {
@@ -423,7 +813,8 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-primary',
         properties: {
           diff: {
@@ -449,7 +840,8 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-var',
         properties: {
           diff: {
@@ -477,14 +869,16 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     client.seed('timelineActivity', [
       {
         id: 't-variation',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-var',
         properties: { diff: { employees: { before: 10, after: 20 } } },
         happensAt: recentIso(),
       },
       {
         id: 't-formula',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-var',
         properties: { diff: { revenue: { before: 1, after: 2 } } },
         happensAt: recentIso(),
@@ -509,14 +903,16 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-var',
         properties: { diff: { employees: { before: 10, after: 20 } } },
         happensAt: recentIso(),
       },
       {
         id: 't2',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-var',
         properties: { diff: { industry: { before: 'A', after: 'B' } } },
         happensAt: recentIso(),
@@ -539,7 +935,8 @@ describe('cleanupFormulaTimelineNoise — variation-managed rows', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
         targetCompanyId: 'c-var',
         properties: { diff: { revenue: { before: 1, after: 2 } } },
         happensAt: recentIso(),
@@ -563,14 +960,16 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
     client = new FakeClient();
   });
 
-  // Case 1: a formulaDefinition.updated row whose diff touches only engine
+  // Case 1: a formulaDefinition update row whose diff touches only engine
   // bookkeeping keys is pure app noise -> deleted.
-  it('deletes a formulaDefinition.updated row whose diff is only engine bookkeeping keys', async () => {
+  it('deletes a formulaDefinition update row whose diff is only engine bookkeeping keys', async () => {
     seedDefinition(client);
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'formulaDefinition.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetFormulaDefinitionId: 'def-1',
         properties: {
           diff: {
             lastValue: { before: 1, after: 2 },
@@ -589,15 +988,17 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
     expect(client.get('timelineActivity', 't1')).toBeUndefined();
   });
 
-  // Case 2: a formulaDefinition.updated row with a human-editable key
+  // Case 2: a formulaDefinition update row with a human-editable key
   // (`expression`) is NOT deleted; only the app-owned bookkeeping key is
   // stripped, the human key + its payload survive.
-  it('strips bookkeeping from a formulaDefinition.updated row that also has a human-editable key', async () => {
+  it('strips bookkeeping from a formulaDefinition update row that also has a human-editable key', async () => {
     seedDefinition(client);
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'formulaDefinition.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetFormulaDefinitionId: 'def-1',
         properties: {
           diff: {
             expression: { before: '1+1', after: '2+2' },
@@ -620,14 +1021,16 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
     });
   });
 
-  // Case 3: a variationConfig.updated heartbeat row (only lastSyncedAt) is pure
+  // Case 3: a variationConfig heartbeat row (only lastSyncedAt) is pure
   // app noise -> deleted.
-  it('deletes a variationConfig.updated heartbeat row whose diff is only lastSyncedAt', async () => {
+  it('deletes a variationConfig heartbeat row whose diff is only lastSyncedAt', async () => {
     seedDefinition(client);
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'variationConfig.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetVariationConfigId: 'vc-1',
         properties: { diff: { lastSyncedAt: { before: 'a', after: 'b' } } },
         happensAt: recentIso(),
       },
@@ -648,7 +1051,9 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'opportunity.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetOpportunityId: 'o1',
         properties: {
           diff: {
             updatedBy: {
@@ -676,7 +1081,9 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'opportunity.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetOpportunityId: 'o1',
         properties: {
           diff: {
             updatedBy: {
@@ -705,7 +1112,9 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'opportunity.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetOpportunityId: 'o1',
         properties: {
           diff: {
             revenue: { before: 1, after: 2 },
@@ -735,7 +1144,9 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'opportunity.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetOpportunityId: 'o1',
         properties: {
           diff: {
             stage: { before: 'NEW', after: 'WON' },
@@ -771,16 +1182,18 @@ describe('cleanupFormulaTimelineNoise — definition bookkeeping and app updated
 
     const built = timelineQuery(client);
     const filter = built.timelineActivities.__args.filter;
-    expect(filter.name.in).toEqual(
+    expect(filter.or).toEqual(
       expect.arrayContaining([
-        'company.updated',
-        'formulaDefinition.updated',
-        'variationConfig.updated',
+        { targetFormulaDefinitionId: { is: { __graphqlEnum: 'NOT_NULL' } } },
+        { targetVariationConfigId: { is: { __graphqlEnum: 'NOT_NULL' } } },
       ]),
     );
     const node = built.timelineActivities.edges.node;
     expect(node.targetFormulaDefinitionId).toBe(true);
     expect(node.targetVariationConfigId).toBe(true);
+    // The snapshot replaces the removed `name` column in the node selection.
+    expect(node.timelineActivityTypeSnapshot).toBe(true);
+    expect(node.name).toBeUndefined();
   });
 });
 
@@ -827,7 +1240,9 @@ describe('timeline-cleanup cron (default export handler)', () => {
     client.seed('timelineActivity', [
       {
         id: 't1',
-        name: 'company.updated',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
         properties: { diff: { revenue: { before: 1, after: 2 } } },
         happensAt: recentIso(),
       },
