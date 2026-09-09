@@ -951,17 +951,16 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   nothing is deleted between passes, so a truncated dry run cannot show the
   full picture in one shot. `scripts/audit-strict-gate.ts` was folded onto the
   same `loadRemote`/transport helpers (behavior unchanged). Full suite green
-  (1423 tests, 83 files), lint clean. **Not yet run against any server.** The
-  Task 2 dev dry-run reached the local server end-to-end (argument parsing →
-  remote load → transport → a real HTTP POST → a real GraphQL response) and
-  was rejected only on authentication (`Error: Token invalid.` -- the stored
-  `dev` remote's API key is stale for the current local database), never on
-  plumbing -- so the filter semantics this port relies on (top-level AND, the
-  `or` bracketed group, `target<Object>Id` `is: NOT_NULL`,
-  `timelineActivityTypeId` `eq`) remain server-*unverified*, backed only by the
-  fake client's matching plus reading the platform's entity/constant source.
-  Cloud was never contacted. **Runbook, in order**: refresh the `dev` remote's
-  API key → `npx tsx scripts/retro-purge-timeline.ts dev --dry-run` → confirm
+  (1423 tests, 83 files), lint clean. **Live-verified on dev, not deployed.** After the `dev`
+  API key was refreshed and the app installed on the local workspace (`dev
+  --once -r dev`, zero definitions), the dev dry-run ran end to end (exit 3, no
+  managed objects) and a scratch probe of the exact cron filter (top-level AND,
+  the `or` bracketed group, `target<Object>Id` `is: NOT_NULL`,
+  `timelineActivityTypeId` `eq`, `workspaceMemberId` NULL) returned no GraphQL
+  errors and matched exactly the one `recordUpdated` row created by updating a
+  seed company; snapshot `universalIdentifier` matched, join column populated.
+  Seeded rows are all `recordCreated` (14,252), so zero candidates there is
+  legitimate. Cloud was never contacted. **Runbook, in order**: confirm
   the `cloud` remote in `~/.twenty/config.json` carries a workspace API key
   (`apiKey`), not only CLI OAuth tokens (`loadRemote` exits 1 without one;
   mint one in Settings > API & Webhooks and register it with `twenty

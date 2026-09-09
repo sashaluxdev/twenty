@@ -105,7 +105,7 @@ const run = async () => {
   const reportScannedNothing = (): never => {
     console.log(
       'first pass scanned 0 rows: nothing was purged; see the warning above ' +
-        '(type id unresolved, or no candidate rows in the lookback).',
+        '(no formula definitions or variation configs, type id unresolved, or no candidate rows in the lookback).',
     );
     process.exit(3);
   };
