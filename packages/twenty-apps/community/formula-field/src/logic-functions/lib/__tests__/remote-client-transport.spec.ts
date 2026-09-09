@@ -38,8 +38,11 @@ afterEach(() => {
 describe('createThrottledFetchTransport', () => {
   it('caps sends per window and prunes the window as it ages', async () => {
     const fetchMock = stubFetch({ data: { ok: true } });
+    // A real (non-fake) timer window: 500ms gives a wide margin over any
+    // event-loop stall between sends, so an occasional scheduling delay can
+    // never prune the window early and flake the >= assertion below.
     const transport = createThrottledFetchTransport(REMOTE, {
-      windowMs: 50,
+      windowMs: 500,
       maxRequestsPerWindow: 2,
     });
 
@@ -48,13 +51,13 @@ describe('createThrottledFetchTransport', () => {
     const thirdStart = Date.now();
     await send(transport);
     // The third send has no slot until the oldest of the first two ages out.
-    expect(Date.now() - thirdStart).toBeGreaterThanOrEqual(50);
+    expect(Date.now() - thirdStart).toBeGreaterThanOrEqual(500);
 
     // Those two are now outside the window, so the next send is free again —
     // proof the timestamps are pruned rather than only appended to.
     const fourthStart = Date.now();
     await send(transport);
-    expect(Date.now() - fourthStart).toBeLessThan(50);
+    expect(Date.now() - fourthStart).toBeLessThan(500);
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 

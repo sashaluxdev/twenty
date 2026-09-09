@@ -7,6 +7,9 @@
 // Reads apiUrl + apiKey for <remoteName> from ~/.twenty/config.json via the
 // shared scripts/lib/remote-client.ts (same source the integration setup uses
 // — src/__tests__/setup-test.ts). Writing requires the literal --yes flag.
+// Exit codes: 1 bad/unrecognized arguments, 2 wet mode (no --dry-run) without
+// --yes, 3 a pass scanned 0 rows (nothing to purge, or the candidate filter
+// couldn't see anything -- see the printed warning above for which).
 import {
   createThrottledFetchTransport,
   loadRemote,
@@ -94,6 +97,19 @@ const run = async () => {
     createThrottledFetchTransport(remote),
   );
 
+  // A first pass that scans nothing is worth calling out loudly rather than
+  // exiting 0 like a completed purge: it means either the candidate filter
+  // could not resolve (the resolver's own warning fires above this), or the
+  // lookback genuinely holds no candidate rows -- either way, nothing to
+  // purge, and that fact should not look identical to "purge done".
+  const reportScannedNothing = (): never => {
+    console.log(
+      'first pass scanned 0 rows: nothing was purged; see the warning above ' +
+        '(type id unresolved, or no candidate rows in the lookback).',
+    );
+    process.exit(3);
+  };
+
   if (dryRun) {
     const counts = await cleanupFormulaTimelineNoise(client, {
       lookbackMs,
@@ -108,6 +124,9 @@ const run = async () => {
           'Re-run with --yes to apply, then dry-run again to see what is left.',
       );
     }
+    if (counts.scanned === 0) {
+      reportScannedNothing();
+    }
     return;
   }
 
@@ -119,6 +138,9 @@ const run = async () => {
       maxPages: MAX_PAGES,
     });
     console.log(`pass ${pass}:`, counts);
+    if (pass === 1 && counts.scanned === 0) {
+      reportScannedNothing();
+    }
     // No-progress guard: KEPT rows (genuine human/third-party writes the
     // classifier correctly leaves alone) can outnumber maxPages * PAGE_SIZE
     // over a 10-year lookback, so every pass would re-scan the same kept rows,

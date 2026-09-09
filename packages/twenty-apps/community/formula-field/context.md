@@ -948,10 +948,13 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   custom objects alike). ADR 0020/0022's cleanup cron filtered on `name: { in:
   [...] }`, which stopped existing that day; the `timelineActivities` query has
   thrown `"Object timelineActivity doesn't have any name field"` on every
-  10-minute cron run since, silently swallowed by the cron's existing fail-safe
-  KEEP posture -- there was no zero-scan tripwire to distinguish "quiet" from
-  "broken," so the break was invisible for 17 days until this session's dev
-  dry-run surfaced the stack trace. Live cloud audit (2026-09-09, read-only,
+  10-minute cron run since. This was not swallowed into a quiet KEEP: nothing
+  in `cleanupFormulaTimelineNoise` or the cron wrapper catches a thrown query
+  error (`execute` throws on GraphQL `errors[]`, `withRetry` treats a schema
+  error as non-retryable and rethrows immediately), so every 10-minute
+  invocation failed outright for 17 days -- silent only in that nobody was
+  watching cron invocation failures, until this session's dev dry-run surfaced
+  the stack trace directly. Live cloud audit (2026-09-09, read-only,
   no writes): 104,406 live timelineActivity rows, 0 soft-deleted, 93,197 with no
   workspaceMember; the actual app backlog is `formulaDefinition`-target
   bookkeeping rows re-accumulating at ~350/48h (4,571 in 30 days) since the
@@ -992,7 +995,9 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   a file. `scripts/retro-purge-timeline.ts` now takes `[--dry-run]
   [--lookback-days N] [--yes]`; an unrecognized argument exits 1 with usage;
   wet mode without `--yes` exits 2 -- **`yarn retro-purge <remote>` now
-  requires `--yes` to write**, a behavior change from before. `--dry-run` is
+  requires `--yes` to write**, a behavior change from before; a pass that
+  scans 0 rows now prints an explicit "nothing was purged" line and exits 3,
+  in both the dry-run and wet paths. `--dry-run` is
   exactly one pass and cannot page past its cap (50 pages × 100 rows) because
   nothing is deleted between passes, so a truncated dry run cannot show the
   full picture in one shot. `scripts/audit-strict-gate.ts` was folded onto the
@@ -1007,10 +1012,15 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   `timelineActivityTypeId` `eq`) remain server-*unverified*, backed only by the
   fake client's matching plus reading the platform's entity/constant source.
   Cloud was never contacted. **Runbook, in order**: refresh the `dev` remote's
-  API key → `npx tsx scripts/retro-purge-timeline.ts dev --dry-run` → deploy
-  the app (`app:publish --private -r cloud` then `app:install -r cloud`) →
-  `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run` → review the
-  printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud --yes`. None
+  API key → `npx tsx scripts/retro-purge-timeline.ts dev --dry-run` → confirm
+  the `cloud` remote in `~/.twenty/config.json` carries a workspace API key
+  (`apiKey`), not only CLI OAuth tokens (`loadRemote` exits 1 without one;
+  mint one in Settings > API & Webhooks and register it with `twenty
+  remote:add --as cloud --url <cloud url> --api-key <key>` if missing) →
+  deploy the app (`app:publish --private -r cloud` then `app:install -r
+  cloud`) → `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run` →
+  review the printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud
+  --yes`. None
   of these steps have been run. The cloud retro purge was dropped at the
   user's request on 2026-08-10 (the untracked scratch script was deleted; the
   committed scripts/retro-purge-timeline.ts stayed); this arc revives that
@@ -1215,9 +1225,12 @@ Then:
    (description TEXT field) / 18 change (checksums) / 0 destroy — zero
    collisions; publish+install both clean; description field verified live on
    21 defs). Post-deploy timeline snapshot (pre-purge): formulaDefinition.updated
-   3,824, variationConfig.updated 180. RETRO PURGE (F4) still PENDING — the
-   `cloud` remote in ~/.twenty/config.json has CLI OAuth tokens but NO `apiKey`,
-   which scripts/retro-purge-timeline.ts requires; needs a workspace API key.
+   3,824, variationConfig.updated 180. RETRO PURGE (F4) still PENDING at the
+   time -- the `cloud` remote in ~/.twenty/config.json then had CLI OAuth
+   tokens but no `apiKey`, which scripts/retro-purge-timeline.ts requires.
+   Update: a workspace API key has been present for the `cloud` remote since
+   2026-08-07, confirmed 2026-09-09 by the read-only audit scripts loading it
+   successfully.
    Predecessor v0.1.7 (FX Status companion removal + status snackbar, ADR 0021;
    2026-07-14, twenty-sdk@2.21.0). Only deploy to cloud when the user explicitly
    asks — it targets their real production workspace.
