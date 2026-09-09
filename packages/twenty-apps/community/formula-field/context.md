@@ -960,7 +960,11 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   errors and matched exactly the one `recordUpdated` row created by updating a
   seed company; snapshot `universalIdentifier` matched, join column populated.
   Seeded rows are all `recordCreated` (14,252), so zero candidates there is
-  legitimate. Cloud was never contacted. **Runbook, in order**: confirm
+  legitimate. A second pass seeded real noise (probe field + `employees * 2`
+  definition; 23 API rows): dry-run deleted 13 / stripped 1 / kept 9, wet run
+  applied exactly that, negative control kept, and the app's own 10-minute
+  cron then purged 16 further seeded rows unattended. Cloud was never
+  contacted. **Runbook, in order**: confirm
   the `cloud` remote in `~/.twenty/config.json` carries a workspace API key
   (`apiKey`), not only CLI OAuth tokens (`loadRemote` exits 1 without one;
   mint one in Settings > API & Webhooks and register it with `twenty

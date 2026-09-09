@@ -242,7 +242,15 @@ would re-scan the identical rows.
   `recordUpdated` row produced by updating a seed company (`employees`), with
   the snapshot's `universalIdentifier` equal to the constant and the join
   column populated. The 14,252 seeded rows are all `recordCreated`, so a fresh
-  workspace legitimately has zero candidates. Cloud was never contacted.
+  workspace legitimately has zero candidates. A second pass then seeded real
+  noise (a `company.formulaProbe` NUMBER field + an enabled `employees * 2`
+  definition; recompute fired in the worker on its own): 23 API-authored
+  `recordUpdated` rows. `dev --dry-run` reported deleted 13 / stripped 1 /
+  kept 9; `dev --yes` applied exactly that; `deletedAt IS NOT NULL` = 13; the
+  negative control (an `employees`-only diff) stayed live; the mixed row was
+  stripped to `employees,updatedBy`. Sixteen more noise rows were then left
+  for the app's own 10-minute cron, which purged exactly those 16 unattended.
+  Cloud was never contacted.
 - **Runbook**, in order: confirm the `cloud` remote in `~/.twenty/config.json`
   carries a workspace API key (`apiKey`), not only CLI OAuth tokens --
   `loadRemote` (`scripts/lib/remote-client.ts`) exits 1 when it is missing;
