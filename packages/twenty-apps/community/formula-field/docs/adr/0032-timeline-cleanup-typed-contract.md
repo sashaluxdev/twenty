@@ -231,18 +231,19 @@ would re-scan the identical rows.
   per-object scanned count, which is out of scope here (noted in the Task 1
   report as a pre-existing limitation of the `name`-based version too, now
   restated against the typed contract).
-- **Status is NOT deployed and NOT live-verified.** The filter semantics this
-  ADR relies on -- top-level AND, the `or` bracketed group, `target<Object>Id`
-  `is: NOT_NULL`, `timelineActivityTypeId` `eq` -- are backed by the fake
-  client's matching implementation and by reading the entity/constant files
-  above, not by a real server response: the dev dry-run reached the local
-  server (argument parsing → remote load → transport → a real HTTP POST → a
-  real GraphQL response) but was rejected on authentication (`Error: Token
-  invalid.` -- the stored `dev` remote's API key is stale for the current local
-  database), never on plumbing. Cloud was never contacted.
-- **Runbook**, in order: refresh the `dev` remote's API key → `npx tsx
-  scripts/retro-purge-timeline.ts dev --dry-run` (first live confirmation of
-  the filter semantics) → confirm the `cloud` remote in `~/.twenty/config.json`
+- **Status is NOT deployed; filter semantics ARE live-verified on dev
+  (2026-09-09).** After the `dev` remote's API key was refreshed and the app
+  installed on the local workspace (`dev --once -r dev`, a fresh install with
+  zero definitions), `retro-purge-timeline.ts dev --dry-run` ran end to end
+  and exited 3 (no managed objects). A scratch probe then sent the exact cron
+  filter -- top-level AND, the `or` bracketed group, `target<Object>Id`
+  `is: NOT_NULL`, `timelineActivityTypeId` `eq`, `workspaceMemberId` NULL --
+  against the local server: no GraphQL errors, and it matched exactly the one
+  `recordUpdated` row produced by updating a seed company (`employees`), with
+  the snapshot's `universalIdentifier` equal to the constant and the join
+  column populated. The 14,252 seeded rows are all `recordCreated`, so a fresh
+  workspace legitimately has zero candidates. Cloud was never contacted.
+- **Runbook**, in order: confirm the `cloud` remote in `~/.twenty/config.json`
   carries a workspace API key (`apiKey`), not only CLI OAuth tokens --
   `loadRemote` (`scripts/lib/remote-client.ts`) exits 1 when it is missing;
   mint one in Settings > API & Webhooks and register it with `twenty
