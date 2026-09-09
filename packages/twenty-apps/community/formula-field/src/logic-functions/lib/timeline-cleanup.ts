@@ -505,9 +505,9 @@ const fetchRecordUpdatedTypeId = async (
     const returned: unknown = response?.timelineActivityTypes;
     types = Array.isArray(returned) ? returned : [];
   } catch (error) {
-    // Never silent: an unresolvable type id turns every run into a no-op, which
-    // is exactly the failure mode that hid the broken `name` filter for 17
-    // days. Not cached either, so the next run retries reality.
+    // Never silent: an unresolvable type id turns every run into a no-op that
+    // nothing else reports (the 2026-08 `name` break at least threw). Not
+    // cached either, so the next run retries reality.
     console.warn(
       '[formula-field] timeline cleanup could not load timelineActivityTypes; keeping every row this run',
       error,
@@ -825,8 +825,9 @@ export const cleanupFormulaTimelineNoise = async (
   counts.truncated = truncated;
 
   // Never silent: model.size > 0 here (the early return above), so scanning
-  // nothing means the candidate filter no longer matches reality — the failure
-  // mode that hid the platform's `name` -> typed contract change for 17 days.
+  // nothing means the candidate filter no longer matches reality. A throwing
+  // query (the 2026-08 `name` break) surfaces on its own; a matching-nothing
+  // filter would not, so this warn covers that mode.
   if (counts.scanned === 0) {
     console.warn(
       `[formula-field] timeline cleanup scanned 0 rows for ${model.size} managed objects`,
