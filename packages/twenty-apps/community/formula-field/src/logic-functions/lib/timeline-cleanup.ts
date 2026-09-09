@@ -94,8 +94,8 @@ const capitalize = (value: string): string =>
   value.length === 0 ? '' : value.charAt(0).toUpperCase() + value.slice(1);
 
 // The timelineActivity column that stores the parent record's id for an object.
-// Every `<object>.updated` row is written with this column set to the changed
-// record's id, so the cleanup selects it to know which record a row belongs to.
+// Core writes exactly one such column per row — the changed record's id — so
+// the cleanup selects it to know which record a row belongs to.
 // Derivation is authoritative, pinned in twenty-server:
 //   - the insert/upsert path keys each row by `getTimelineActivityPropertyName`
 //     (timeline-activity.repository.ts:159-169, 198-200), which is
@@ -370,7 +370,11 @@ const resolveParentIsVariation = async (
 const deleteRow = async (
   client: FormulaClient,
   row: TimelineRow,
+  dryRun: boolean,
 ): Promise<RowOutcome> => {
+  if (dryRun) {
+    return 'deleted';
+  }
   try {
     await withRetry(() =>
       client.mutation({
@@ -383,9 +387,45 @@ const deleteRow = async (
   }
 };
 
-// Strips `stripKeys` from the row's diff, preserving every other `properties`
-// subkey and the surviving keys' payloads. Nothing to strip -> keep untouched.
-// A failed write is contained (counted as kept).
+// The verdict of a strip, decided before any write so a dry run and a wet run
+// can never disagree: both go through this function and only the mutation
+// below is skipped. Two of the three outcomes are not strips at all — nothing
+// to strip keeps the row, and stripping every key resolves to a delete.
+type StripPlan =
+  | { verdict: 'kept' }
+  | { verdict: 'deleted' }
+  | { verdict: 'stripped'; properties: Record<string, unknown> };
+
+const planStrip = (
+  parsedProperties: Record<string, unknown> | null,
+  diff: Record<string, unknown>,
+  keys: string[],
+  stripKeys: Set<string>,
+): StripPlan => {
+  if (stripKeys.size === 0) {
+    return { verdict: 'kept' };
+  }
+  const newDiff: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (!stripKeys.has(key)) {
+      newDiff[key] = diff[key];
+    }
+  }
+  // Stripping everything would leave an empty-diff stub row; that IS pure app
+  // noise, so delete it instead (mirrors core, which never creates empty-diff
+  // update rows).
+  if (Object.keys(newDiff).length === 0) {
+    return { verdict: 'deleted' };
+  }
+  // Every other `properties` subkey and the surviving keys' payloads are
+  // preserved verbatim.
+  return {
+    verdict: 'stripped',
+    properties: { ...(parsedProperties ?? {}), diff: newDiff },
+  };
+};
+
+// Applies a strip plan. A failed write is contained (counted as kept).
 const stripKeysFromRow = async (
   client: FormulaClient,
   row: TimelineRow,
@@ -393,30 +433,23 @@ const stripKeysFromRow = async (
   diff: Record<string, unknown>,
   keys: string[],
   stripKeys: Set<string>,
+  dryRun: boolean,
 ): Promise<RowOutcome> => {
-  if (stripKeys.size === 0) {
+  const plan = planStrip(parsedProperties, diff, keys, stripKeys);
+  if (plan.verdict === 'kept') {
     return 'kept';
   }
+  if (plan.verdict === 'deleted') {
+    return deleteRow(client, row, dryRun);
+  }
+  if (dryRun) {
+    return 'stripped';
+  }
   try {
-    const newDiff: Record<string, unknown> = {};
-    for (const key of keys) {
-      if (!stripKeys.has(key)) {
-        newDiff[key] = diff[key];
-      }
-    }
-    // Stripping everything would leave an empty-diff stub row; that IS pure app
-    // noise, so delete it instead (mirrors core, which never creates empty-diff
-    // update rows).
-    if (Object.keys(newDiff).length === 0) {
-      return deleteRow(client, row);
-    }
     await withRetry(() =>
       client.mutation({
         updateTimelineActivity: {
-          __args: {
-            id: row.id,
-            data: { properties: { ...(parsedProperties ?? {}), diff: newDiff } },
-          },
+          __args: { id: row.id, data: { properties: plan.properties } },
           id: true,
         },
       }),
@@ -479,14 +512,19 @@ const fetchRecordUpdatedTypeId = async (
     return null;
   }
 
-  const match = types.find(
-    (type) =>
+  const match = types.find((type) => {
+    const id = type?.id;
+    return (
       type?.universalIdentifier === RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER &&
       // An absent isActive reads as active, the coercion metadata-objects.ts
       // applies to the same nullable metadata flag.
       type?.isActive !== false &&
-      typeof type?.id === 'string',
-  );
+      // An empty id would build a filter matching nothing while reading as
+      // resolved, i.e. the silent-zero mode this port exists to kill.
+      typeof id === 'string' &&
+      id.length > 0
+    );
+  });
   const id = (match?.id as string | undefined) ?? null;
   // Only a successful load is cached (a throw returns above), same posture as
   // loadAllObjectsWithFields. A null here is a real workspace fact (no active
@@ -530,6 +568,7 @@ const processRow = async (
   row: TimelineRow,
   model: Map<string, ObjectManagedModel>,
   verdictCache: Map<string, boolean>,
+  dryRun: boolean,
 ): Promise<RowOutcome> => {
   const parsedProperties = parseJsonObject(row.properties);
   const rawDiff = parsedProperties ? parsedProperties.diff : undefined;
@@ -589,13 +628,14 @@ const processRow = async (
       diff,
       keys,
       formulaKeys,
+      dryRun,
     );
   }
 
   // Every changed field is app-managed. With no variation keys this is the
   // Task 1 all-formula case: pure app noise -> delete (no parent read needed).
   if (variationKeys.size === 0) {
-    return deleteRow(client, row);
+    return deleteRow(client, row, dryRun);
   }
 
   // Variation keys, nothing human alongside. Deletable ONLY when the parent
@@ -621,13 +661,21 @@ const processRow = async (
     : null;
 
   if (parentIsVariation === true) {
-    return deleteRow(client, row);
+    return deleteRow(client, row, dryRun);
   }
 
   // Primary or unresolvable: variation keys stay (not proven app noise); strip
   // only formula keys, which are always app noise (keeps the row when there are
   // none).
-  return stripKeysFromRow(client, row, parsedProperties, diff, keys, formulaKeys);
+  return stripKeysFromRow(
+    client,
+    row,
+    parsedProperties,
+    diff,
+    keys,
+    formulaKeys,
+    dryRun,
+  );
 };
 
 // Soft-deletes (or strips) the app's own automated `recordUpdated` timeline
@@ -638,17 +686,21 @@ const processRow = async (
 // — the one-time retro-purge script needs an unbounded lookback and a higher
 // page cap; the 10-minute cron omits options entirely, so its behavior is
 // unchanged (defaults fall back to LOOKBACK_MS / MAX_PAGES). `metadataClient`
-// is the test/front seam for the recordUpdated type-id lookup.
+// is the test/front seam for the recordUpdated type-id lookup. `dryRun` runs
+// the identical classification and reports the counts it WOULD have applied
+// (`deleted`/`stripped`), issuing no mutation — the reads still happen.
 export const cleanupFormulaTimelineNoise = async (
   client: FormulaClient,
   options: {
     lookbackMs?: number;
     maxPages?: number;
     metadataClient?: MetadataQueryClient;
+    dryRun?: boolean;
   } = {},
 ): Promise<TimelineCleanupCounts> => {
   const lookbackMs = options.lookbackMs ?? LOOKBACK_MS;
   const maxPages = options.maxPages ?? MAX_PAGES;
+  const dryRun = options.dryRun ?? false;
   const counts: TimelineCleanupCounts = {
     scanned: 0,
     deleted: 0,
@@ -745,7 +797,13 @@ export const cleanupFormulaTimelineNoise = async (
         continue;
       }
       counts.scanned += 1;
-      const outcome = await processRow(client, node, model, verdictCache);
+      const outcome = await processRow(
+        client,
+        node,
+        model,
+        verdictCache,
+        dryRun,
+      );
       if (outcome === 'deleted') {
         counts.deleted += 1;
       } else if (outcome === 'stripped') {

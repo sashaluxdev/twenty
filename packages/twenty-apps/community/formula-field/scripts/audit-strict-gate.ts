@@ -5,33 +5,15 @@
 // call exists anywhere in this script.
 //
 // Usage: npx tsx scripts/audit-strict-gate.ts <remoteName>
-// Reads apiUrl + apiKey for <remoteName> from ~/.twenty/config.json (same
-// source the integration setup uses — src/__tests__/setup-test.ts — and the
-// pattern scripts/retro-purge-timeline.ts follows).
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+// Reads apiUrl + apiKey for <remoteName> from ~/.twenty/config.json via the
+// shared scripts/lib/remote-client.ts (same source the integration setup uses
+// — src/__tests__/setup-test.ts).
+import {
+  createThrottledFetchTransport,
+  loadRemote,
+} from './lib/remote-client';
 
-const remoteName = process.argv[2];
-if (!remoteName) {
-  console.error('Usage: npx tsx scripts/audit-strict-gate.ts <remoteName>');
-  process.exit(1);
-}
-const config = JSON.parse(
-  fs.readFileSync(path.join(os.homedir(), '.twenty', 'config.json'), 'utf8'),
-);
-const remote = config.remotes?.[remoteName];
-if (!remote?.apiUrl || !remote?.apiKey) {
-  console.error(
-    `Remote "${remoteName}" with apiUrl+apiKey not found in ~/.twenty/config.json`,
-  );
-  process.exit(1);
-}
-// SDK clients (CoreApiClient, via createDynamicCoreClient) read these env vars
-// — same bridge as setup-test.ts / the deployed logic function's runtime.
-process.env.TWENTY_API_URL = remote.apiUrl;
-process.env.TWENTY_API_KEY = remote.apiKey;
-process.env.TWENTY_APP_ACCESS_TOKEN ??= remote.apiKey;
+const USAGE = 'Usage: npx tsx scripts/audit-strict-gate.ts <remoteName>';
 
 type AuditRow = {
   id: string;
@@ -61,6 +43,8 @@ const printTable = (rows: AuditRow[]): void => {
 };
 
 const run = async () => {
+  const remote = loadRemote(process.argv[2], USAGE);
+
   // Import AFTER env is set so client construction sees the remote.
   const { createDynamicCoreClient } = await import(
     '../src/logic-functions/lib/dynamic-client'
@@ -79,7 +63,12 @@ const run = async () => {
     '../src/logic-functions/lib/metadata-objects'
   );
 
-  const client = createDynamicCoreClient();
+  // Own throttled transport: the generated CoreApiClient exists only after
+  // `twenty dev`/`app:install` for this remote, and nothing else in the stack
+  // holds the audit's reads under the API's rate limit.
+  const client = createDynamicCoreClient(
+    createThrottledFetchTransport(remote),
+  );
   const formulas = await loadAllEnabledFormulas(client);
 
   const rows: AuditRow[] = [];

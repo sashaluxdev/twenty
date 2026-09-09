@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeClient } from 'src/logic-functions/lib/__tests__/fake-client';
+import { __clearSyncExclusionFormulasCacheForTests } from 'src/logic-functions/lib/formula-repository';
 import {
   RECORD_UPDATED_TYPE_UNIVERSAL_IDENTIFIER,
   cleanupFormulaTimelineNoise,
@@ -1229,6 +1230,118 @@ describe('cleanupFormulaTimelineNoise — options (spec F4)', () => {
     const gteMs = new Date(filter.happensAt.gte).getTime();
     const expectedMs = Date.now() - 1000 * 60;
     expect(Math.abs(gteMs - expectedMs)).toBeLessThan(TOLERANCE_MS);
+  });
+});
+
+describe('cleanupFormulaTimelineNoise — dry run (spec F4)', () => {
+  // Fixtures covering all three write-side verdicts in one sweep:
+  //   t-delete    — all-formula diff on a variation record -> deleted
+  //   t-strip     — formula key next to a human key        -> stripped
+  //   t-strip-all — a key that is BOTH formula- and variation-managed on a
+  //                 PRIMARY record: the variation keys keep the row out of the
+  //                 delete branch, then stripping the formula keys empties the
+  //                 diff, so the strip resolves to a delete. `employees` gets
+  //                 that dual ownership from a DISABLED, overridable definition:
+  //                 loadFormulaManagedByObject takes every definition, while
+  //                 computeSyncableFields excludes only enabled/locked targets.
+  const seedDryRunFixtures = (client: FakeClient): void => {
+    seedCompanyMetadata(client);
+    seedVariationConfig(client);
+    client.seed('formulaDefinition', [
+      {
+        id: 'def-revenue',
+        targetObject: 'company',
+        targetField: 'revenue',
+        enabled: true,
+      },
+      {
+        id: 'def-employees',
+        targetObject: 'company',
+        targetField: 'employees',
+        enabled: false,
+        allowOverride: true,
+      },
+    ]);
+    client.seed('company', [
+      { id: 'c-var', primaryRecordId: 'c-primary' },
+      { id: 'c-primary', primaryRecordId: null },
+    ]);
+    client.seed('timelineActivity', [
+      {
+        id: 't-delete',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c-var',
+        properties: { diff: { revenue: { before: 1, after: 2 } } },
+        happensAt: recentIso(),
+      },
+      {
+        id: 't-strip',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c-primary',
+        properties: {
+          diff: {
+            revenue: { before: 1, after: 2 },
+            name: { before: 'Acme', after: 'Acme Inc' },
+          },
+        },
+        happensAt: recentIso(),
+      },
+      {
+        id: 't-strip-all',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c-primary',
+        properties: { diff: { employees: { before: 10, after: 20 } } },
+        happensAt: recentIso(),
+      },
+    ]);
+  };
+
+  // The syncable set is memoized per workspace with a 60s TTL, so each run in
+  // this block must start from its own seeds (same convention as
+  // syncable-fields.spec.ts).
+  beforeEach(() => {
+    __clearSyncExclusionFormulasCacheForTests();
+  });
+
+  it('reports the wet run verdicts without issuing a single mutation', async () => {
+    const wetClient = new FakeClient();
+    seedDryRunFixtures(wetClient);
+    const wetCounts = await cleanupFormulaTimelineNoise(wetClient);
+
+    __clearSyncExclusionFormulasCacheForTests();
+
+    const dryClient = new FakeClient();
+    seedDryRunFixtures(dryClient);
+    const dryCounts = await cleanupFormulaTimelineNoise(dryClient, {
+      dryRun: true,
+    });
+
+    // The wet run is the oracle: all three verdicts, including the
+    // strip-everything row counted as a delete.
+    expect(wetCounts).toEqual({
+      scanned: 3,
+      deleted: 2,
+      stripped: 1,
+      kept: 0,
+      truncated: false,
+    });
+    expect(dryCounts).toEqual(wetCounts);
+
+    // Nothing was written: no mutation of any kind, and every row survives.
+    expect(dryClient.mutationSelections).toEqual([]);
+    expect(dryClient.mutations).toBe(0);
+    expect(dryClient.writes).toEqual([]);
+    expect(dryClient.get('timelineActivity', 't-delete')).toBeDefined();
+    expect(dryClient.get('timelineActivity', 't-strip-all')).toBeDefined();
+    expect(dryClient.get('timelineActivity', 't-strip')!.properties).toEqual({
+      diff: {
+        revenue: { before: 1, after: 2 },
+        name: { before: 'Acme', after: 'Acme Inc' },
+      },
+    });
   });
 });
 
