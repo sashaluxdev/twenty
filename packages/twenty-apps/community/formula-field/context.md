@@ -937,6 +937,86 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   full reference moved to `docs/reference.md`. **v0.6.0 is on cloud** — see the
   deploy paragraph under "What is NOT done".
 
+- **2026-09-09 ARC (timeline cleanup ported to the typed timeline-activity
+  contract; ADR 0032, 3 code commits `6e6e4ee6bd`/`f99e1bb369`/`517d71a1ce`, 1423
+  unit tests; NOT yet deployed)**: platform commit `2f27360df3` (2026-08-23, PR
+  #24620 "Make timeline activity types a generic application contract") removed
+  `timelineActivity.name` and replaced it with `timelineActivityTypeId`
+  (workspace-local FK) + `timelineActivityTypeSnapshot` (RAW_JSON `name`/
+  `action`/`universalIdentifier`) -- a typed, app-declarable contract shared by
+  every timeline emitter (messages, calendar events, notes, tasks, standard and
+  custom objects alike). ADR 0020/0022's cleanup cron filtered on `name: { in:
+  [...] }`, which stopped existing that day; the `timelineActivities` query has
+  thrown `"Object timelineActivity doesn't have any name field"` on every
+  10-minute cron run since, silently swallowed by the cron's existing fail-safe
+  KEEP posture -- there was no zero-scan tripwire to distinguish "quiet" from
+  "broken," so the break was invisible for 17 days until this session's dev
+  dry-run surfaced the stack trace. Live cloud audit (2026-09-09, read-only,
+  no writes): 104,406 live timelineActivity rows, 0 soft-deleted, 93,197 with no
+  workspaceMember; the actual app backlog is `formulaDefinition`-target
+  bookkeeping rows re-accumulating at ~350/48h (4,571 in 30 days) since the
+  break -- the ~64,500 person-target rows created 2026-09-07 03:00-21:00 UTC are
+  `messageLinked`/`calendarEventLinked` platform sync noise, **not** this app
+  (no person formulas exist), included only to size the live table correctly.
+  **Task 1** (`6e6e4ee6bd`) ported the classifier: the standard `recordUpdated`
+  type's universalIdentifier (`20202020-0d1a-4f0e-8a55-1c0a2f0a2c02`, one per
+  workspace) is resolved once per run via metadata `timelineActivityTypes`
+  (`resolveRecordUpdatedTypeId`, 60s memoized per workspace, injectable
+  `metadataClient`); an unresolved id means the run does NOT query
+  `timelineActivities` at all (zero counts, one warn) rather than falling back
+  to an unfiltered scan. The server filter gained `timelineActivityTypeId: {
+  eq: <id> }` plus an `or` of `target<Object>Id: { is: NOT_NULL }` per managed
+  object, alongside the existing `workspaceMemberId`/`happensAt` keys; row →
+  object resolution moved from parsing `name` to reading whichever single
+  `target<Object>Id` column is populated (0 or >1 populated → kept, fail-safe).
+  A mandatory in-process gate (`isRecordUpdatedRow`) re-checks each row's own
+  snapshot against the same universalIdentifier -- belt and braces against a
+  widened filter or metadata drift, load-bearing because routed rows
+  (`taskUpdated`, `noteUpdated`, `messageLinked`, `calendarEventLinked`) share
+  the same `target<Object>Id` columns and can carry a diff key that collides
+  with a managed field name. New: a warn when a run scans 0 rows while managed
+  objects exist (no equivalent existed before this port). **Task 2**
+  (`f99e1bb369`, fix round `517d71a1ce`) made the retro purge actually
+  runnable: `cleanupFormulaTimelineNoise(client, { dryRun: true })` shares the
+  exact verdict computation (`planStrip`) with the wet path and skips only
+  mutations. New `scripts/lib/remote-client.ts`: `loadRemote(remoteName,
+  usage)` centralizes the CLI-config-reading preamble both scripts duplicated,
+  and `createThrottledFetchTransport` enforces a 90-requests/60s sliding window
+  (below cloud's 100/60s limit -- the gap reserves headroom for the metadata
+  type-id request, which rides the SDK directly and sits outside this
+  transport's window); on `Limit reached` it sleeps 60s and retries up to 5
+  times, then returns the payload as-is. This transport is the ONLY
+  rate-limit protection in these scripts -- `execute` in `dynamic-client.ts`
+  drops GraphQL `extensions` before `withRetry` ever sees a `LIMIT_REACHED`
+  code, a pre-existing defect, deferred, unrelated to this port beyond sharing
+  a file. `scripts/retro-purge-timeline.ts` now takes `[--dry-run]
+  [--lookback-days N] [--yes]`; an unrecognized argument exits 1 with usage;
+  wet mode without `--yes` exits 2 -- **`yarn retro-purge <remote>` now
+  requires `--yes` to write**, a behavior change from before. `--dry-run` is
+  exactly one pass and cannot page past its cap (50 pages × 100 rows) because
+  nothing is deleted between passes, so a truncated dry run cannot show the
+  full picture in one shot. `scripts/audit-strict-gate.ts` was folded onto the
+  same `loadRemote`/transport helpers (behavior unchanged). Full suite green
+  (1423 tests, 83 files), lint clean. **Not yet run against any server.** The
+  Task 2 dev dry-run reached the local server end-to-end (argument parsing →
+  remote load → transport → a real HTTP POST → a real GraphQL response) and
+  was rejected only on authentication (`Error: Token invalid.` -- the stored
+  `dev` remote's API key is stale for the current local database), never on
+  plumbing -- so the filter semantics this port relies on (top-level AND, the
+  `or` bracketed group, `target<Object>Id` `is: NOT_NULL`,
+  `timelineActivityTypeId` `eq`) remain server-*unverified*, backed only by the
+  fake client's matching plus reading the platform's entity/constant source.
+  Cloud was never contacted. **Runbook, in order**: refresh the `dev` remote's
+  API key → `npx tsx scripts/retro-purge-timeline.ts dev --dry-run` → deploy
+  the app (`app:publish --private -r cloud` then `app:install -r cloud`) →
+  `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run` → review the
+  printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud --yes`. None
+  of these steps have been run; the cloud retro purge dropped by the user on
+  2026-08-10 (see that arc entry above) is revived here as the vehicle for the
+  post-2026-08-23 backlog, only if and when the user chooses to run it. Docs:
+  ADR 0032 + ADR index + this entry (docs-only task, no code changes). No
+  version bump -- 0.6.1 (current) is already ahead of the deployed cloud 0.6.0.
+
 ## What is NOT done (next work)
 
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
