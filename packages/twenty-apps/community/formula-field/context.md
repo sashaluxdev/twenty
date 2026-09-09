@@ -1034,6 +1034,21 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
 
 ## What is NOT done (next work)
 
+- **NEXT BUILD (decided 2026-09-09): keep formula history, not just delete
+  noise.** Spec approved and committed at
+  `docs/superpowers/specs/2026-09-09-formula-timeline-history-design.md`
+  (repo root); will become ADR 0033. Two rules on top of ADR 0032: (a)
+  override released: the classifier gets a TRANSITION key class (`fxOverrides`)
+  that keeps such rows whole (the platform already merges the marker and value
+  writes into one row within 10 min; coalescing them into one mutation at the
+  two paired sites is an optional write economy); (b) formula changed: keep managed-value rows on the target
+  object for 15 minutes after each surviving `expression`/`enabled`/
+  `allowOverride` change row on the definition's own timeline. Explicitly
+  rejected for now: reason stamps, initial-backfill rows, UI. Start only after
+  the ADR 0032 branch is merged and cloud-deployed; the dev probe field
+  `company.formulaProbe` and definition "Probe double employees" are still on
+  the local workspace for the live check.
+
 - **Formula field visibility on restore — REGRESSED 2026-07-08, needs a
   proper fix**: `convergeFormulaFieldLayout`'s forced `visible:true` for the
   VALUE field (not the FX Status companion — that stays, it was never
