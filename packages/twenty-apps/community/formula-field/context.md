@@ -960,9 +960,11 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   the app (`app:publish --private -r cloud` then `app:install -r cloud`) →
   `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run` → review the
   printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud --yes`. None
-  of these steps have been run; the cloud retro purge dropped by the user on
-  2026-08-10 (see that arc entry above) is revived here as the vehicle for the
-  post-2026-08-23 backlog, only if and when the user chooses to run it. Docs:
+  of these steps have been run. The cloud retro purge was dropped at the
+  user's request on 2026-08-10 (the untracked scratch script was deleted; the
+  committed scripts/retro-purge-timeline.ts stayed); this arc revives that
+  committed script as the vehicle for the post-2026-08-23 backlog, to run only
+  on the user's explicit go. Docs:
   ADR 0032 + ADR index + this entry (docs-only task, no code changes). No
   version bump -- 0.6.1 (current) is already ahead of the deployed cloud 0.6.0.
 

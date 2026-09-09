@@ -37,4 +37,4 @@ is maintainable without re-deriving the reasoning.
 | [0029](0029-select-output.md) | SELECT output — engine lane and the option-membership gate | Implemented |
 | [0030](0030-blank-text-convergence.md) | Blank-TEXT convergence — equality-side widening, not read-side folding | Implemented |
 | [0031](0031-override-marker-field.md) | Override marker field | Implemented |
-| [0032](0032-timeline-cleanup-typed-contract.md) | Port the timeline cleanup classifier to the typed timeline-activity contract | Implemented, not yet deployed |
+| [0032](0032-timeline-cleanup-typed-contract.md) | Port the timeline cleanup classifier to the typed timeline-activity contract | Implemented (not yet deployed) |
