@@ -445,6 +445,9 @@ const stripKeysFromRow = async (
   if (dryRun) {
     return 'stripped';
   }
+  // Only the mutation is contained here: planStrip already ran outside the try,
+  // over plain-object reads that cannot throw, so a `kept` from this catch
+  // always means a failed WRITE — never a misread row.
   try {
     await withRetry(() =>
       client.mutation({

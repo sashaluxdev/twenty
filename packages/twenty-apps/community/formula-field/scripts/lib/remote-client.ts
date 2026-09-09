@@ -44,17 +44,31 @@ const nonEmptyString = (value: unknown): string | null =>
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-const readConfig = (): unknown => {
+const readConfigFile = (): string => {
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as unknown;
+    return fs.readFileSync(CONFIG_PATH, 'utf8');
   } catch (error) {
-    // Only the reason is printed, never anything read from the file: it holds
-    // API keys for every configured remote.
+    // A filesystem failure (missing file, permissions) reports the path and
+    // errno only — it never quotes the file's contents, so its message is safe
+    // to print.
     console.error(
       `Could not read ${CONFIG_PATH}: ${
         error instanceof Error ? error.message : 'unknown error'
       }`,
     );
+    process.exit(1);
+  }
+};
+
+const readConfig = (): unknown => {
+  const raw = readConfigFile();
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    // A fixed message, never the SyntaxError's: it quotes the region of the
+    // file around the syntax error, which in this file is a fragment of an API
+    // key.
+    console.error(`${CONFIG_PATH} is not valid JSON`);
     process.exit(1);
   }
 };
@@ -153,17 +167,27 @@ export const createThrottledFetchTransport = (
       }),
     });
     const body = await response.text();
+    // Not a GraphQL answer at all (proxy error page, gateway timeout): the
+    // status plus a short excerpt is enough to diagnose without dumping a whole
+    // HTML page into the log. Never headers — they carry the bearer token.
+    const notGraphql = (): Error =>
+      new Error(`HTTP ${response.status} from ${endpoint}: ${body.slice(0, 200)}`);
+
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(body);
-      return isPlainObject(parsed) ? (parsed as GraphqlPayload) : {};
+      parsed = JSON.parse(body);
     } catch {
-      // Not a GraphQL answer at all (proxy error page, gateway timeout): the
-      // status plus a short excerpt is enough to diagnose without dumping a
-      // whole HTML page into the log.
-      throw new Error(
-        `HTTP ${response.status} from ${endpoint}: ${body.slice(0, 200)}`,
-      );
+      throw notGraphql();
     }
+    // Valid JSON that is not an object (top-level null, array, string) is no
+    // more a GraphQL response than an HTML error page. Coercing it to `{}`
+    // would make `execute` return null, the page loop find no edges, and the
+    // run exit 0 reporting `scanned: 0` — the silent-zero mode this port exists
+    // to kill.
+    if (!isPlainObject(parsed)) {
+      throw notGraphql();
+    }
+    return parsed as GraphqlPayload;
   };
 
   return {
@@ -175,7 +199,7 @@ export const createThrottledFetchTransport = (
         retry += 1
       ) {
         console.warn(
-          `[retro] rate limited; waiting ${Math.round(
+          `[remote-client] rate limited; waiting ${Math.round(
             rateLimitBackoffMs / 1000,
           )}s (retry ${retry}/${maxRateLimitRetries})`,
         );
