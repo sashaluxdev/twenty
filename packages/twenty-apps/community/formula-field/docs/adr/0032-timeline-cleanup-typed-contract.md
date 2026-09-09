@@ -32,12 +32,16 @@ calendar events, notes and tasks alike. Two consequences for this app:
 
 ADR 0020's cron queried `timelineActivities` with `filter: { name: { in: [...] } }`.
 That query has thrown `"Object timelineActivity doesn't have any name field"` on
-every one of its 10-minute runs since 2026-08-23, and the cron's existing
-fail-safe posture swallowed it exactly like any other read failure: keep
-everything, zero counts, a run that looks identical to a healthy quiet one. There
-was no tripwire distinguishing "ran and found nothing to clean" from "couldn't
-run at all" -- so the break was invisible for 17 days, until this session's dev
-dry-run surfaced the stack trace.
+every one of its 10-minute runs since 2026-08-23. This was not swallowed into a
+quiet, zero-count run: `execute` (`dynamic-client.ts`) throws on a GraphQL
+`errors[]` response, `withRetry` (`with-retry.ts`) treats a schema error as
+non-retryable and rethrows on the first attempt, and nothing in
+`cleanupFormulaTimelineNoise` or the cron wrapper catches it -- so every
+10-minute invocation failed outright, with a thrown error, for 17 days. The
+break was silent only in the sense that nobody was watching cron invocation
+failures; there was no monitoring on this cron to surface a thrown error, so it
+went unnoticed until this session's dev dry-run surfaced the stack trace
+directly.
 
 Live cloud audit (2026-09-09, read-only workspace GraphQL, no writes):
 
@@ -135,8 +139,13 @@ model is non-empty now logs a warning. This is the one place ADR 0020/0022 had
 no equivalent: nothing previously distinguished "genuinely quiet" from
 "can't see anything" for the main scan (only the type-id resolution above had
 no analogous signal until this ADR). It does not fully close the gap by itself
-(see Consequences), but it is what would have caught the `name` break inside a
-day instead of seventeen.
+(see Consequences), and it covers a different failure mode than the `name`
+break: a well-formed query whose filter matches nothing (an unresolved or
+wrong type id), not a query that errors outright. A throwing query never
+reaches this check at all -- `counts.scanned` is never computed, and the error
+propagates straight out of the run -- so this warn would NOT have caught the
+`name` break. What would have is monitoring the cron's own invocation
+failures, which is not yet in place (see Not in scope).
 
 **Dry-run.** `cleanupFormulaTimelineNoise(client, { dryRun: true })` runs the
 identical read and classification path and shares the exact verdict computation
@@ -194,6 +203,14 @@ would re-scan the identical rows.
   reserved for that one unthrottled request per run (and, for
   `audit-strict-gate.ts`, its own per-formula metadata reads, which share the
   same shape).
+- **`scripts/audit-strict-gate.ts` did not merely move onto the same helpers
+  with behavior unchanged.** Before this branch it threw `"CoreApiClient was
+  not generated"` in this workspace, so this port also makes it runnable
+  again for the first time, and newly throttles its core reads through the
+  same 90-requests/60s transport; its own per-formula metadata reads still sit
+  outside that window (previous bullet), so a large-formula-count audit run
+  inside an otherwise-saturated minute could still approach the platform's
+  100/60s limit.
 - **The in-process gate is mandatory, not optional insurance** -- it is the
   second half of a two-layer check (server filter + snapshot re-check), not a
   redundant belt-and-braces that could safely be dropped. See the routed-rows
@@ -225,18 +242,32 @@ would re-scan the identical rows.
   database), never on plumbing. Cloud was never contacted.
 - **Runbook**, in order: refresh the `dev` remote's API key → `npx tsx
   scripts/retro-purge-timeline.ts dev --dry-run` (first live confirmation of
-  the filter semantics) → deploy the app (`app:publish --private -r cloud`,
-  then `app:install -r cloud`) → `npx tsx scripts/retro-purge-timeline.ts
-  cloud --dry-run` → review the printed counts → `npx tsx
-  scripts/retro-purge-timeline.ts cloud --yes`. The cloud retro purge was
-  dropped at the user's request on 2026-08-10 (the untracked scratch script
-  was deleted; the committed `scripts/retro-purge-timeline.ts` stayed); this
-  ADR revives that committed script as the vehicle for the post-2026-08-23
-  backlog, to run only on the user's explicit go -- none of the steps above
-  are authorized to run themselves.
+  the filter semantics) → confirm the `cloud` remote in `~/.twenty/config.json`
+  carries a workspace API key (`apiKey`), not only CLI OAuth tokens --
+  `loadRemote` (`scripts/lib/remote-client.ts`) exits 1 when it is missing;
+  mint one in Settings > API & Webhooks and register it with `twenty
+  remote:add --as cloud --url <cloud url> --api-key <key>` if missing → deploy
+  the app (`app:publish --private -r cloud`, then `app:install -r cloud`) →
+  `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run` → review the
+  printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud --yes`. The
+  cloud retro purge was dropped at the user's request on 2026-08-10 (the
+  untracked scratch script was deleted; the committed
+  `scripts/retro-purge-timeline.ts` stayed); this ADR revives that committed
+  script as the vehicle for the post-2026-08-23 backlog, to run only on the
+  user's explicit go -- none of the steps above are authorized to run
+  themselves.
+- **Exit codes** (`scripts/retro-purge-timeline.ts`): 1 for bad/unrecognized
+  arguments, 2 for wet mode (no `--dry-run`) without `--yes`, 3 when a pass
+  scans 0 rows (nothing to purge, or the candidate filter cannot see
+  anything -- see the printed warning for which).
 
 ## Not in scope (backlog)
 
+- Monitor/alert on cron invocation failures for timeline-cleanup -- this is
+  the actual tripwire the `name` break needed; nothing watches whether the
+  10-minute cron's own invocations are throwing, so a repeat of the same
+  failure mode (a query that errors on every run, not one that quietly finds
+  nothing) would again go unnoticed.
 - Live server verification of the four filter semantics claims above -- one
   `dev` API-key refresh away, and worth doing before trusting the cloud purge.
 - Actually running the cloud retro purge -- mechanism ready, not yet executed.
