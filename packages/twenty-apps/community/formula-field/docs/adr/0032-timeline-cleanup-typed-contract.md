@@ -228,11 +228,12 @@ would re-scan the identical rows.
   the filter semantics) → deploy the app (`app:publish --private -r cloud`,
   then `app:install -r cloud`) → `npx tsx scripts/retro-purge-timeline.ts
   cloud --dry-run` → review the printed counts → `npx tsx
-  scripts/retro-purge-timeline.ts cloud --yes`. Retro purge was previously
-  dropped by the user on 2026-08-10 (see `context.md`'s 2026-08-10 arc); this
-  ADR revives the script as the vehicle for the post-2026-08-23 backlog only
-  if and when the user chooses to run it -- none of the steps above are
-  authorized to run themselves.
+  scripts/retro-purge-timeline.ts cloud --yes`. The cloud retro purge was
+  dropped at the user's request on 2026-08-10 (the untracked scratch script
+  was deleted; the committed `scripts/retro-purge-timeline.ts` stayed); this
+  ADR revives that committed script as the vehicle for the post-2026-08-23
+  backlog, to run only on the user's explicit go -- none of the steps above
+  are authorized to run themselves.
 
 ## Not in scope (backlog)
 
