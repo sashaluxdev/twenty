@@ -108,6 +108,91 @@ describe('formatPullReport', () => {
     expect(verboseReport).toContain('…and 5 more');
   });
 
+  it('should print the reason next to each count and split a kind by reason', () => {
+    const report = buildReport({
+      coverage: buildCoverage([
+        {
+          metadataName: 'roleTarget',
+          status: 'EXCLUDED',
+          reason: 'member or API key role assignment',
+        },
+        {
+          metadataName: 'roleTarget',
+          status: 'EXCLUDED',
+          reason: 'member or API key role assignment',
+        },
+        {
+          metadataName: 'navigationMenuItem',
+          status: 'EXCLUDED',
+          reason: 'personal navigation item',
+        },
+        {
+          metadataName: 'navigationMenuItem',
+          status: 'EXCLUDED',
+          reason: 'navigation item pinned to a record',
+        },
+      ]),
+    });
+
+    expect(report).toMatch(
+      /roleTarget\s+2\s+member or API key role assignment/,
+    );
+    expect(report).toMatch(
+      /navigationMenuItem\s+1\s+navigation item pinned to a record/,
+    );
+    expect(report).toMatch(/navigationMenuItem\s+1\s+personal navigation item/);
+  });
+
+  it('should name the exported rows written without their workspace-local state', () => {
+    const report = buildReport({
+      coverage: buildCoverage([
+        { metadataName: 'objectMetadata', status: 'EXPORTED' },
+        {
+          metadataName: 'objectMetadata',
+          universalIdentifier: 'survey-result-identifier',
+          status: 'EXPORTED',
+          reason: 'deactivated in this workspace, exported active',
+        },
+        {
+          metadataName: 'fieldMetadata',
+          universalIdentifier: 'unlabelled-identifier',
+          status: 'EXPORTED',
+          reason: 'workspace overrides not exported',
+        },
+      ]),
+      entityLabelByUniversalIdentifier: {
+        'survey-result-identifier': 'surveyResult',
+      },
+    });
+
+    expect(report).toContain(
+      'Written without their workspace-local state (2 row(s)):',
+    );
+    expect(report).toContain(
+      'objectMetadata surveyResult: deactivated in this workspace, exported active',
+    );
+    expect(report).toContain(
+      'fieldMetadata unlabelled-identifier: workspace overrides not exported',
+    );
+    expect(report).not.toContain('identifier-0');
+  });
+
+  it('should cap the rows written without their workspace-local state unless verbose', () => {
+    const coverage = buildCoverage(
+      Array.from({ length: 25 }, () => ({
+        metadataName: 'fieldMetadata',
+        status: 'EXPORTED' as const,
+        reason: 'workspace overrides not exported',
+      })),
+    );
+
+    const report = buildReport({ coverage });
+
+    expect(report).toContain('…and 5 more, listed with --verbose');
+    expect(report).not.toContain('identifier-9');
+    expect(buildReport({ coverage, verbose: true })).toContain('identifier-9');
+  });
+
   it('should name the entities the writer refused to write', () => {
     const report = buildReport({
       skipped: [
@@ -144,21 +229,20 @@ describe('formatPullReport', () => {
     expect(report).toContain('src/objects/unpushed.object.ts');
   });
 
-  it('should warn that published translations were not written and point at the locales folder', () => {
+  it('should list the locales whose entries stayed in compiled form', () => {
     const report = buildReport({
-      translations: {
-        'fr-FR': { greeting: 'Bonjour' },
-        en: { greeting: 'Hello' },
-      },
+      compiledTranslationEntryCountByLocale: { 'fr-FR': 3, en: 1 },
     });
 
-    expect(report).toMatch(/^Published translations \(en, fr-FR\).*locales\//m);
+    expect(report).toContain('locales/compiled/');
+    expect(report).toMatch(/^ {2}en {11}1 entry$/m);
+    expect(report).toMatch(/^ {2}fr-FR {8}3 entries$/m);
   });
 
-  it('should stay silent about translations when the workspace has none', () => {
-    expect(buildReport()).not.toContain('Published translations');
-    expect(buildReport({ translations: { en: {} } })).not.toContain(
-      'Published translations',
-    );
+  it('should stay silent about compiled translations when every entry was decoded', () => {
+    expect(buildReport()).not.toContain('compiled form');
+    expect(
+      buildReport({ compiledTranslationEntryCountByLocale: { 'fr-FR': 0 } }),
+    ).not.toContain('compiled form');
   });
 });

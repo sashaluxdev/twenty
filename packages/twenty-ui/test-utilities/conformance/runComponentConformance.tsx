@@ -13,12 +13,12 @@ import {
   describe,
   expect,
   it,
-  type MockInstance,
   vi,
+  type MockInstance,
 } from 'vitest';
 
-import { ThemeProvider } from '@ui/theme-constants/ThemeProvider';
-import { isDefined } from '@ui/utilities/utils/isDefined';
+import { ThemeProvider } from '@ui/theme';
+import { isDefined } from '@ui/utilities';
 
 import { type ComponentConformanceCase } from './types/ComponentConformanceCase';
 import { type ComponentConformanceOptions } from './types/ComponentConformanceOptions';
@@ -110,6 +110,19 @@ export const runComponentConformance = ({
       expect(ref.current).toBe(screen.getByTestId(CONFORMANCE_TEST_ID));
     });
 
+    itUnlessSkipped('ref', 'cleans up callback refs on unmount', () => {
+      const cleanup = vi.fn();
+      const ref = vi.fn(() => cleanup);
+      const { unmount } = render(compose({ ref }));
+
+      expect(ref).toHaveBeenCalledWith(screen.getByTestId(CONFORMANCE_TEST_ID));
+      expect(cleanup).toHaveBeenCalledTimes(ref.mock.calls.length - 1);
+
+      unmount();
+
+      expect(cleanup).toHaveBeenCalledTimes(ref.mock.calls.length);
+    });
+
     itUnlessSkipped('dataAttributes', 'passes data attributes through', () => {
       render(compose({ 'data-conformance': CONFORMANCE_DATA_ATTRIBUTE_VALUE }));
 
@@ -134,6 +147,7 @@ export const runComponentConformance = ({
       const rootNode = screen.getByTestId(CONFORMANCE_TEST_ID);
 
       expect(rootNode).toHaveClass(CONFORMANCE_CLASS_NAME);
+      expect(rootNode.className.split(' ').pop()).toBe(CONFORMANCE_CLASS_NAME);
 
       if (isDefined(ownClassName)) {
         expect(rootNode).toHaveClass(ownClassName);

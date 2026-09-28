@@ -11,11 +11,11 @@ import DocViewer, { DocViewerRenderers } from '@cyntler/react-doc-viewer';
 import '@cyntler/react-doc-viewer/dist/index.css';
 import { styled } from '@linaria/react';
 import { Trans, useLingui } from '@lingui/react/macro';
-import { useContext, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { isDefined } from 'twenty-shared/utils';
 import { IconDownload } from 'twenty-ui/icon';
-import { Button } from 'twenty-ui/input';
-import { ThemeContext, themeCssVariables } from 'twenty-ui/theme-constants';
+import { Button } from 'twenty-ui/primitives/input';
+import { useTheme, themeCssVariables } from 'twenty-ui/theme';
 import { getFileNameAndExtension } from '~/utils/file/getFileNameAndExtension';
 
 const MS_OFFICE_EXTENSIONS = [
@@ -193,7 +193,7 @@ export const DocumentViewer = ({
   documentUrl,
   documentExtension,
 }: DocumentViewerProps) => {
-  const { theme } = useContext(ThemeContext);
+  const theme = useTheme();
   const { t } = useLingui();
   const [csvPreview, setCsvPreview] = useState<CsvPreviewData | undefined>(
     undefined,
@@ -294,12 +294,11 @@ export const DocumentViewer = ({
             </Trans>
           </StyledLightMessage>
           <Button
-            Icon={IconDownload}
-            title={t`Download`}
+            startIcon={<IconDownload />}
             onClick={() => downloadFile(documentUrl, documentName)}
-            variant="secondary"
-            size="small"
-          />
+            size="sm"
+            variant="outline"
+          >{t`Download`}</Button>
         </StyledUnavailablePreviewContainer>
       </StyledDocumentViewerContainer>
     );

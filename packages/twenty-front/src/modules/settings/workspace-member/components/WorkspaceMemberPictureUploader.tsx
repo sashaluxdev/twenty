@@ -2,17 +2,16 @@ import { t } from '@lingui/core/macro';
 import { useState } from 'react';
 
 import { currentWorkspaceMemberState } from '@/auth/states/currentWorkspaceMemberState';
+import { useUploadWorkspaceMemberProfilePicture } from '@/settings/members/hooks/useUploadWorkspaceMemberProfilePicture';
 import { useCanEditProfileField } from '@/settings/profile/hooks/useCanEditProfileField';
 import { useUpdateWorkspaceMemberSettings } from '@/settings/profile/hooks/useUpdateWorkspaceMemberSettings';
-import { useSnackBar } from '@/ui/feedback/snack-bar-manager/hooks/useSnackBar';
 import { ImageInput } from '@/ui/input/components/ImageInput';
-import { useSetAtomState } from '@/ui/utilities/state/jotai/hooks/useSetAtomState';
 import { useAtomStateValue } from '@/ui/utilities/state/jotai/hooks/useAtomStateValue';
-import { useMutation } from '@apollo/client/react';
+import { useSetAtomState } from '@/ui/utilities/state/jotai/hooks/useSetAtomState';
 import { FileFolder } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
+import { useToast } from 'twenty-ui/components';
 import { REACT_APP_SERVER_BASE_URL } from '~/config';
-import { UploadWorkspaceMemberProfilePictureDocument } from '~/generated-metadata/graphql';
 import { isUndefinedOrNull } from '~/utils/isUndefinedOrNull';
 
 type WorkspaceMemberPictureUploaderProps = {
@@ -28,7 +27,7 @@ export const WorkspaceMemberPictureUploader = ({
   onAvatarUpdated,
   disabled = false,
 }: WorkspaceMemberPictureUploaderProps) => {
-  const { enqueueErrorSnackBar } = useSnackBar();
+  const { enqueueToast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [uploadController, setUploadController] =
@@ -39,9 +38,8 @@ export const WorkspaceMemberPictureUploader = ({
     currentWorkspaceMemberState,
   );
 
-  const [uploadPicture] = useMutation(
-    UploadWorkspaceMemberProfilePictureDocument,
-  );
+  const { uploadWorkspaceMemberProfilePicture } =
+    useUploadWorkspaceMemberProfilePicture();
 
   const { updateWorkspaceMemberSettings } = useUpdateWorkspaceMemberSettings();
 
@@ -63,19 +61,9 @@ export const WorkspaceMemberPictureUploader = ({
 
     let newAvatarUrl: string | null = null;
     try {
-      const { data } = await uploadPicture({
-        variables: { file },
-        context: {
-          fetchOptions: {
-            signal: controller.signal,
-          },
-        },
+      const uploadedFile = await uploadWorkspaceMemberProfilePicture(file, {
+        signal: controller.signal,
       });
-
-      const uploadedFile = data?.uploadWorkspaceMemberProfilePicture;
-      if (!isDefined(uploadedFile)) {
-        throw new Error('Avatar upload failed');
-      }
 
       newAvatarUrl = `${REACT_APP_SERVER_BASE_URL}/file/${FileFolder.CorePicture}/${uploadedFile.id}`;
       await updateWorkspaceMemberSettings({
@@ -101,7 +89,7 @@ export const WorkspaceMemberPictureUploader = ({
       const message =
         error instanceof Error ? error.message : t`Failed to upload picture`;
       setErrorMessage(t`An error occurred while uploading the picture.`);
-      enqueueErrorSnackBar({ message });
+      enqueueToast({ variant: 'error', children: message });
     } finally {
       setIsUploading(false);
     }
@@ -130,7 +118,7 @@ export const WorkspaceMemberPictureUploader = ({
       const message =
         error instanceof Error ? error.message : t`Failed to remove picture`;
       setErrorMessage(t`An error occurred while removing the picture.`);
-      enqueueErrorSnackBar({ message });
+      enqueueToast({ variant: 'error', children: message });
     } finally {
       setIsUploading(false);
     }

@@ -1,9 +1,10 @@
+import { WorkspaceSetupChatSidePanelEffect } from '@/onboarding/effect-components/WorkspaceSetupChatSidePanelEffect';
 import { CommandMenuForMobile } from '@/command-menu/components/CommandMenuForMobile';
 import { useCommandMenuHotKeys } from '@/command-menu/hooks/useCommandMenuHotKeys';
 import { RouteContextStoreProvider } from '@/context-store/components/RouteContextStoreProvider';
 import { SidePanelForDesktop } from '@/side-panel/components/SidePanelForDesktop';
 import { SidePanelPathUrlSyncEffect } from '@/side-panel/routing/components/SidePanelPathUrlSyncEffect';
-import { useIsMobile } from '@/ui/utilities/responsive/hooks/useIsMobile';
+import { useIsMobile } from 'twenty-ui/utilities';
 import { styled } from '@linaria/react';
 import { Outlet } from 'react-router-dom';
 
@@ -32,7 +33,6 @@ const StyledContent = styled.div`
   flex: 1 1 0;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
 
   @media print {
     display: block;
@@ -51,6 +51,7 @@ export const MainAppLayoutWithSidePanel = () => {
     <StyledRow>
       <RouteContextStoreProvider />
       <SidePanelPathUrlSyncEffect />
+      <WorkspaceSetupChatSidePanelEffect />
       <StyledContent>
         <Outlet />
       </StyledContent>

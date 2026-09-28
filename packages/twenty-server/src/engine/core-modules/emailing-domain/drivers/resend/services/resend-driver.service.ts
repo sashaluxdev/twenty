@@ -128,7 +128,10 @@ export class ResendDriver implements EmailingDomainDriverInterface {
       );
     }
 
-    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(input.emailingDomain);
+    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(
+      input.emailingDomain,
+      input.sendKind,
+    );
     const emailToSend = this.unsubscribeContentService.addTo(
       input,
       unsubscribeBaseUrl,
@@ -164,6 +167,7 @@ export class ResendDriver implements EmailingDomainDriverInterface {
 
     return {
       messageId: id,
+      headerMessageId: await this.findHeaderMessageId(id),
       deliveredRecipients: {
         to: emailToSend.to,
         cc: emailToSend.cc ?? [],
@@ -189,7 +193,10 @@ export class ResendDriver implements EmailingDomainDriverInterface {
       );
     }
 
-    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(input.emailingDomain);
+    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(
+      input.emailingDomain,
+      input.sendKind,
+    );
     const batchToSend = this.unsubscribeContentService.addToBatch(
       input,
       unsubscribeBaseUrl,
@@ -232,14 +239,34 @@ export class ResendDriver implements EmailingDomainDriverInterface {
         const id = data?.[index]?.id;
 
         return isNonEmptyString(id)
-          ? { recipientIndex: index, messageId: id, errorMessage: null }
+          ? {
+              recipientIndex: index,
+              messageId: id,
+              headerMessageId: null,
+              errorMessage: null,
+            }
           : {
               recipientIndex: index,
               messageId: null,
+              headerMessageId: null,
               errorMessage: 'Resend returned no id for this destination',
             };
       }),
     };
+  }
+
+  private async findHeaderMessageId(emailId: string): Promise<string | null> {
+    const sentEmail = await this.resendApiClientService
+      .getSentEmail(emailId)
+      .catch(() => null);
+
+    const messageId = sentEmail?.message_id;
+
+    if (!isNonEmptyString(messageId)) {
+      return null;
+    }
+
+    return messageId.startsWith('<') ? messageId : `<${messageId}>`;
   }
 
   private async findOrCreateDomain(domainName: string): Promise<ResendDomain> {

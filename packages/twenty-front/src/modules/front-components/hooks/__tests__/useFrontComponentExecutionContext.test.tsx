@@ -2,12 +2,15 @@ import { i18n } from '@lingui/core';
 import { I18nProvider } from '@lingui/react';
 import { act, renderHook } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
-import { AppPath, SidePanelPages } from 'twenty-shared/types';
 import { type AppLocale } from 'twenty-shared/translations';
+import { AppPath, SidePanelPages } from 'twenty-shared/types';
 
 import { MAIN_CONTEXT_STORE_INSTANCE_ID } from '@/context-store/constants/MainContextStoreInstanceId';
 import { contextStoreRecordShowParentViewComponentState } from '@/context-store/states/contextStoreRecordShowParentViewComponentState';
 import { useFrontComponentExecutionContext } from '@/front-components/hooks/useFrontComponentExecutionContext';
+import { getMockObjectMetadataItemOrThrow } from '~/testing/utils/getMockObjectMetadataItemOrThrow';
+import { getTestEnrichedObjectMetadataItemsMock } from '~/testing/utils/getTestEnrichedObjectMetadataItemsMock';
+import { setTestObjectMetadataItemsInMetadataStore } from '~/testing/utils/setTestObjectMetadataItemsInMetadataStore';
 
 jest.mock('@/object-metadata/hooks/useObjectMetadataItems', () => ({
   useObjectMetadataItems: () => ({
@@ -30,7 +33,7 @@ jest.mock('@/object-metadata/utils/getFieldMetadataItemById', () => ({
 }));
 
 const mockNavigateApp = jest.fn();
-const mockRequestAccessTokenRefresh = jest.fn();
+const mockRequestApplicationAccessTokenRefresh = jest.fn();
 const mockOpenConfirmationModal = jest.fn();
 const mockNavigateSidePanel = jest.fn();
 const mockOpenRecordInSidePanel = jest.fn();
@@ -41,13 +44,10 @@ const mockOpenFrontComponentInSidePanel = jest.fn();
 const mockSetSidePanelSearch = jest.fn();
 const mockGetIcon = jest.fn((name: string) => `icon-${name}`);
 const mockUnmountEngineCommand = jest.fn();
-const mockEnqueueSuccessSnackBar = jest.fn();
-const mockEnqueueErrorSnackBar = jest.fn();
-const mockEnqueueInfoSnackBar = jest.fn();
-const mockEnqueueWarningSnackBar = jest.fn();
+
 const mockCloseSidePanelMenu = jest.fn();
 const mockSetCommandMenuItemProgress = jest.fn();
-const mockCopyToClipboardWithoutSuccessSnackBar = jest.fn();
+const mockCopyToClipboardWithoutSuccessToast = jest.fn();
 const mockDirectUploadFile = jest.fn();
 const mockSetRecordPageActiveTabId = jest.fn();
 const mockStorageSet = jest.fn();
@@ -61,11 +61,15 @@ jest.mock('~/hooks/useNavigateApp', () => ({
   useNavigateApp: () => mockNavigateApp,
 }));
 
-jest.mock('@/front-components/hooks/useRequestApplicationTokenRefresh', () => ({
-  useRequestApplicationTokenRefresh: () => ({
-    requestAccessTokenRefresh: mockRequestAccessTokenRefresh,
+jest.mock(
+  '@/front-components/hooks/useFrontComponentApplicationTokenPair',
+  () => ({
+    useFrontComponentApplicationTokenPair: () => ({
+      requestApplicationAccessTokenRefresh:
+        mockRequestApplicationAccessTokenRefresh,
+    }),
   }),
-}));
+);
 
 jest.mock(
   '@/command-menu-item/confirmation-modal/hooks/useCommandMenuConfirmationModal',
@@ -119,13 +123,11 @@ jest.mock(
   }),
 );
 
-jest.mock('@/ui/feedback/snack-bar-manager/hooks/useSnackBar', () => ({
-  useSnackBar: () => ({
-    enqueueSuccessSnackBar: mockEnqueueSuccessSnackBar,
-    enqueueErrorSnackBar: mockEnqueueErrorSnackBar,
-    enqueueInfoSnackBar: mockEnqueueInfoSnackBar,
-    enqueueWarningSnackBar: mockEnqueueWarningSnackBar,
-  }),
+const mockEnqueueToast = jest.fn();
+
+jest.mock('twenty-ui/components', () => ({
+  ...jest.requireActual('twenty-ui/components'),
+  useToast: () => ({ enqueueToast: mockEnqueueToast }),
 }));
 
 jest.mock('@/side-panel/hooks/useSidePanelMenu', () => ({
@@ -158,8 +160,7 @@ jest.mock('@/ui/utilities/state/jotai/hooks/useSetAtomFamilyState', () => ({
 
 jest.mock('~/hooks/useCopyToClipboard', () => ({
   useCopyToClipboard: () => ({
-    copyToClipboardWithoutSuccessSnackBar:
-      mockCopyToClipboardWithoutSuccessSnackBar,
+    copyToClipboardWithoutSuccessToast: mockCopyToClipboardWithoutSuccessToast,
   }),
 }));
 
@@ -195,13 +196,14 @@ const renderUseFrontComponentExecutionContext = (
   > & { colorScheme?: 'light' | 'dark'; applicationId?: string },
 ) =>
   renderHook(
-    () =>
+    (parameters) =>
       useFrontComponentExecutionContext({
         colorScheme: 'light',
         applicationId: APPLICATION_ID,
-        ...params,
+        ...parameters,
       }),
     {
+      initialProps: params,
       wrapper: ({ children }) => I18nProvider({ i18n, children }),
     },
   );
@@ -225,6 +227,13 @@ const createParentView = (parentViewObjectNameSingular: string) => ({
 });
 
 describe('useFrontComponentExecutionContext', () => {
+  beforeAll(() => {
+    setTestObjectMetadataItemsInMetadataStore(
+      getDefaultStore(),
+      getTestEnrichedObjectMetadataItemsMock(),
+    );
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockCurrentUser = { id: 'user-123' };
@@ -244,6 +253,7 @@ describe('useFrontComponentExecutionContext', () => {
         userId: 'user-123',
         recordId: 'record-456',
         selectedRecordIds: ['record-456'],
+        selectedObjectMetadata: null,
         timelineActivityId: null,
         colorScheme: 'light',
         locale: i18n.locale as AppLocale,
@@ -261,6 +271,7 @@ describe('useFrontComponentExecutionContext', () => {
         userId: 'user-123',
         recordId: null,
         selectedRecordIds: ['record-1', 'record-2', 'record-3'],
+        selectedObjectMetadata: null,
         timelineActivityId: null,
         colorScheme: 'light',
         locale: i18n.locale as AppLocale,
@@ -303,6 +314,71 @@ describe('useFrontComponentExecutionContext', () => {
       });
 
       expect(result.current.executionContext.colorScheme).toBe('dark');
+    });
+
+    it.each([
+      { objectNameSingular: 'company', selectedRecordIds: ['record-1'] },
+      {
+        objectNameSingular: 'person',
+        selectedRecordIds: ['record-1', 'record-2'],
+      },
+      { objectNameSingular: 'person', selectedRecordIds: [] },
+    ])(
+      'should expose only object identity for $objectNameSingular with $selectedRecordIds',
+      ({ objectNameSingular, selectedRecordIds }) => {
+        const objectMetadataItem =
+          getMockObjectMetadataItemOrThrow(objectNameSingular);
+
+        const { result } = renderUseFrontComponentExecutionContext({
+          frontComponentId: FRONT_COMPONENT_ID,
+          objectNameSingular,
+          selectedRecordIds,
+        });
+
+        expect(result.current.executionContext.selectedObjectMetadata).toEqual({
+          id: objectMetadataItem.id,
+          nameSingular: objectMetadataItem.nameSingular,
+          namePlural: objectMetadataItem.namePlural,
+        });
+        expect(result.current.executionContext.selectedRecordIds).toEqual(
+          selectedRecordIds,
+        );
+      },
+    );
+
+    it('should update object metadata and clear it when context is absent or unresolved', () => {
+      const { result, rerender } = renderUseFrontComponentExecutionContext({
+        frontComponentId: FRONT_COMPONENT_ID,
+        objectNameSingular: 'company',
+        selectedRecordIds: ['record-1'],
+      });
+
+      expect(result.current.executionContext.selectedObjectMetadata?.id).toBe(
+        getMockObjectMetadataItemOrThrow('company').id,
+      );
+
+      rerender({
+        frontComponentId: FRONT_COMPONENT_ID,
+        objectNameSingular: 'person',
+        selectedRecordIds: ['record-2'],
+      });
+
+      expect(result.current.executionContext.selectedObjectMetadata).toEqual({
+        id: getMockObjectMetadataItemOrThrow('person').id,
+        nameSingular: 'person',
+        namePlural: 'people',
+      });
+
+      rerender({
+        frontComponentId: FRONT_COMPONENT_ID,
+        objectNameSingular: 'unknown',
+      });
+
+      expect(result.current.executionContext.selectedObjectMetadata).toBeNull();
+
+      rerender({ frontComponentId: FRONT_COMPONENT_ID });
+
+      expect(result.current.executionContext.selectedObjectMetadata).toBeNull();
     });
   });
 
@@ -755,36 +831,72 @@ describe('useFrontComponentExecutionContext', () => {
         recordContext: { recordId: 'lead-1', objectNameSingular: 'lead' },
       });
     });
-  });
 
-  describe('openCommandConfirmationModal', () => {
-    it('should call openConfirmationModal with frontComponent caller', async () => {
+    it('should keep the object context when no record id is provided', async () => {
       const { result } = renderUseFrontComponentExecutionContext({
         frontComponentId: FRONT_COMPONENT_ID,
       });
 
       await act(async () => {
-        await result.current.frontComponentHostCommunicationApi.openCommandConfirmationModal(
+        await result.current.frontComponentHostCommunicationApi.openSidePanelPage(
           {
-            title: 'Confirm?',
-            subtitle: 'Are you sure?',
-            confirmButtonText: 'Yes',
-            confirmButtonAccent: 'danger',
+            page: SidePanelPages.ViewFrontComponent,
+            frontComponentId: 'fc-1',
+            pageTitle: 'My Component',
+            pageIcon: 'IconBolt',
+            objectNameSingular: 'lead',
           },
         );
       });
 
-      expect(mockOpenConfirmationModal).toHaveBeenCalledWith({
-        caller: {
-          type: 'frontComponent',
-          frontComponentId: FRONT_COMPONENT_ID,
-        },
-        title: 'Confirm?',
-        subtitle: 'Are you sure?',
-        confirmButtonText: 'Yes',
-        confirmButtonAccent: 'danger',
+      expect(mockOpenFrontComponentInSidePanel).toHaveBeenCalledWith({
+        frontComponentId: 'fc-1',
+        pageTitle: 'My Component',
+        pageIcon: 'icon-IconBolt',
+        resetNavigationStack: undefined,
+        recordContext: { objectNameSingular: 'lead', recordId: undefined },
       });
     });
+  });
+
+  describe('openCommandConfirmationModal', () => {
+    it.each([
+      { confirmButtonAccent: 'danger' as const, confirmButtonColor: 'danger' },
+      { confirmButtonAccent: 'blue' as const, confirmButtonColor: 'accent' },
+      {
+        confirmButtonAccent: 'default' as const,
+        confirmButtonColor: 'neutral',
+      },
+    ])(
+      'maps the $confirmButtonAccent SDK confirmation accent',
+      async ({ confirmButtonAccent, confirmButtonColor }) => {
+        const { result } = renderUseFrontComponentExecutionContext({
+          frontComponentId: FRONT_COMPONENT_ID,
+        });
+
+        await act(async () => {
+          await result.current.frontComponentHostCommunicationApi.openCommandConfirmationModal(
+            {
+              title: 'Confirm?',
+              subtitle: 'Are you sure?',
+              confirmButtonText: 'Yes',
+              confirmButtonAccent,
+            },
+          );
+        });
+
+        expect(mockOpenConfirmationModal).toHaveBeenCalledWith({
+          caller: {
+            type: 'frontComponent',
+            frontComponentId: FRONT_COMPONENT_ID,
+          },
+          title: 'Confirm?',
+          subtitle: 'Are you sure?',
+          confirmButtonText: 'Yes',
+          confirmButtonColor,
+        });
+      },
+    );
 
     it('should preserve danger as the default confirmation accent', async () => {
       const { result } = renderUseFrontComponentExecutionContext({
@@ -808,20 +920,20 @@ describe('useFrontComponentExecutionContext', () => {
         title: 'Confirm?',
         subtitle: 'Are you sure?',
         confirmButtonText: undefined,
-        confirmButtonAccent: 'danger',
+        confirmButtonColor: 'danger',
       });
     });
   });
 
   describe('enqueueSnackbar', () => {
     it.each([
-      { variant: 'success' as const, mock: () => mockEnqueueSuccessSnackBar },
-      { variant: 'error' as const, mock: () => mockEnqueueErrorSnackBar },
-      { variant: 'info' as const, mock: () => mockEnqueueInfoSnackBar },
-      { variant: 'warning' as const, mock: () => mockEnqueueWarningSnackBar },
+      'success' as const,
+      'error' as const,
+      'info' as const,
+      'warning' as const,
     ])(
-      'should route $variant snackbar to the correct handler',
-      async ({ variant, mock }) => {
+      'should forward the %s SDK notification to the toaster',
+      async (variant) => {
         const { result } = renderUseFrontComponentExecutionContext({
           frontComponentId: FRONT_COMPONENT_ID,
         });
@@ -838,13 +950,12 @@ describe('useFrontComponentExecutionContext', () => {
           );
         });
 
-        expect(mock()).toHaveBeenCalledWith({
-          message: `${variant} message`,
-          options: {
-            duration: 3000,
-            detailedMessage: 'details',
-            dedupeKey: 'key-1',
-          },
+        expect(mockEnqueueToast).toHaveBeenCalledWith({
+          children: `${variant} message`,
+          variant,
+          duration: 3000,
+          description: 'details',
+          dedupeKey: 'key-1',
         });
       },
     );
@@ -890,6 +1001,30 @@ describe('useFrontComponentExecutionContext', () => {
       });
 
       expect(mockCloseSidePanelMenu).toHaveBeenCalled();
+    });
+  });
+
+  describe('requestAccessTokenRefresh', () => {
+    it('should refresh the access token of the front component application', async () => {
+      mockRequestApplicationAccessTokenRefresh.mockResolvedValue(
+        'renewed-access-token',
+      );
+
+      const { result } = renderUseFrontComponentExecutionContext({
+        frontComponentId: FRONT_COMPONENT_ID,
+      });
+
+      let accessToken: string | undefined;
+
+      await act(async () => {
+        accessToken =
+          await result.current.frontComponentHostCommunicationApi.requestAccessTokenRefresh();
+      });
+
+      expect(accessToken).toBe('renewed-access-token');
+      expect(mockRequestApplicationAccessTokenRefresh).toHaveBeenCalledWith(
+        APPLICATION_ID,
+      );
     });
   });
 
@@ -1102,7 +1237,7 @@ describe('useFrontComponentExecutionContext', () => {
         );
       });
 
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).toHaveBeenCalledWith(
+      expect(mockCopyToClipboardWithoutSuccessToast).toHaveBeenCalledWith(
         'hello clipboard',
       );
     });
@@ -1124,7 +1259,7 @@ describe('useFrontComponentExecutionContext', () => {
         );
       });
 
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).not.toHaveBeenCalled();
+      expect(mockCopyToClipboardWithoutSuccessToast).not.toHaveBeenCalled();
     });
 
     it('should silently drop payloads exceeding the maximum length', async () => {
@@ -1140,7 +1275,7 @@ describe('useFrontComponentExecutionContext', () => {
         );
       });
 
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).not.toHaveBeenCalled();
+      expect(mockCopyToClipboardWithoutSuccessToast).not.toHaveBeenCalled();
     });
 
     it('should rate-limit consecutive calls within one second', async () => {
@@ -1157,10 +1292,8 @@ describe('useFrontComponentExecutionContext', () => {
         );
       });
 
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).toHaveBeenCalledTimes(
-        1,
-      );
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).toHaveBeenCalledWith(
+      expect(mockCopyToClipboardWithoutSuccessToast).toHaveBeenCalledTimes(1);
+      expect(mockCopyToClipboardWithoutSuccessToast).toHaveBeenCalledWith(
         'first',
       );
     });
@@ -1189,14 +1322,12 @@ describe('useFrontComponentExecutionContext', () => {
         );
       });
 
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).toHaveBeenCalledTimes(
-        2,
-      );
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).toHaveBeenNthCalledWith(
+      expect(mockCopyToClipboardWithoutSuccessToast).toHaveBeenCalledTimes(2);
+      expect(mockCopyToClipboardWithoutSuccessToast).toHaveBeenNthCalledWith(
         1,
         'first',
       );
-      expect(mockCopyToClipboardWithoutSuccessSnackBar).toHaveBeenNthCalledWith(
+      expect(mockCopyToClipboardWithoutSuccessToast).toHaveBeenNthCalledWith(
         2,
         'second',
       );

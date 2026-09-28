@@ -14,7 +14,7 @@ import {
 } from 'react';
 import { type CallRecordingParsedTranscriptEntry } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { themeCssVariables } from 'twenty-ui/theme';
 
 const StyledTranscriptContainer = styled.div`
   height: 100%;
@@ -100,8 +100,8 @@ export const CallRecordingTranscriptEntryList = ({
         activeEntryElementRef={activeEntryElementRef}
         isFollowingPlayback={isFollowingPlayback}
         scrollContainerElementRef={scrollContainerElementRef}
-        videoElement={playback?.videoElement}
-        onVideoSeeking={resumeFollowingPlayback}
+        mediaElement={playback?.mediaElement}
+        onMediaSeeking={resumeFollowingPlayback}
       />
       <StyledTranscriptScrollContainer
         ref={scrollContainerElementRef}
@@ -127,7 +127,7 @@ export const CallRecordingTranscriptEntryList = ({
                 entry={entry}
                 entryElementRef={isActive ? activeEntryElementRef : undefined}
                 playbackPhase={playbackPhase}
-                videoElement={playback?.videoElement}
+                mediaElement={playback?.mediaElement}
                 onSelect={hasPlayback ? selectTranscriptEntry : undefined}
               />
             );

@@ -1,9 +1,9 @@
-import { ComposerFieldRow } from '@/activities/components/ComposerFieldRow';
-import { ComposerHeader } from '@/activities/components/ComposerHeader';
-import { StyledComposerTextInput } from '@/activities/components/ComposerTextInput';
 import { CalendarEventComposerTargetsInput } from '@/activities/calendar/components/CalendarEventComposerTargetsInput';
 import { CalendarEventLocationInput } from '@/activities/calendar/components/CalendarEventLocationInput';
 import { type useCalendarEventComposer } from '@/activities/calendar/hooks/useCalendarEventComposer';
+import { ComposerFieldRow } from '@/activities/components/ComposerFieldRow';
+import { ComposerHeader } from '@/activities/components/ComposerHeader';
+import { StyledComposerTextInput } from '@/activities/components/ComposerTextInput';
 import { EmailRecipientsFieldInput } from '@/activities/emails/recipients/components/EmailRecipientsFieldInput';
 import { useEmailRecipientsDragAndDrop } from '@/activities/emails/recipients/hooks/useEmailRecipientsDragAndDrop';
 import { type EmailComposerContextRecord } from '@/activities/emails/recipients/types/EmailComposerContextRecord';
@@ -21,11 +21,15 @@ import { DragDropItemDndContext } from '@/ui/utilities/drag-and-drop/context/Dra
 import { DragDropProvider } from '@dnd-kit/react';
 import { styled } from '@linaria/react';
 import { t } from '@lingui/core/macro';
-import { Callout } from 'twenty-ui/feedback';
-import { Toggle } from 'twenty-ui/input';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { Callout } from 'twenty-ui/components';
+import { Switch } from 'twenty-ui/primitives/input';
+import { themeCssVariables } from 'twenty-ui/theme';
 
 const COMPOSER_LABEL_MIN_WIDTH = '80px';
+
+const StyledSwitch = styled(Switch)`
+  align-self: center;
+`;
 
 const StyledFieldsContainer = styled.div`
   display: flex;
@@ -165,12 +169,11 @@ export const CalendarEventComposerFields = ({
                 composerState.handleIsFullDayChange(!composerState.isFullDay)
               }
               trailing={
-                <Toggle
+                <StyledSwitch
                   aria-label={t`All day`}
-                  toggleSize="small"
-                  centered
-                  value={composerState.isFullDay}
-                  onChange={composerState.handleIsFullDayChange}
+                  size="sm"
+                  checked={composerState.isFullDay}
+                  onCheckedChange={composerState.handleIsFullDayChange}
                 />
               }
             >
@@ -251,12 +254,11 @@ export const CalendarEventComposerFields = ({
                 composerState.setSendInvitations(!composerState.sendInvitations)
               }
               trailing={
-                <Toggle
+                <StyledSwitch
                   aria-label={t`Send invitations`}
-                  toggleSize="small"
-                  centered
-                  value={composerState.sendInvitations}
-                  onChange={composerState.setSendInvitations}
+                  size="sm"
+                  checked={composerState.sendInvitations}
+                  onCheckedChange={composerState.setSendInvitations}
                 />
               }
             >
@@ -271,12 +273,11 @@ export const CalendarEventComposerFields = ({
                 composerState.setAddConferencing(!composerState.addConferencing)
               }
               trailing={
-                <Toggle
+                <StyledSwitch
                   aria-label={t`Video conferencing`}
-                  toggleSize="small"
-                  centered
-                  value={composerState.addConferencing}
-                  onChange={composerState.setAddConferencing}
+                  size="sm"
+                  checked={composerState.addConferencing}
+                  onCheckedChange={composerState.setAddConferencing}
                 />
               }
             >

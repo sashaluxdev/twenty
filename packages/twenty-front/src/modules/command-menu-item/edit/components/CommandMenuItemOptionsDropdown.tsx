@@ -1,15 +1,16 @@
+import { ListItem } from 'twenty-ui/primitives/navigation';
 import { useResetCommandMenuItemToDefault } from '@/command-menu-item/edit/hooks/useResetCommandMenuItemToDefault';
 import { useUpdateCommandMenuItemInDraft } from '@/command-menu-item/edit/hooks/useUpdateCommandMenuItemInDraft';
 import { Dropdown } from '@/ui/layout/dropdown/components/Dropdown';
-import { DropdownContent } from '@/ui/layout/dropdown/components/DropdownContent';
+import { LegacyDropdownContent } from '@/ui/layout/dropdown/components/LegacyDropdownContent';
 import { DropdownMenuItemsContainer } from '@/ui/layout/dropdown/components/DropdownMenuItemsContainer';
 import { GenericDropdownContentWidth } from '@/ui/layout/dropdown/constants/GenericDropdownContentWidth';
 import { useCloseDropdown } from '@/ui/layout/dropdown/hooks/useCloseDropdown';
 import { useLingui } from '@lingui/react/macro';
 import { type ReactElement } from 'react';
 import { isDefined } from 'twenty-shared/utils';
+import { SettingsRow } from 'twenty-ui/components';
 import { IconRefresh, IconTag } from 'twenty-ui/icon';
-import { MenuItem, MenuItemToggle } from 'twenty-ui/navigation';
 import { type CommandMenuItemFieldsFragment } from '~/generated-metadata/graphql';
 
 type CommandMenuItemOptionsDropdownProps = Pick<
@@ -43,9 +44,9 @@ export const CommandMenuItemOptionsDropdown = ({
   const isLabelHidden =
     normalizedShortLabel === null && isDefined(normalizedServerShortLabel);
 
-  const handleToggleHideLabel = (toggled: boolean) => {
+  const handleHiddenLabelChange = (checked: boolean) => {
     updateCommandMenuItemInDraft(itemId, {
-      shortLabel: toggled ? null : normalizedServerShortLabel,
+      shortLabel: checked ? null : normalizedServerShortLabel,
     });
   };
 
@@ -60,24 +61,22 @@ export const CommandMenuItemOptionsDropdown = ({
       clickableComponent={iconButton}
       dropdownPlacement="bottom-end"
       dropdownComponents={
-        <DropdownContent widthInPixels={GenericDropdownContentWidth.Medium}>
+        <LegacyDropdownContent
+          widthInPixels={GenericDropdownContentWidth.Medium}
+        >
           <DropdownMenuItemsContainer>
-            <MenuItemToggle
-              LeftIcon={IconTag}
-              text={t`Hide label`}
-              toggled={isLabelHidden || hasNoShortLabel}
-              onToggleChange={handleToggleHideLabel}
-              toggleSize="small"
+            <SettingsRow
+              startIcon={<IconTag />}
               disabled={hasNoShortLabel}
-            />
-            <MenuItem
-              LeftIcon={IconRefresh}
+              checked={isLabelHidden || hasNoShortLabel}
+              onCheckedChange={handleHiddenLabelChange}
+            >{t`Hide label`}</SettingsRow>
+            <ListItem
+              startIcon={<IconRefresh />}
               onClick={handleResetToDefault}
-              accent="default"
-              text={t`Reset to default`}
-            />
+            >{t`Reset to default`}</ListItem>
           </DropdownMenuItemsContainer>
-        </DropdownContent>
+        </LegacyDropdownContent>
       }
     />
   );

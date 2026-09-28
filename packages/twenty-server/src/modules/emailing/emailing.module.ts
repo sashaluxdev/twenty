@@ -5,8 +5,6 @@ import { ActorModule } from 'src/engine/core-modules/actor/actor.module';
 import { BillingModule } from 'src/engine/core-modules/billing/billing.module';
 import { EmailingDomainModule } from 'src/engine/core-modules/emailing-domain/emailing-domain.module';
 import { EmailingDomainEntity } from 'src/engine/core-modules/emailing-domain/emailing-domain.entity';
-import { CampaignDeliveryEntity } from 'src/engine/core-modules/emailing-domain/campaign-delivery.entity';
-import { MessageSuppressionEntity } from 'src/engine/core-modules/emailing-domain/message-suppression.entity';
 import { UnsubscribeTopicEntity } from 'src/engine/core-modules/emailing-domain/unsubscribe-topic.entity';
 import { FeatureFlagModule } from 'src/engine/core-modules/feature-flag/feature-flag.module';
 import { UsageModule } from 'src/engine/core-modules/usage/usage.module';
@@ -43,6 +41,7 @@ import { CampaignSendSlotService } from 'src/modules/emailing/services/campaign-
 import { MessageCampaignDeliveryService } from 'src/modules/emailing/services/message-campaign-delivery.service';
 import { MessageCampaignLifecycleService } from 'src/modules/emailing/services/message-campaign-lifecycle.service';
 import { MessageCampaignMaterializationService } from 'src/modules/emailing/services/message-campaign-materialization.service';
+import { MessageCampaignScheduleService } from 'src/modules/emailing/services/message-campaign-schedule.service';
 import { MessageCampaignService } from 'src/modules/emailing/services/message-campaign.service';
 import { MessageListDuplicationService } from 'src/modules/emailing/services/message-list-duplication.service';
 import { MessageSuppressionService } from 'src/modules/emailing/services/message-suppression.service';
@@ -67,9 +66,7 @@ import { SaveCampaignTool } from 'src/modules/emailing/tools/save-campaign-tool'
     TypeOrmModule.forFeature([
       MessageChannelEntity,
       EmailingDomainEntity,
-      MessageSuppressionEntity,
       UnsubscribeTopicEntity,
-      CampaignDeliveryEntity,
       WorkspaceEntity,
     ]),
   ],
@@ -78,6 +75,7 @@ import { SaveCampaignTool } from 'src/modules/emailing/tools/save-campaign-tool'
     CampaignVariableService,
     EmailBillingService,
     MessageCampaignService,
+    MessageCampaignScheduleService,
     MessageCampaignAudienceService,
     CampaignSendSlotService,
     MessageCampaignDeliveryService,
@@ -98,9 +96,7 @@ import { SaveCampaignTool } from 'src/modules/emailing/tools/save-campaign-tool'
     MessageSuppressionResolver,
     UnsubscribeTopicResolver,
     provideWorkspaceScopedRepository(EmailingDomainEntity),
-    provideWorkspaceScopedRepository(MessageSuppressionEntity),
     provideWorkspaceScopedRepository(UnsubscribeTopicEntity),
-    provideWorkspaceScopedRepository(CampaignDeliveryEntity),
     EmailingOngoingStaleCronCommand,
     EmailingOngoingStaleCronJob,
     ReconcileCampaignStatsCronCommand,
@@ -110,6 +106,7 @@ import { SaveCampaignTool } from 'src/modules/emailing/tools/save-campaign-tool'
     EmailingDomainSenderService,
     EmailBillingService,
     MessageCampaignService,
+    MessageCampaignScheduleService,
     CampaignSendSlotService,
     MessageCampaignDeliveryService,
     MessageCampaignBatchDeliveryService,

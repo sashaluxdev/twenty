@@ -1,11 +1,11 @@
-import { DropdownContent } from '@/ui/layout/dropdown/components/DropdownContent';
+import { LegacyDropdownContent } from '@/ui/layout/dropdown/components/LegacyDropdownContent';
 import { StyledDropdownContentContainer } from '@/ui/layout/dropdown/components/internal/DropdownInternalContainer';
 import { OverlayContainer } from '@/ui/layout/overlay/components/OverlayContainer';
 import { useListenClickOutside } from '@/ui/utilities/pointer-event/hooks/useListenClickOutside';
 import { styled } from '@linaria/react';
 import { FloatingPortal, offset, shift, useFloating } from '@floating-ui/react';
 import { type ReactNode } from 'react';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { themeCssVariables } from 'twenty-ui/theme';
 
 type ExpandedListDropdownProps = {
   anchorElement?: HTMLElement;
@@ -28,6 +28,7 @@ export const ExpandedListDropdown = ({
 }: ExpandedListDropdownProps) => {
   const { refs, floatingStyles } = useFloating({
     placement: 'bottom-start',
+    strategy: 'fixed',
     middleware: [offset({ mainAxis: -9, crossAxis: -7 }), shift()],
     elements: { reference: anchorElement },
   });
@@ -41,21 +42,22 @@ export const ExpandedListDropdown = ({
   });
 
   const dropdownContentWidth = anchorElement
-    ? Math.max(220, anchorElement.getBoundingClientRect().width)
+    ? Math.max(220, anchorElement.offsetWidth)
     : undefined;
 
   return (
     <FloatingPortal>
       <StyledDropdownContentContainer
+        data-floating-ui-viewport
         ref={refs.setFloating}
         style={floatingStyles}
       >
         <OverlayContainer>
-          <DropdownContent widthInPixels={dropdownContentWidth}>
+          <LegacyDropdownContent widthInPixels={dropdownContentWidth}>
             <StyledExpandedListContainer>
               {children}
             </StyledExpandedListContainer>
-          </DropdownContent>
+          </LegacyDropdownContent>
         </OverlayContainer>
       </StyledDropdownContentContainer>
     </FloatingPortal>

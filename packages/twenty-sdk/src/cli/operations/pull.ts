@@ -10,20 +10,23 @@ import {
 import { pathExists } from '@/cli/utilities/file/fs-utils';
 import { type ApplicationExportCoverageEntry } from '@/cli/utilities/pull/application-export-type';
 import { applyPullWrites } from '@/cli/utilities/pull/apply-pull-writes';
+import { buildManifestEntityLabelByUniversalIdentifier } from '@/cli/utilities/pull/build-manifest-entity-label-by-universal-identifier';
 import { type SkippedPullEntity } from '@/cli/utilities/pull/build-pull-entities';
 import {
   planPullWrites,
   type PullDeletion,
   type PullWrite,
 } from '@/cli/utilities/pull/plan-pull-writes';
+import { planTranslationWrites } from '@/cli/utilities/pull/plan-translation-writes';
 import {
   readPullBaseManifest,
   writePullBaseManifest,
 } from '@/cli/utilities/pull/pull-base-file';
-import { scanProjectDefineFiles } from '@/cli/utilities/pull/scan-project-define-files';
+import { getApplicationMismatchMessage } from '@/cli/utilities/pull/get-application-mismatch-message';
+import { isSdkResolvable } from '@/cli/utilities/pull/is-sdk-resolvable';
+import { scanProjectSourceFiles } from '@/cli/utilities/pull/scan-project-source-files';
 import { runSafe } from '@/cli/utilities/run-safe';
 import { join } from 'node:path';
-import { type TranslationsManifest } from 'twenty-shared/application';
 import { isDefined } from 'twenty-shared/utils';
 
 export type AppPullOptions = {
@@ -42,8 +45,10 @@ export type AppPullResult = {
   skipped: SkippedPullEntity[];
   coverage: ApplicationExportCoverageEntry[];
   unreadableRelativePaths: string[];
-  translations: TranslationsManifest | undefined;
+  compiledTranslationEntryCountByLocale: Record<string, number>;
+  entityLabelByUniversalIdentifier: Record<string, string>;
   hadBase: boolean;
+  isSdkResolvable: boolean;
 };
 
 const EXPORT_REFUSAL_SUB_CODES = [
@@ -109,10 +114,12 @@ const innerAppPull = async (
 
   onProgress?.('Reading local source files...');
 
-  const scannedFiles = await scanProjectDefineFiles(appPath);
-  const localApplicationUniversalIdentifier = scannedFiles.find(
+  const scannedFiles = await scanProjectSourceFiles(appPath);
+  const localApplicationFile = scannedFiles.find(
     (scannedFile) => scannedFile.entityKey === ManifestEntityKey.Application,
-  )?.universalIdentifier;
+  );
+  const localApplicationUniversalIdentifier =
+    localApplicationFile?.universalIdentifier;
 
   const universalIdentifier =
     options.universalIdentifier ?? localApplicationUniversalIdentifier;
@@ -126,6 +133,22 @@ const innerAppPull = async (
           'Could not tell which application to pull.\n\n' +
           '  Pass the identifier explicitly:\n' +
           '    yarn twenty pull -u <universalIdentifier>',
+      },
+    };
+  }
+
+  const applicationMismatchMessage = getApplicationMismatchMessage({
+    requestedUniversalIdentifier: options.universalIdentifier,
+    localApplicationUniversalIdentifier,
+    hasLocalApplicationFile: isDefined(localApplicationFile),
+  });
+
+  if (isDefined(applicationMismatchMessage)) {
+    return {
+      success: false,
+      error: {
+        code: APP_ERROR_CODES.PULL_FAILED,
+        message: applicationMismatchMessage,
       },
     };
   }
@@ -161,15 +184,33 @@ const innerAppPull = async (
     applicationUniversalIdentifier: manifest.application.universalIdentifier,
   });
 
-  const plan = planPullWrites({ manifest, baseManifest, scannedFiles });
+  const plan = planPullWrites({
+    manifest,
+    baseManifest,
+    scannedFiles,
+    workspaceUniversalIdentifiers: new Set(
+      applicationExport.coverage.map(
+        ({ universalIdentifier }) => universalIdentifier,
+      ),
+    ),
+  });
+  const translationPlan = await planTranslationWrites({
+    appPath,
+    manifest,
+    baseManifest,
+    frontComponentSourcePaths: scannedFiles
+      .filter(
+        (scannedFile) =>
+          scannedFile.entityKey === ManifestEntityKey.FrontComponents,
+      )
+      .map((scannedFile) => join(appPath, scannedFile.relativePath)),
+  });
+  const writes = [...plan.writes, ...translationPlan.writes];
+  const deletions = [...plan.deletions, ...translationPlan.deletions];
 
   onProgress?.('Writing source files...');
 
-  await applyPullWrites({
-    appPath,
-    writes: plan.writes,
-    deletions: plan.deletions,
-  });
+  await applyPullWrites({ appPath, writes, deletions });
 
   await writePullBaseManifest({ appPath, manifest });
 
@@ -179,8 +220,8 @@ const innerAppPull = async (
       applicationDisplayName: applicationExport.application.displayName,
       applicationUniversalIdentifier:
         applicationExport.application.universalIdentifier,
-      writes: plan.writes,
-      deletions: plan.deletions,
+      writes,
+      deletions,
       unchangedCount: plan.unchanged.length,
       localOnlyRelativePaths: plan.localOnlyRelativePaths,
       skipped: plan.skipped,
@@ -188,8 +229,12 @@ const innerAppPull = async (
       unreadableRelativePaths: scannedFiles
         .filter((scannedFile) => !scannedFile.isReadable)
         .map((scannedFile) => scannedFile.relativePath),
-      translations: manifest.translations,
+      compiledTranslationEntryCountByLocale:
+        translationPlan.compiledEntryCountByLocale,
+      entityLabelByUniversalIdentifier:
+        buildManifestEntityLabelByUniversalIdentifier(manifest),
       hadBase: isDefined(baseManifest),
+      isSdkResolvable: isSdkResolvable(appPath),
     },
   };
 };

@@ -3,7 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 
 import {
   CalendarChannelSyncStage,
+  CalendarChannelSyncStatus,
   MessageChannelSyncStage,
+  MessageChannelSyncStatus,
   WebhookSubscriptionChannelType,
   WebhookSubscriptionStatus,
 } from 'twenty-shared/types';
@@ -28,7 +30,8 @@ import { WorkspaceEntity } from 'src/engine/core-modules/workspace/workspace.ent
 import { CalendarChannelEntity } from 'src/engine/metadata-modules/calendar-channel/entities/calendar-channel.entity';
 import { MessageChannelEntity } from 'src/engine/metadata-modules/message-channel/entities/message-channel.entity';
 import { WEBHOOK_CAPABLE_PROVIDERS } from 'src/modules/connected-account/webhook-subscription-manager/constants/webhook-capable-providers.constant';
-import { WEBHOOK_SUBSCRIPTION_CREATION_RETRY_LIMIT } from 'src/modules/connected-account/webhook-subscription-manager/constants/webhook-subscription-creation-retry-limit.constant';
+import { WEBHOOK_SUBSCRIPTION_CLAIM_STALE_MS } from 'src/modules/connected-account/webhook-subscription-manager/constants/webhook-subscription-claim-stale-ms.constant';
+import { WEBHOOK_SUBSCRIPTION_JOB_RETRY_LIMIT } from 'src/modules/connected-account/webhook-subscription-manager/constants/webhook-subscription-job-retry-limit.constant';
 import { WEBHOOK_SUBSCRIPTION_RENEWAL_BATCH_SIZE } from 'src/modules/connected-account/webhook-subscription-manager/constants/webhook-subscription-renewal-batch-size.constant';
 import { WEBHOOK_SUBSCRIPTION_RENEWAL_BUFFER_MS } from 'src/modules/connected-account/webhook-subscription-manager/constants/webhook-subscription-renewal-buffer-ms.constant';
 import { WEBHOOK_SUBSCRIPTION_RENEWAL_CRON_PATTERN } from 'src/modules/connected-account/webhook-subscription-manager/constants/webhook-subscription-renewal-cron-pattern.constant';
@@ -188,7 +191,13 @@ export class WebhookSubscriptionRenewalCronJob {
   private findMessageChannelsMissingSubscription(
     activeWorkspaceIds: string[],
   ): Promise<StaleChannel[]> {
-    const scope = this.buildStaleChannelScope(activeWorkspaceIds);
+    const scope = {
+      ...this.buildStaleChannelScope(activeWorkspaceIds),
+      syncStatus: In([
+        MessageChannelSyncStatus.ACTIVE,
+        MessageChannelSyncStatus.ONGOING,
+      ]),
+    };
 
     return this.messageChannelRepository.find({
       where: [
@@ -201,6 +210,13 @@ export class WebhookSubscriptionRenewalCronJob {
           ...scope,
           webhookSubscriptionStatus: WebhookSubscriptionStatus.EXPIRED,
         },
+        {
+          ...scope,
+          webhookSubscriptionStatus: WebhookSubscriptionStatus.PENDING,
+          updatedAt: LessThanOrEqual(
+            new Date(Date.now() - WEBHOOK_SUBSCRIPTION_CLAIM_STALE_MS),
+          ),
+        },
       ],
       order: { updatedAt: 'ASC' },
       take: WEBHOOK_SUBSCRIPTION_RENEWAL_BATCH_SIZE,
@@ -211,7 +227,13 @@ export class WebhookSubscriptionRenewalCronJob {
   private findCalendarChannelsMissingSubscription(
     activeWorkspaceIds: string[],
   ): Promise<StaleChannel[]> {
-    const scope = this.buildStaleChannelScope(activeWorkspaceIds);
+    const scope = {
+      ...this.buildStaleChannelScope(activeWorkspaceIds),
+      syncStatus: In([
+        CalendarChannelSyncStatus.ACTIVE,
+        CalendarChannelSyncStatus.ONGOING,
+      ]),
+    };
 
     return this.calendarChannelRepository.find({
       where: [
@@ -223,6 +245,13 @@ export class WebhookSubscriptionRenewalCronJob {
         {
           ...scope,
           webhookSubscriptionStatus: WebhookSubscriptionStatus.EXPIRED,
+        },
+        {
+          ...scope,
+          webhookSubscriptionStatus: WebhookSubscriptionStatus.PENDING,
+          updatedAt: LessThanOrEqual(
+            new Date(Date.now() - WEBHOOK_SUBSCRIPTION_CLAIM_STALE_MS),
+          ),
         },
       ],
       order: { updatedAt: 'ASC' },
@@ -248,7 +277,7 @@ export class WebhookSubscriptionRenewalCronJob {
           workspaceId: channel.workspaceId,
         },
         {
-          retryLimit: WEBHOOK_SUBSCRIPTION_CREATION_RETRY_LIMIT,
+          retryLimit: WEBHOOK_SUBSCRIPTION_JOB_RETRY_LIMIT,
           delay: Math.round(index * spacingMs),
         },
       );

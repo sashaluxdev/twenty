@@ -4,7 +4,6 @@ import {
   type PullDeletion,
   type PullWrite,
 } from '@/cli/utilities/pull/plan-pull-writes';
-import { type TranslationsManifest } from 'twenty-shared/application';
 import { isDefined } from 'twenty-shared/utils';
 
 const MAX_LISTED_IDENTIFIERS = 20;
@@ -42,21 +41,34 @@ const formatFileGroup = ({
         .sort()
         .map((relativePath) => `  ${title.padEnd(13)}${relativePath}`);
 
-const groupIdentifiersByMetadataName = (
+type CoverageGroup = {
+  metadataName: string;
+  reason: string | null;
+  identifiers: string[];
+};
+
+const groupCoverageByMetadataNameAndReason = (
   coverage: ApplicationExportCoverageEntry[],
-): Map<string, string[]> => {
-  const identifiersByMetadataName = new Map<string, string[]>();
+): CoverageGroup[] => {
+  const groupByKey = new Map<string, CoverageGroup>();
 
   for (const entry of coverage) {
-    const identifiers = identifiersByMetadataName.get(entry.metadataName) ?? [];
+    const key = JSON.stringify([entry.metadataName, entry.reason]);
+    const group = groupByKey.get(key) ?? {
+      metadataName: entry.metadataName,
+      reason: entry.reason,
+      identifiers: [],
+    };
 
-    identifiersByMetadataName.set(entry.metadataName, [
-      ...identifiers,
-      entry.universalIdentifier,
-    ]);
+    group.identifiers.push(entry.universalIdentifier);
+    groupByKey.set(key, group);
   }
 
-  return identifiersByMetadataName;
+  return [...groupByKey.values()].sort(
+    (left, right) =>
+      left.metadataName.localeCompare(right.metadataName) ||
+      (left.reason ?? '').localeCompare(right.reason ?? ''),
+  );
 };
 
 export const formatPullReport = ({
@@ -67,7 +79,8 @@ export const formatPullReport = ({
   coverage,
   localOnlyRelativePaths,
   unreadableRelativePaths = [],
-  translations = {},
+  compiledTranslationEntryCountByLocale = {},
+  entityLabelByUniversalIdentifier = {},
   verbose = false,
 }: {
   writes: PullWrite[];
@@ -77,7 +90,8 @@ export const formatPullReport = ({
   coverage: ApplicationExportCoverageEntry[];
   localOnlyRelativePaths: string[];
   unreadableRelativePaths?: string[];
-  translations?: TranslationsManifest;
+  compiledTranslationEntryCountByLocale?: Record<string, number>;
+  entityLabelByUniversalIdentifier?: Record<string, string>;
   verbose?: boolean;
 }): string => {
   const lines: string[] = [
@@ -133,6 +147,37 @@ export const formatPullReport = ({
     );
   }
 
+  const writtenWithoutLocalState = coverage
+    .filter((entry) => entry.status === 'EXPORTED' && isDefined(entry.reason))
+    .map(
+      (entry) =>
+        `  ${entry.metadataName} ${
+          entityLabelByUniversalIdentifier[entry.universalIdentifier] ??
+          entry.universalIdentifier
+        }: ${entry.reason}`,
+    )
+    .sort();
+
+  if (writtenWithoutLocalState.length > 0) {
+    const listedWrittenWithoutLocalState = verbose
+      ? writtenWithoutLocalState
+      : writtenWithoutLocalState.slice(0, MAX_LISTED_IDENTIFIERS);
+
+    lines.push(
+      '',
+      `Written without their workspace-local state (${writtenWithoutLocalState.length} row(s)):`,
+      ...listedWrittenWithoutLocalState,
+    );
+
+    if (
+      writtenWithoutLocalState.length > listedWrittenWithoutLocalState.length
+    ) {
+      lines.push(
+        `  …and ${writtenWithoutLocalState.length - listedWrittenWithoutLocalState.length} more, listed with --verbose`,
+      );
+    }
+  }
+
   for (const section of COVERAGE_SECTIONS) {
     const sectionEntries = coverage.filter(
       (entry) => entry.status === section.status,
@@ -144,13 +189,14 @@ export const formatPullReport = ({
 
     lines.push('', `${section.title} (${sectionEntries.length} row(s)):`);
 
-    const identifiersByMetadataName =
-      groupIdentifiersByMetadataName(sectionEntries);
-
-    for (const [metadataName, identifiers] of [
-      ...identifiersByMetadataName.entries(),
-    ].sort(([left], [right]) => left.localeCompare(right))) {
-      lines.push(`  ${metadataName.padEnd(34)}${identifiers.length}`);
+    for (const {
+      metadataName,
+      reason,
+      identifiers,
+    } of groupCoverageByMetadataNameAndReason(sectionEntries)) {
+      lines.push(
+        `  ${metadataName.padEnd(34)}${String(identifiers.length).padEnd(6)}${reason ?? ''}`.trimEnd(),
+      );
 
       if (verbose) {
         for (const identifier of identifiers.slice(0, MAX_LISTED_IDENTIFIERS)) {
@@ -166,17 +212,18 @@ export const formatPullReport = ({
     }
   }
 
-  const publishedTranslationLocales = Object.entries(translations)
-    .filter(
-      ([, messages]) => isDefined(messages) && Object.keys(messages).length > 0,
-    )
-    .map(([locale]) => locale)
-    .sort();
+  const compiledLocales = Object.entries(compiledTranslationEntryCountByLocale)
+    .filter(([, count]) => count > 0)
+    .sort(([left], [right]) => left.localeCompare(right));
 
-  if (publishedTranslationLocales.length > 0) {
+  if (compiledLocales.length > 0) {
     lines.push(
       '',
-      `Published translations (${publishedTranslationLocales.join(', ')}) not written: pull cannot restore them yet, and pushing this tree replaces them with the contents of locales/.`,
+      'Translations kept in compiled form until their source strings are in this tree (see locales/compiled/):',
+      ...compiledLocales.map(
+        ([locale, count]) =>
+          `  ${locale.padEnd(13)}${count} ${count === 1 ? 'entry' : 'entries'}`,
+      ),
     );
   }
 

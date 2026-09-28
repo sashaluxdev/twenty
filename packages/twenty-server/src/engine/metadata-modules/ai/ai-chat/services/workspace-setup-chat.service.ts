@@ -25,6 +25,7 @@ import { tagAiChatStreamScope } from 'src/engine/metadata-modules/ai/ai-chat/uti
 import { AiModelRegistryService } from 'src/engine/metadata-modules/ai/ai-models/services/ai-model-registry.service';
 import { WorkspaceOrmManager } from 'src/engine/twenty-orm/workspace-orm.manager';
 import { buildSystemAuthContext } from 'src/engine/twenty-orm/utils/build-system-auth-context.util';
+import { AUTO_SELECT_MODEL_ID_BY_TIER } from 'twenty-shared/ai';
 
 const WORKSPACE_SETUP_CHAT_THREAD_TITLE = msg`Workspace setup`;
 
@@ -102,7 +103,7 @@ export class WorkspaceSetupChatService {
       userWorkspaceId,
     });
 
-    let thread = await this.agentChatService.findThreadById({
+    let thread = await this.agentChatService.findWritableThread({
       threadId,
       userWorkspaceId,
       workspaceId: workspace.id,
@@ -174,7 +175,7 @@ export class WorkspaceSetupChatService {
           },
           locale,
         }),
-        modelId: workspace.fastModel,
+        modelId: AUTO_SELECT_MODEL_ID_BY_TIER.fast,
       });
 
     if (!isDefined(kickoffResult)) {
@@ -217,7 +218,7 @@ export class WorkspaceSetupChatService {
     } catch (error) {
       if (this.isUniqueViolation(error)) {
         const concurrentlyCreatedThread =
-          await this.agentChatService.findThreadById({
+          await this.agentChatService.findWritableThread({
             threadId,
             userWorkspaceId,
             workspaceId,

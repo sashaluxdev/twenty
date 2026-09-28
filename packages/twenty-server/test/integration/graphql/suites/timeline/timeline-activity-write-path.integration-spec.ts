@@ -2,17 +2,22 @@ import { createOneOperationFactory } from 'test/integration/graphql/utils/create
 import { destroyOneOperationFactory } from 'test/integration/graphql/utils/destroy-one-operation-factory.util';
 import { findManyOperationFactory } from 'test/integration/graphql/utils/find-many-operation-factory.util';
 import { updateManyOperationFactory } from 'test/integration/graphql/utils/update-many-operation-factory.util';
-import { makeGraphqlAPIRequest } from 'test/integration/graphql/utils/make-graphql-api-request.util';
+import { makeGraphqlApiRequest } from 'test/integration/graphql/utils/make-graphql-api-request.util';
 import { updateOneOperationFactory } from 'test/integration/graphql/utils/update-one-operation-factory.util';
 import { deleteOneOperationFactory } from 'test/integration/graphql/utils/delete-one-operation-factory.util';
 import { gql } from 'graphql-tag';
 import { STANDARD_OBJECTS } from 'twenty-shared/metadata';
-import { makeMetadataAPIRequest } from 'test/integration/metadata/suites/utils/make-metadata-api-request.util';
+import { makeMetadataApiRequest } from 'test/integration/metadata/suites/utils/make-metadata-api-request.util';
+import { createOneFieldMetadata } from 'test/integration/metadata/suites/field-metadata/utils/create-one-field-metadata.util';
+import { deleteOneFieldMetadata } from 'test/integration/metadata/suites/field-metadata/utils/delete-one-field-metadata.util';
+import { updateOneFieldMetadata } from 'test/integration/metadata/suites/field-metadata/utils/update-one-field-metadata.util';
+import { FieldMetadataType } from 'twenty-shared/types';
 import { waitForAllJobsToFinish } from 'test/integration/utils/wait-for-all-jobs-to-finish.util';
 import {
   type TimelineActivityAction,
   type TimelineActivityTypeSnapshot,
 } from 'twenty-shared/timeline';
+import { isNonEmptyString } from '@sniptt/guards';
 import { isDefined } from 'twenty-shared/utils';
 
 const TIMELINE_ACTIVITY_GQL_FIELDS = `
@@ -52,7 +57,7 @@ const createRecord = async ({
   objectMetadataSingularName: string;
   data: object;
 }): Promise<void> => {
-  const response = await makeGraphqlAPIRequest(
+  const response = await makeGraphqlApiRequest(
     createOneOperationFactory({
       objectMetadataSingularName,
       gqlFields: 'id',
@@ -72,7 +77,7 @@ const updateRecord = async ({
   recordId: string;
   data: object;
 }): Promise<void> => {
-  const response = await makeGraphqlAPIRequest(
+  const response = await makeGraphqlApiRequest(
     updateOneOperationFactory({
       objectMetadataSingularName,
       gqlFields: 'id',
@@ -89,7 +94,7 @@ const findTimelineActivities = async (
 ): Promise<TimelineActivityRow[]> => {
   await waitForAllJobsToFinish();
 
-  const response = await makeGraphqlAPIRequest(
+  const response = await makeGraphqlApiRequest(
     findManyOperationFactory({
       objectMetadataSingularName: 'timelineActivity',
       objectMetadataPluralName: 'timelineActivities',
@@ -166,6 +171,7 @@ const ATTACHMENT_UNIVERSAL_IDENTIFIER =
 
 const COMPANY_ID = '20202020-7171-4000-8000-000000000001';
 const POSITION_COMPANY_ID = '20202020-7171-4000-8000-000000000002';
+const NON_AUDIT_LOGGED_COMPANY_ID = '20202020-7171-4000-8000-000000000018';
 const NOTE_COMPANY_ID = '20202020-7171-4000-8000-000000000004';
 const NOTE_ID = '20202020-7171-4000-8000-000000000005';
 const NOTE_TARGET_ID = '20202020-7171-4000-8000-000000000006';
@@ -221,12 +227,19 @@ const CREATED_RECORD_IDS: { objectMetadataSingularName: string; id: string }[] =
       id: ORM_V2_COMPOSITE_COMPANY_ID,
     },
     { objectMetadataSingularName: 'company', id: POSITION_COMPANY_ID },
+    {
+      objectMetadataSingularName: 'company',
+      id: NON_AUDIT_LOGGED_COMPANY_ID,
+    },
     { objectMetadataSingularName: 'company', id: COMPANY_ID },
   ];
 
+const nonAuditLoggedFieldName = 'lastRollupAt';
+let nonAuditLoggedFieldMetadataId = '';
+
 describe('timeline activity write path (integration)', () => {
   beforeAll(async () => {
-    const response = await makeMetadataAPIRequest({
+    const response = await makeMetadataApiRequest({
       query: FIND_MANY_TIMELINE_ACTIVITY_TYPES,
     });
 
@@ -244,11 +257,64 @@ describe('timeline activity write path (integration)', () => {
         );
       }
     }
+
+    const companyObjectMetadataId = (
+      await makeMetadataApiRequest({
+        query: gql`
+          query {
+            objects(paging: { first: 1000 }) {
+              edges {
+                node {
+                  id
+                  nameSingular
+                }
+              }
+            }
+          }
+        `,
+      })
+    ).body.data.objects.edges.find(
+      (edge: { node: { nameSingular: string } }) =>
+        edge.node.nameSingular === 'company',
+    ).node.id;
+
+    const { data } = await createOneFieldMetadata({
+      input: {
+        objectMetadataId: companyObjectMetadataId,
+        name: nonAuditLoggedFieldName,
+        label: 'Last rollup at',
+        type: FieldMetadataType.DATE_TIME,
+        isAuditLogged: false,
+      },
+      gqlFields: 'id isAuditLogged',
+      expectToFail: false,
+    });
+
+    expect(data.createOneField.isAuditLogged).toBe(false);
+
+    nonAuditLoggedFieldMetadataId = data.createOneField.id;
   });
 
   afterAll(async () => {
+    if (isNonEmptyString(nonAuditLoggedFieldMetadataId)) {
+      // A field has to be deactivated before it can be deleted, otherwise its
+      // name stays taken and the next run cannot recreate it.
+      await updateOneFieldMetadata({
+        input: {
+          idToUpdate: nonAuditLoggedFieldMetadataId,
+          updatePayload: { isActive: false },
+        },
+        expectToFail: false,
+      });
+
+      await deleteOneFieldMetadata({
+        input: { idToDelete: nonAuditLoggedFieldMetadataId },
+        expectToFail: false,
+      });
+    }
+
     for (const { objectMetadataSingularName, id } of CREATED_RECORD_IDS) {
-      await makeGraphqlAPIRequest(
+      await makeGraphqlApiRequest(
         destroyOneOperationFactory({
           objectMetadataSingularName,
           gqlFields: 'id',
@@ -377,7 +443,7 @@ describe('timeline activity write path (integration)', () => {
       }
 
       const updateBatchTo = async (name: string) => {
-        const response = await makeGraphqlAPIRequest(
+        const response = await makeGraphqlApiRequest(
           updateManyOperationFactory({
             objectMetadataSingularName: 'company',
             objectMetadataPluralName: 'companies',
@@ -435,6 +501,56 @@ describe('timeline activity write path (integration)', () => {
       });
 
       expect(timelineActivities).toHaveLength(0);
+    });
+
+    it('should not write an entry for a non audit logged field only change', async () => {
+      await createRecord({
+        objectMetadataSingularName: 'company',
+        data: {
+          id: NON_AUDIT_LOGGED_COMPANY_ID,
+          name: 'Rollup Host',
+        },
+      });
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: NON_AUDIT_LOGGED_COMPANY_ID,
+        data: { [nonAuditLoggedFieldName]: '2026-09-06T02:00:00.000Z' },
+      });
+
+      const timelineActivities = await findTimelineActivities({
+        targetCompanyId: { eq: NON_AUDIT_LOGGED_COMPANY_ID },
+        timelineActivityTypeId: {
+          eq: timelineActivityTypeIdForOrThrow('updated'),
+        },
+      });
+
+      expect(timelineActivities).toHaveLength(0);
+    });
+
+    it('should keep the audit logged fields of a mixed change', async () => {
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: NON_AUDIT_LOGGED_COMPANY_ID,
+        data: {
+          name: 'Rollup Host Renamed',
+          [nonAuditLoggedFieldName]: '2026-09-07T02:00:00.000Z',
+        },
+      });
+
+      const timelineActivities = await findTimelineActivities({
+        targetCompanyId: { eq: NON_AUDIT_LOGGED_COMPANY_ID },
+        timelineActivityTypeId: {
+          eq: timelineActivityTypeIdForOrThrow('updated'),
+        },
+      });
+
+      expect(timelineActivities).toHaveLength(1);
+      expect(timelineActivities[0].properties).toEqual({
+        diff: {
+          name: { before: 'Rollup Host', after: 'Rollup Host Renamed' },
+        },
+      });
     });
   });
 
@@ -564,7 +680,7 @@ describe('timeline activity write path (integration)', () => {
     });
 
     it('should write a linked entry on the company when the note target is deleted', async () => {
-      await makeGraphqlAPIRequest(
+      await makeGraphqlApiRequest(
         deleteOneOperationFactory({
           objectMetadataSingularName: 'noteTarget',
           gqlFields: 'id',
@@ -842,7 +958,7 @@ describe('timeline activity write path (integration)', () => {
         'proposal-final.pdf',
       );
 
-      const deleteResponse = await makeGraphqlAPIRequest(
+      const deleteResponse = await makeGraphqlApiRequest(
         deleteOneOperationFactory({
           objectMetadataSingularName: 'attachment',
           gqlFields: 'id',

@@ -11,7 +11,7 @@ import { expect, userEvent, waitFor, within } from 'storybook/test';
 
 import { DropdownMenuSkeletonItem } from '@/ui/input/relation-picker/components/skeletons/DropdownMenuSkeletonItem';
 
-import { DropdownContent } from '@/ui/layout/dropdown/components/DropdownContent';
+import { LegacyDropdownContent } from '@/ui/layout/dropdown/components/LegacyDropdownContent';
 import { DropdownMenuHeaderLeftComponent } from '@/ui/layout/dropdown/components/DropdownMenuHeader/internal/DropdownMenuHeaderLeftComponent';
 import { Dropdown } from '@/ui/layout/dropdown/components/Dropdown';
 import { DropdownMenuHeader } from '@/ui/layout/dropdown/components/DropdownMenuHeader/DropdownMenuHeader';
@@ -21,8 +21,8 @@ import { DropdownMenuSearchInput } from '@/ui/layout/dropdown/components/Dropdow
 import { DropdownMenuSeparator } from '@/ui/layout/dropdown/components/DropdownMenuSeparator';
 import { StyledDropdownMenuSubheader } from '@/ui/layout/dropdown/components/StyledDropdownMenuSubheader';
 import { IconChevronLeft } from 'twenty-ui/icon';
-import { Button } from 'twenty-ui/input';
-import { MenuItem } from 'twenty-ui/navigation';
+import { Button } from 'twenty-ui/primitives/input';
+import { ListItem } from 'twenty-ui/primitives/navigation';
 import { ComponentDecorator } from 'twenty-ui/testing';
 
 const meta: Meta<typeof Dropdown> = {
@@ -30,7 +30,7 @@ const meta: Meta<typeof Dropdown> = {
   component: Dropdown,
   decorators: [ComponentDecorator, (Story) => <Story />],
   args: {
-    clickableComponent: <Button title="Open Dropdown" />,
+    clickableComponent: <Button>{'Open Dropdown'}</Button>,
     dropdownOffset: { x: 0, y: 8 },
     dropdownId: 'test-dropdown-id',
   },
@@ -76,9 +76,9 @@ const StyledEmptyDropdownContent = styled.div`
 export const Empty: Story = {
   args: {
     dropdownComponents: (
-      <DropdownContent>
+      <LegacyDropdownContent>
         <StyledEmptyDropdownContent data-testid="dropdown-content" />
-      </DropdownContent>
+      </LegacyDropdownContent>
     ),
   },
   play: async ({ canvasElement }) => {
@@ -106,6 +106,61 @@ export const Empty: Story = {
     await waitFor(() => {
       expect(fakeMenuTer).toBeInTheDocument();
     });
+  },
+};
+
+export const InterfaceScale: Story = {
+  args: {
+    clickableComponent: <span>Open Dropdown</span>,
+    dropdownPlacement: 'bottom-start',
+    dropdownOffset: { x: 0, y: 0 },
+    dropdownComponents: (
+      <div style={{ width: 200, height: 100 }}>Scaled dropdown</div>
+    ),
+  },
+  render: (args) => (
+    <div style={{ paddingLeft: 200, paddingTop: 100 }}>
+      <Dropdown {...args} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const document = canvasElement.ownerDocument;
+    const canvas = within(document.body);
+    const rootStyle = document.documentElement.style;
+    const previousZoom = rootStyle.getPropertyValue('zoom');
+    const previousScale = rootStyle.getPropertyValue('--t-zoom');
+
+    try {
+      for (const scale of [0.9, 1, 1.1, 1.25, 14 / 13]) {
+        rootStyle.setProperty('--t-zoom', String(scale));
+        rootStyle.setProperty('zoom', 'var(--t-zoom)');
+
+        const button = canvas.getByRole('button', { name: 'Open Dropdown' });
+        await userEvent.click(button);
+
+        const menu = await canvas.findByRole('listbox');
+        await waitFor(() => {
+          const anchorBounds = button.getBoundingClientRect();
+          const menuBounds = menu.getBoundingClientRect();
+
+          const contentBounds = canvas
+            .getByText('Scaled dropdown')
+            .getBoundingClientRect();
+          expect(Math.abs(contentBounds.width - 200 * scale)).toBeLessThan(1);
+          expect(Math.abs(contentBounds.height - 100 * scale)).toBeLessThan(1);
+
+          expect(Math.abs(menuBounds.left - anchorBounds.left)).toBeLessThan(1);
+          expect(Math.abs(menuBounds.top - anchorBounds.bottom)).toBeLessThan(
+            1,
+          );
+        });
+
+        await userEvent.click(button);
+      }
+    } finally {
+      rootStyle.setProperty('zoom', previousZoom);
+      rootStyle.setProperty('--t-zoom', previousScale);
+    }
   },
 };
 
@@ -146,7 +201,7 @@ const optionsMock = [
 ];
 
 //   return (
-//     <DropdownContent>
+//     <LegacyDropdownContent>
 //       <DropdownMenuItemsContainer hasMaxHeight>
 //         {optionsMock.map((item) => (
 //           <MenuItemSelectAvatar
@@ -167,7 +222,7 @@ const optionsMock = [
 //           />
 //         ))}
 //       </DropdownMenuItemsContainer>
-//     </DropdownContent>
+//     </LegacyDropdownContent>
 //   );
 // };
 
@@ -178,7 +233,7 @@ const optionsMock = [
 //   >({});
 
 //   return (
-//     <DropdownContent>
+//     <LegacyDropdownContent>
 //       <DropdownMenuItemsContainer hasMaxHeight>
 //         {optionsMock.map((item) => (
 //           <MenuItemMultiSelectAvatar
@@ -204,7 +259,7 @@ const optionsMock = [
 //           />
 //         ))}
 //       </DropdownMenuItemsContainer>
-//     </DropdownContent>
+//     </LegacyDropdownContent>
 //   );
 // };
 
@@ -223,7 +278,7 @@ export const WithHeaders: Story = {
   decorators: [WithContentBelowDecorator],
   args: {
     dropdownComponents: (
-      <DropdownContent>
+      <LegacyDropdownContent>
         <DropdownMenuHeader
           StartComponent={
             <DropdownMenuHeaderLeftComponent Icon={IconChevronLeft} />
@@ -235,7 +290,7 @@ export const WithHeaders: Story = {
         <DropdownMenuItemsContainer hasMaxHeight>
           <>
             {optionsMock.slice(0, 3).map((item) => (
-              <MenuItem key={item.id} text={item.name} />
+              <ListItem key={item.id}>{item.name}</ListItem>
             ))}
           </>
         </DropdownMenuItemsContainer>
@@ -243,10 +298,10 @@ export const WithHeaders: Story = {
         <StyledDropdownMenuSubheader>Subheader 2</StyledDropdownMenuSubheader>
         <DropdownMenuItemsContainer>
           {optionsMock.slice(3).map((item) => (
-            <MenuItem key={item.id} text={item.name} />
+            <ListItem key={item.id}>{item.name}</ListItem>
           ))}
         </DropdownMenuItemsContainer>
-      </DropdownContent>
+      </LegacyDropdownContent>
     ),
   },
   play: playInteraction,
@@ -256,13 +311,13 @@ export const SearchWithLoadingMenu: Story = {
   decorators: [WithContentBelowDecorator],
   args: {
     dropdownComponents: (
-      <DropdownContent>
+      <LegacyDropdownContent>
         <DropdownMenuSearchInput value="query" autoFocus />
         <DropdownMenuSeparator />
         <DropdownMenuItemsContainer hasMaxHeight>
           <DropdownMenuSkeletonItem />
         </DropdownMenuItemsContainer>
-      </DropdownContent>
+      </LegacyDropdownContent>
     ),
   },
   play: async ({ canvasElement }) => {
@@ -288,7 +343,7 @@ export const WithInput: Story = {
   decorators: [WithContentBelowDecorator],
   args: {
     dropdownComponents: (
-      <DropdownContent>
+      <LegacyDropdownContent>
         <DropdownMenuInput
           instanceId="dropdown-menu-input"
           value="Lorem ipsum"
@@ -297,10 +352,10 @@ export const WithInput: Story = {
         <DropdownMenuSeparator />
         <DropdownMenuItemsContainer hasMaxHeight>
           {optionsMock.map(({ name }) => (
-            <MenuItem key={name} text={name} />
+            <ListItem key={name}>{name}</ListItem>
           ))}
         </DropdownMenuItemsContainer>
-      </DropdownContent>
+      </LegacyDropdownContent>
     ),
   },
   play: playInteraction,

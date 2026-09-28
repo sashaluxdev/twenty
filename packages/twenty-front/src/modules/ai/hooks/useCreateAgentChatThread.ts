@@ -1,3 +1,4 @@
+import { useRefreshAgentChatThreadPermissions } from '@/ai/hooks/useRefreshAgentChatThreadPermissions';
 import { useStore } from 'jotai';
 
 import { useProjectAiChatThreadToUrl } from '@/ai/hooks/useProjectAiChatThreadToUrl';
@@ -30,12 +31,15 @@ export const useCreateAgentChatThread = () => {
   );
   const { projectAiChatThreadToUrl } = useProjectAiChatThreadToUrl();
   const store = useStore();
+  const { refreshAgentChatThreadPermissions } =
+    useRefreshAgentChatThreadPermissions();
   const { addToDraft, applyChanges } = useUpdateMetadataStoreDraft();
 
   const [createChatThread] = useMutation(CreateChatThreadDocument, {
     onCompleted: (data) => {
       const newThread: FlatAgentChatThread = {
         id: data.createChatThread.id,
+
         title: data.createChatThread.title ?? null,
         createdAt: data.createChatThread.createdAt,
         updatedAt: data.createChatThread.updatedAt,
@@ -43,12 +47,14 @@ export const useCreateAgentChatThread = () => {
         contextWindowTokens: null,
         totalInputTokens: 0,
         totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
         totalInputCredits: 0,
         totalOutputCredits: 0,
       };
 
       addToDraft({ key: 'agentChatThreads', items: [newThread] });
       applyChanges();
+      void refreshAgentChatThreadPermissions([newThread.id]);
 
       if (store.get(isCreatingForFirstSendState.atom)) {
         store.set(isCreatingForFirstSendState.atom, false);

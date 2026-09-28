@@ -3,8 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 
 import crypto from 'crypto';
 
+import { isNonEmptyString } from '@sniptt/guards';
 import ms from 'ms';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { base64UrlEncode, isDefined } from 'twenty-shared/utils';
 
 import {
@@ -19,9 +20,12 @@ import { ApplicationEntity } from 'src/engine/core-modules/application/applicati
 import { ApplicationService } from 'src/engine/core-modules/application/application.service';
 import { OAuthErrorResponse } from 'src/engine/core-modules/application/application-oauth/types/oauth-error-response.type';
 import { OAuthTokenResponse } from 'src/engine/core-modules/application/application-oauth/types/oauth-token-response.type';
+import { isConfidentialApplicationOAuthClient } from 'src/engine/core-modules/application/application-oauth/utils/is-confidential-application-oauth-client.util';
 import { ApplicationTokenService } from 'src/engine/core-modules/auth/token/services/application-token.service';
 import { TwentyConfigService } from 'src/engine/core-modules/twenty-config/twenty-config.service';
 import { UserWorkspaceEntity } from 'src/engine/core-modules/user-workspace/user-workspace.entity';
+import { InjectWorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/inject-workspace-scoped-repository.decorator';
+import { WorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository';
 
 @Injectable()
 export class OAuthService {
@@ -30,8 +34,14 @@ export class OAuthService {
   constructor(
     @InjectRepository(AppTokenEntity)
     private readonly appTokenRepository: Repository<AppTokenEntity>,
+    @InjectWorkspaceScopedRepository(ApplicationEntity)
+    private readonly applicationRepository: WorkspaceScopedRepository<ApplicationEntity>,
+    // The client-credentials grant counts a registration's installs across
+    // every workspace to enforce that exactly one exists, so that one read has
+    // no workspace to scope by.
+    // eslint-disable-next-line twenty/prefer-workspace-scoped-repository
     @InjectRepository(ApplicationEntity)
-    private readonly applicationRepository: Repository<ApplicationEntity>,
+    private readonly unscopedApplicationRepository: Repository<ApplicationEntity>,
     @InjectRepository(UserWorkspaceEntity)
     private readonly userWorkspaceRepository: Repository<UserWorkspaceEntity>,
     private readonly applicationTokenService: ApplicationTokenService,
@@ -72,7 +82,10 @@ export class OAuthService {
 
     const applicationRegistration = clientValidation;
 
-    if (applicationRegistration.oAuthClientSecretHash && !clientSecret) {
+    if (
+      isConfidentialApplicationOAuthClient(applicationRegistration) &&
+      !isNonEmptyString(clientSecret)
+    ) {
       return this.errorResponse(
         'invalid_client',
         'Client authentication required for confidential clients',
@@ -191,9 +204,22 @@ export class OAuthService {
       );
     }
 
-    await this.appTokenRepository.update(authCodeToken.id, {
-      revokedAt: new Date(),
-    });
+    // Atomic single-use consume: only the request that flips revokedAt from null proceeds, closing the check-then-use race.
+    const consumeResult = await this.appTokenRepository.update(
+      { id: authCodeToken.id, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+
+    if (!consumeResult.affected) {
+      this.logger.warn(
+        `Authorization code replay detected for client ${clientId} (concurrent redemption).`,
+      );
+
+      return this.errorResponse(
+        'invalid_grant',
+        'Authorization code has already been used',
+      );
+    }
 
     if (!authCodeToken.userId || !authCodeToken.workspaceId) {
       return this.errorResponse(
@@ -279,7 +305,7 @@ export class OAuthService {
       return secretError;
     }
 
-    const applications = await this.applicationRepository.find({
+    const applications = await this.unscopedApplicationRepository.find({
       where: { applicationRegistrationId: applicationRegistration.id },
     });
 
@@ -333,7 +359,10 @@ export class OAuthService {
     const applicationRegistration = clientValidation;
 
     // Confidential clients (those with a secret) must authenticate
-    if (applicationRegistration.oAuthClientSecretHash && !clientSecret) {
+    if (
+      isConfidentialApplicationOAuthClient(applicationRegistration) &&
+      !isNonEmptyString(clientSecret)
+    ) {
       return this.errorResponse(
         'invalid_client',
         'Client authentication required for confidential clients',
@@ -358,9 +387,12 @@ export class OAuthService {
         );
 
       // Verify the refresh token belongs to this client
-      const application = await this.applicationRepository.findOne({
-        where: { id: payload.applicationId },
-      });
+      const application = await this.applicationRepository.findOne(
+        payload.workspaceId,
+        {
+          where: { id: payload.applicationId },
+        },
+      );
 
       if (
         !application ||
@@ -450,9 +482,12 @@ export class OAuthService {
       // behind it, and only the client the token was issued to may ask for
       // that. Access tokens stay stateless and live out their few minutes.
       if (isDefined(applicationRegistration) && isDefined(payload.userId)) {
-        const application = await this.applicationRepository.findOne({
-          where: { id: payload.applicationId },
-        });
+        const application = await this.applicationRepository.findOne(
+          payload.workspaceId,
+          {
+            where: { id: payload.applicationId },
+          },
+        );
 
         if (
           application?.applicationRegistrationId === applicationRegistration.id
@@ -490,6 +525,14 @@ export class OAuthService {
       return { active: false };
     }
 
+    // RFC 7662 §2.1: a confidential client must authenticate to introspect; without its secret we disclose nothing.
+    if (
+      isConfidentialApplicationOAuthClient(clientValidation) &&
+      !isNonEmptyString(clientSecret)
+    ) {
+      return { active: false };
+    }
+
     if (clientSecret) {
       const secretError = await this.validateClientSecret(
         clientValidation,
@@ -511,9 +554,12 @@ export class OAuthService {
       }
 
       // Verify the token belongs to this client
-      const application = await this.applicationRepository.findOne({
-        where: { id: decoded.applicationId },
-      });
+      const application = await this.applicationRepository.findOne(
+        decoded.workspaceId,
+        {
+          where: { id: decoded.applicationId },
+        },
+      );
 
       if (
         !application ||
@@ -550,9 +596,12 @@ export class OAuthService {
             token,
           );
 
-        const application = await this.applicationRepository.findOne({
-          where: { id: payload.applicationId },
-        });
+        const application = await this.applicationRepository.findOne(
+          payload.workspaceId,
+          {
+            where: { id: payload.applicationId },
+          },
+        );
 
         if (
           !application ||
@@ -730,12 +779,14 @@ export class OAuthService {
     applicationRegistration: ApplicationRegistrationEntity,
     workspaceId: string,
   ): Promise<ApplicationEntity> {
-    const existingApplication = await this.applicationRepository.findOne({
-      where: {
-        applicationRegistrationId: applicationRegistration.id,
-        workspaceId,
+    const existingApplication = await this.applicationRepository.findOne(
+      workspaceId,
+      {
+        where: {
+          applicationRegistrationId: applicationRegistration.id,
+        },
       },
-    });
+    );
 
     if (existingApplication) {
       return existingApplication;
@@ -747,12 +798,14 @@ export class OAuthService {
         workspaceId,
       });
 
-      const installedApplication = await this.applicationRepository.findOne({
-        where: {
-          applicationRegistrationId: applicationRegistration.id,
-          workspaceId,
+      const installedApplication = await this.applicationRepository.findOne(
+        workspaceId,
+        {
+          where: {
+            applicationRegistrationId: applicationRegistration.id,
+          },
         },
-      });
+      );
 
       if (installedApplication) {
         return installedApplication;
@@ -774,6 +827,7 @@ export class OAuthService {
       description: `OAuth application registered as "${applicationRegistration.name}"`,
       version: applicationRegistration.latestAvailableVersion ?? '1.0.0',
       sourcePath: 'oauth-install',
+      sourceType: applicationRegistration.sourceType,
       applicationRegistrationId: applicationRegistration.id,
       workspaceId,
     });

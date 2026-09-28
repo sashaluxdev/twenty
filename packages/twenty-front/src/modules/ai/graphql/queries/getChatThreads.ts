@@ -4,7 +4,9 @@ export const GET_CHAT_THREADS = gql`
   query GetChatThreads {
     chatThreads {
       id
+
       title
+      totalCacheReadTokens
       totalInputTokens
       totalOutputTokens
       contextWindowTokens

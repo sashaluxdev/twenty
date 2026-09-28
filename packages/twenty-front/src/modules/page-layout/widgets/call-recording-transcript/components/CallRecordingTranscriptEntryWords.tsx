@@ -4,7 +4,7 @@ import { INITIAL_CALL_RECORDING_TRANSCRIPT_PLAYBACK_POSITION } from '@/page-layo
 import { styled } from '@linaria/react';
 import { useState } from 'react';
 import { type CallRecordingParsedTranscriptWord } from 'twenty-shared/types';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { themeCssVariables } from 'twenty-ui/theme';
 
 const StyledWord = styled.span<{ isSpoken: boolean }>`
   color: ${({ isSpoken }) =>
@@ -16,12 +16,12 @@ const StyledWord = styled.span<{ isSpoken: boolean }>`
 
 type CallRecordingTranscriptEntryWordsProps = {
   words: CallRecordingParsedTranscriptWord[];
-  videoElement: HTMLVideoElement;
+  mediaElement: HTMLMediaElement;
 };
 
 export const CallRecordingTranscriptEntryWords = ({
   words,
-  videoElement,
+  mediaElement,
 }: CallRecordingTranscriptEntryWordsProps) => {
   const [wordPlaybackPosition, setWordPlaybackPosition] = useState(
     INITIAL_CALL_RECORDING_TRANSCRIPT_PLAYBACK_POSITION,
@@ -30,7 +30,7 @@ export const CallRecordingTranscriptEntryWords = ({
   return (
     <>
       <CallRecordingTranscriptPlaybackEffect
-        videoElement={videoElement}
+        mediaElement={mediaElement}
         timedItems={words}
         onPlaybackPositionChange={setWordPlaybackPosition}
       />

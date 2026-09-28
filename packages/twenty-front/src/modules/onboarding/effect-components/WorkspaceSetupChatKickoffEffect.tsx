@@ -1,3 +1,4 @@
+import { useRefreshAgentChatThreadPermissions } from '@/ai/hooks/useRefreshAgentChatThreadPermissions';
 import { useMutation } from '@apollo/client/react';
 import { useStore } from 'jotai';
 import { useEffect, useState } from 'react';
@@ -12,6 +13,7 @@ import { skipMessagesSkeletonUntilLoadedState } from '@/ai/states/skipMessagesSk
 import { useUpdateMetadataStoreDraft } from '@/metadata-store/hooks/useUpdateMetadataStoreDraft';
 import { type FlatAgentChatThread } from '@/metadata-store/types/FlatAgentChatThread';
 import { WORKSPACE_SETUP_CHAT_ENRICHMENT_MAX_WAIT_MS } from '@/onboarding/constants/WorkspaceSetupChatEnrichmentMaxWaitMs';
+import { shouldOpenAiChatAfterOnboardingState } from '@/onboarding/states/shouldOpenAiChatAfterOnboardingState';
 import { companyEnrichmentState } from '@/onboarding/states/companyEnrichmentState';
 import { hasRequestedWorkspaceSetupChatState } from '@/onboarding/states/hasRequestedWorkspaceSetupChatState';
 import { isCompanyEnrichmentFetchInFlightState } from '@/onboarding/states/isCompanyEnrichmentFetchInFlightState';
@@ -27,6 +29,8 @@ export const WorkspaceSetupChatKickoffEffect = () => {
     StartWorkspaceSetupChatDocument,
   );
   const store = useStore();
+  const { refreshAgentChatThreadPermissions } =
+    useRefreshAgentChatThreadPermissions();
   const { addToDraft, applyChanges } = useUpdateMetadataStoreDraft();
   const isCompanyEnrichmentFetchInFlight = useAtomStateValue(
     isCompanyEnrichmentFetchInFlightState,
@@ -81,13 +85,19 @@ export const WorkspaceSetupChatKickoffEffect = () => {
           return;
         }
 
+        if (!store.get(shouldOpenAiChatAfterOnboardingState.atom)) {
+          return;
+        }
+
         const workspaceSetupThread: FlatAgentChatThread = {
           id: thread.id,
+
           title: thread.title ?? null,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           conversationSize: thread.conversationSize,
           contextWindowTokens: thread.contextWindowTokens ?? null,
+          totalCacheReadTokens: thread.totalCacheReadTokens,
           totalInputTokens: thread.totalInputTokens,
           totalOutputTokens: thread.totalOutputTokens,
           totalInputCredits: thread.totalInputCredits,
@@ -96,6 +106,7 @@ export const WorkspaceSetupChatKickoffEffect = () => {
 
         addToDraft({ key: 'agentChatThreads', items: [workspaceSetupThread] });
         applyChanges();
+        void refreshAgentChatThreadPermissions([thread.id]);
 
         store.set(
           currentAiChatThreadTitleComponentFamilyState.atomFamily({
@@ -128,6 +139,7 @@ export const WorkspaceSetupChatKickoffEffect = () => {
     void startWorkspaceSetupChat();
   }, [
     startWorkspaceSetupChatMutation,
+    refreshAgentChatThreadPermissions,
     store,
     addToDraft,
     applyChanges,

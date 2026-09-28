@@ -8,15 +8,16 @@ import { WidgetComponentInstanceContext } from '@/page-layout/widgets/states/con
 import { type WidgetAccessDenialInfo } from '@/page-layout/widgets/types/WidgetAccessDenialInfo';
 import { type WidgetCardVariant } from '@/page-layout/widgets/types/WidgetCardVariant';
 import { getWidgetContentPadding } from '@/page-layout/widgets/utils/getWidgetContentPadding';
+import { isViewportFillingWidget } from '@/page-layout/widgets/utils/isViewportFillingWidget';
 import { isWidgetCardFlushInViewMode } from '@/page-layout/widgets/utils/isWidgetCardFlushInViewMode';
 import { WidgetCard } from '@/page-layout/widgets/widget-card/components/WidgetCard';
 import { WidgetCardContent } from '@/page-layout/widgets/widget-card/components/WidgetCardContent';
 import { WidgetCardHeader } from '@/page-layout/widgets/widget-card/components/WidgetCardHeader';
 import { styled } from '@linaria/react';
-import { type MouseEvent, useContext } from 'react';
+import { type MouseEvent } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
 import { IconLock } from 'twenty-ui/icon';
-import { ThemeContext } from 'twenty-ui/theme-constants';
+import { useTheme } from 'twenty-ui/theme';
 import {
   PageLayoutTabLayoutMode,
   PageLayoutType,
@@ -60,7 +61,7 @@ export const WidgetCardShell = ({
   onMouseEnter,
   onMouseLeave,
 }: WidgetCardShellProps) => {
-  const { theme } = useContext(ThemeContext);
+  const theme = useTheme();
   const { layoutMode } = usePageLayoutContentContext();
   const { currentPageLayout } = useCurrentPageLayoutOrThrow();
 
@@ -68,7 +69,8 @@ export const WidgetCardShell = ({
   const isFixedHeightIframe =
     currentPageLayout.type === PageLayoutType.RECORD_PAGE &&
     isVerticalList &&
-    widget.type === WidgetType.IFRAME;
+    widget.type === WidgetType.IFRAME &&
+    !isViewportFillingWidget(widget);
   const contentPadding = isWidgetCardFlushInViewMode({
     isEditable,
     variant,

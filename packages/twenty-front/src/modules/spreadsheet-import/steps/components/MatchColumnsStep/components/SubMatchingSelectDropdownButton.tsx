@@ -8,11 +8,10 @@ import {
 import { type SpreadsheetMatchedOptions } from '@/spreadsheet-import/types/SpreadsheetMatchedOptions';
 import { getFieldOptions } from '@/spreadsheet-import/utils/getFieldOptions';
 import { styled } from '@linaria/react';
-import { useContext } from 'react';
-import { ThemeContext, themeCssVariables } from 'twenty-ui/theme-constants';
-import { Tag, type TagColor } from 'twenty-ui/data-display';
+import { useTheme, themeCssVariables } from 'twenty-ui/theme';
+import { Tag, type TagColor } from 'twenty-ui/primitives/data-display';
 import { IconChevronDown } from 'twenty-ui/icon';
-import { type SelectOption } from 'twenty-ui/input';
+import { type SelectOption } from 'twenty-ui/primitives/input';
 const StyledIconChevronDownContainer = styled.div`
   color: ${themeCssVariables.font.color.tertiary};
   display: flex;
@@ -31,16 +30,13 @@ export const SubMatchingSelectDropdownButton = ({
   column,
   placeholder,
 }: SubMatchingSelectDropdownButtonProps) => {
-  const { theme } = useContext(ThemeContext);
+  const theme = useTheme();
   const { spreadsheetImportFields: fields } = useSpreadsheetImportInternal();
   const options = getFieldOptions(fields, column.value) as SelectOption[];
   const value = options.find((opt) => opt.value === option.value);
   return (
     <SubMatchingSelectControlContainer cursor="pointer" id="control">
-      <Tag
-        text={value?.label ?? placeholder}
-        color={value?.color as TagColor}
-      />
+      <Tag color={value?.color as TagColor}>{value?.label ?? placeholder}</Tag>
       <StyledIconChevronDownContainer>
         <IconChevronDown size={theme.icon.size.md} />
       </StyledIconChevronDownContainer>

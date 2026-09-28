@@ -4,11 +4,7 @@ import { type MetadataValidationErrorResponse } from 'twenty-shared/metadata';
 import { isPlainObject } from 'twenty-shared/utils';
 
 import { ApiService } from '@/cli/utilities/api/api-service';
-import {
-  ensureAppAccessTokenIsValidOrRefresh,
-  ensureAppRegistration,
-} from '@/cli/utilities/auth';
-import { buildAppTokenPairFetcher } from '@/cli/utilities/auth/build-app-token-pair-fetcher';
+import { ensureAppRegistration } from '@/cli/utilities/auth';
 import { promptForReauthentication } from '@/cli/utilities/auth/reauth-helper';
 import { buildApplication } from '@/cli/utilities/build/common/build-application';
 import { runTypecheck } from '@/cli/utilities/build/common/typecheck-plugin';
@@ -28,6 +24,7 @@ import { getSyncErrorRecoveryHint } from '@/cli/utilities/error/get-sync-error-r
 import { getGraphQLErrorMessage } from '@/cli/utilities/error/parse-server-error';
 import { serializeError } from '@/cli/utilities/error/serialize-error';
 import { FileUploader } from '@/cli/utilities/file/file-uploader';
+import { formatUploadFailures } from '@/cli/utilities/file/format-upload-failures';
 import { runSafe } from '@/cli/utilities/run-safe';
 import {
   APP_ERROR_CODES,
@@ -291,14 +288,10 @@ const innerAppDevOnce = async (
 
   const configService = new ConfigService();
 
-  const { clientId, clientSecret } = await ensureAppRegistration(
-    apiService,
-    configService,
-    {
-      name: manifest.application.displayName,
-      universalIdentifier: manifest.application.universalIdentifier,
-    },
-  );
+  await ensureAppRegistration(apiService, configService, {
+    name: manifest.application.displayName,
+    universalIdentifier: manifest.application.universalIdentifier,
+  });
 
   const createDevAppResult = await apiService.createDevelopmentApplication({
     universalIdentifier: manifest.application.universalIdentifier,
@@ -338,12 +331,7 @@ const innerAppDevOnce = async (
       success: false,
       error: {
         code: APP_ERROR_CODES.SYNC_FAILED,
-        message: uploadFailures
-          .map(
-            (failure) =>
-              `Failed to upload ${failure.builtPath}: ${failure.error}`,
-          )
-          .join('\n'),
+        message: formatUploadFailures(uploadFailures).join('\n'),
       },
     };
   }
@@ -365,22 +353,11 @@ const innerAppDevOnce = async (
   onProgress?.('Generating API client...');
 
   try {
-    const appAccessToken = await ensureAppAccessTokenIsValidOrRefresh(
-      configService,
-      {
-        credentials: clientSecret ? { clientId, clientSecret } : undefined,
-        fetchTokenPair: buildAppTokenPairFetcher(
-          apiService,
-          createDevAppResult.data.id,
-        ),
-      },
-    );
-
     const clientService = new ClientService();
 
     await clientService.generateCoreClient({
       appPath,
-      appAccessToken,
+      applicationUniversalIdentifier: manifest.application.universalIdentifier,
     });
   } catch (error) {
     return {

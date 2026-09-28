@@ -39,7 +39,7 @@ import {
   EmailingDomainDriverExceptionCode,
 } from 'src/engine/core-modules/emailing-domain/drivers/exceptions/emailing-domain-driver.exception';
 import { EmailingDomainStatus } from 'src/engine/core-modules/emailing-domain/drivers/types/emailing-domain-status.type';
-import { type VerificationRecord } from 'src/engine/core-modules/emailing-domain/drivers/types/verifications-record';
+import { type VerificationRecord } from 'src/engine/core-modules/emailing-domain/drivers/types/verifications-record.type';
 
 export class AwsSesDriver implements EmailingDomainDriverInterface {
   private readonly logger = new Logger(AwsSesDriver.name);
@@ -105,6 +105,7 @@ export class AwsSesDriver implements EmailingDomainDriverInterface {
       const verificationRecords = buildAwsSesVerificationRecords({
         domain: input.domain,
         dkimTokens: identityResponse.DkimAttributes?.Tokens ?? [],
+        mailFromDomain: identityResponse.MailFromAttributes?.MailFromDomain,
         region: this.config.region,
       });
 
@@ -156,7 +157,10 @@ export class AwsSesDriver implements EmailingDomainDriverInterface {
   async sendEmail(
     input: EmailingDomainSendEmailRequest,
   ): Promise<EmailingDomainSendEmailResult> {
-    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(input.emailingDomain);
+    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(
+      input.emailingDomain,
+      input.sendKind,
+    );
     const emailToSend = this.unsubscribeContentService.addTo(
       input,
       unsubscribeBaseUrl,
@@ -171,7 +175,10 @@ export class AwsSesDriver implements EmailingDomainDriverInterface {
   async sendEmailBatch(
     input: EmailingDomainSendEmailBatchRequest,
   ): Promise<EmailingDomainSendEmailBatchResult> {
-    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(input.emailingDomain);
+    const unsubscribeBaseUrl = getUnsubscribeBaseUrl(
+      input.emailingDomain,
+      input.sendKind,
+    );
     const batchToSend = this.unsubscribeContentService.addToBatch(
       input,
       unsubscribeBaseUrl,
@@ -285,6 +292,7 @@ export class AwsSesDriver implements EmailingDomainDriverInterface {
       const verificationRecords = buildAwsSesVerificationRecords({
         domain,
         dkimTokens: existingIdentity.DkimAttributes?.Tokens ?? [],
+        mailFromDomain: existingIdentity.MailFromAttributes?.MailFromDomain,
         region: this.config.region,
       });
 

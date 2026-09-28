@@ -30,12 +30,9 @@ jest
 
 jest.mock('openid-client', () => ({
   Strategy: jest.fn(),
-  Issuer: {
-    discover: jest.fn().mockResolvedValue({} as Issuer),
-  },
 }));
 
-describe('OIDCAuthGuard', () => {
+describe('OidcAuthGuard', () => {
   let guard: OidcAuthGuard;
   let ssoService: SsoService;
   let guardRedirectService: GuardRedirectService;
@@ -49,6 +46,7 @@ describe('OIDCAuthGuard', () => {
           provide: SsoService,
           useValue: {
             findSsoIdentityProviderById: jest.fn(),
+            discoverOidcIssuer: jest.fn().mockResolvedValue({} as Issuer),
             getOidcClient: jest.fn(),
           },
         },
@@ -100,6 +98,9 @@ describe('OIDCAuthGuard', () => {
     expect(guardRedirectService.dispatchErrorFromGuard).not.toHaveBeenCalled();
     expect(ssoService.findSsoIdentityProviderById).toHaveBeenCalledWith(
       'test-id',
+    );
+    expect(ssoService.discoverOidcIssuer).toHaveBeenCalledWith(
+      'https://issuer.example.com',
     );
   });
 

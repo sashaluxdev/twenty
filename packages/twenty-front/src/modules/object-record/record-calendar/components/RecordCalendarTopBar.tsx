@@ -11,7 +11,7 @@ import { TimeZoneAbbreviation } from '@/ui/input/components/internal/date/compon
 import { Select } from '@/ui/input/components/Select';
 import { SelectControl } from '@/ui/input/components/SelectControl';
 import { Dropdown } from '@/ui/layout/dropdown/components/Dropdown';
-import { DropdownContent } from '@/ui/layout/dropdown/components/DropdownContent';
+import { LegacyDropdownContent } from '@/ui/layout/dropdown/components/LegacyDropdownContent';
 import { useCloseDropdown } from '@/ui/layout/dropdown/hooks/useCloseDropdown';
 import { type DropdownOffset } from '@/ui/layout/dropdown/types/DropdownOffset';
 import { useAvailableComponentInstanceId } from '@/ui/utilities/state/component-state/hooks/useAvailableComponentInstanceId';
@@ -30,8 +30,8 @@ import {
   turnPlainDateToShiftedDateInSystemTimeZone,
 } from 'twenty-shared/utils';
 import { IconChevronLeft, IconChevronRight } from 'twenty-ui/icon';
-import { Button } from 'twenty-ui/input';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { Button } from 'twenty-ui/primitives/input';
+import { themeCssVariables } from 'twenty-ui/theme';
 import { ViewCalendarLayout } from '~/generated-metadata/graphql';
 import { dateLocaleState } from '~/localization/states/dateLocaleState';
 
@@ -184,7 +184,7 @@ export const RecordCalendarTopBar = () => {
             />
           }
           dropdownComponents={
-            <DropdownContent widthInPixels={280}>
+            <LegacyDropdownContent widthInPixels={280}>
               <DatePickerWithoutCalendar
                 instanceId={recordCalendarId}
                 date={recordCalendarSelectedDate.toString()}
@@ -193,7 +193,7 @@ export const RecordCalendarTopBar = () => {
                 onEnter={handleDateChange}
                 onEscape={handleDateChange}
               />
-            </DropdownContent>
+            </LegacyDropdownContent>
           }
           dropdownOffset={dropdownContentOffset}
         />
@@ -203,26 +203,25 @@ export const RecordCalendarTopBar = () => {
       <StyledNavigationSection>
         <StyledNavigationButtonContainer>
           <Button
-            ariaLabel={t`Previous period`}
-            size="small"
-            variant="tertiary"
-            Icon={IconChevronLeft}
+            aria-label={t`Previous period`}
+            size="sm"
+            startIcon={<IconChevronLeft />}
             onClick={handlePreviousPeriod}
+            variant="ghost"
           />
         </StyledNavigationButtonContainer>
         <Button
-          size="small"
-          variant="tertiary"
-          title={t`Today`}
+          size="sm"
           onClick={handleTodayClick}
-        />
+          variant="ghost"
+        >{t`Today`}</Button>
         <StyledNavigationButtonContainer>
           <Button
-            ariaLabel={t`Next period`}
-            size="small"
-            variant="tertiary"
-            Icon={IconChevronRight}
+            aria-label={t`Next period`}
+            size="sm"
+            startIcon={<IconChevronRight />}
             onClick={handleNextPeriod}
+            variant="ghost"
           />
         </StyledNavigationButtonContainer>
       </StyledNavigationSection>

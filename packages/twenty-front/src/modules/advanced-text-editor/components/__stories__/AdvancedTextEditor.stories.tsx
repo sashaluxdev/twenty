@@ -3,15 +3,16 @@ import { useAdvancedTextEditor } from '@/advanced-text-editor/hooks/useAdvancedT
 import { type AdvancedTextEditorProfile } from '@/advanced-text-editor/types/AdvancedTextEditorProfile';
 import { buildFullRichTextWithVariableTagExtensions } from '@/advanced-text-editor/utils/buildFullRichTextExtensions';
 import { type Meta, type StoryObj } from '@storybook/react-vite';
-import { expect, fn, userEvent, waitFor } from 'storybook/test';
-import { isDefined, TIPTAP_DOCUMENT_SCHEMA_VERSION } from 'twenty-shared/utils';
-import { ComponentDecorator, RouterDecorator } from 'twenty-ui/testing';
+import { expect, fn, userEvent, waitFor, within } from 'storybook/test';
+import { TIPTAP_DOCUMENT_SCHEMA_VERSION, isDefined } from 'twenty-shared/utils';
+import { ComponentDecorator } from 'twenty-ui/testing';
 import { ObjectMetadataItemsDecorator } from '~/testing/decorators/ObjectMetadataItemsDecorator';
-import { SnackBarDecorator } from '~/testing/decorators/SnackBarDecorator';
+import { ToastDecorator } from '~/testing/decorators/ToastDecorator';
 import { WorkflowStepActionDrawerDecorator } from '~/testing/decorators/WorkflowStepActionDrawerDecorator';
 import { WorkflowStepDecorator } from '~/testing/decorators/WorkflowStepDecorator';
 import { WorkspaceDecorator } from '~/testing/decorators/WorkspaceDecorator';
 import { graphqlMocks } from '~/testing/graphqlMocks';
+import { MemoryRouterDecorator } from '~/testing/decorators/MemoryRouterDecorator';
 
 const STORY_RICH_TEXT_PROFILE = {
   chrome: 'document',
@@ -89,8 +90,8 @@ const meta: Meta<typeof EditorWrapper> = {
     WorkflowStepDecorator,
     ComponentDecorator,
     ObjectMetadataItemsDecorator,
-    SnackBarDecorator,
-    RouterDecorator,
+    ToastDecorator,
+    MemoryRouterDecorator,
     WorkspaceDecorator,
   ],
 };
@@ -307,7 +308,19 @@ export const Empty: Story = {
 export const MinimalDocument: Story = {
   args: {
     extensionSet: 'minimal',
-    placeholder: 'Ask, search or make anything...',
+    placeholder: 'Ask anything, @ a record or / a skill...',
+  },
+  play: async ({ canvasElement, step }) => {
+    await step('Verify placeholder hints at @ and / references', async () => {
+      await waitFor(() =>
+        expect(
+          canvasElement.querySelector('[data-placeholder]'),
+        ).toHaveAttribute(
+          'data-placeholder',
+          'Ask anything, @ a record or / a skill...',
+        ),
+      );
+    });
   },
 };
 
@@ -479,5 +492,37 @@ export const WithLists: Story = {
         expect(canvasElement.querySelectorAll('ol li').length).toBe(4),
       );
     });
+  },
+};
+
+export const TurnIntoHeading: Story = {
+  args: WithContent.args,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await waitFor(() =>
+      expect(canvasElement.querySelector('.tiptap')).toBeInTheDocument(),
+    );
+    const editor = canvasElement.querySelector<HTMLElement>('.tiptap')!;
+    await userEvent.tripleClick(within(editor).getByText('World'));
+    const trigger = await body.findByRole('button', { name: 'Paragraph' });
+    await userEvent.click(trigger);
+    await userEvent.click(
+      await body.findByRole('button', { name: 'Heading 1' }),
+    );
+    await waitFor(() =>
+      expect(
+        body.queryByRole('dialog', { name: 'Turn into' }),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(editor).toHaveFocus());
+    await expect(
+      within(editor).getByRole('heading', { level: 1, name: /Hello.*World/ }),
+    ).toBeVisible();
+    await expect(
+      await body.findByRole('button', { name: 'Heading 1' }),
+    ).toBeVisible();
+    await expect(canvasElement.ownerDocument.getSelection()?.toString()).toBe(
+      'World',
+    );
   },
 };

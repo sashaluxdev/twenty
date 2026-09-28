@@ -1,3 +1,6 @@
+import { injectChatMessageSenders } from 'src/engine/metadata-modules/ai/ai-chat/utils/inject-chat-message-senders.util';
+import { AgentChatActorService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-actor.service';
+import { type ToolContext } from 'src/engine/core-modules/tool-provider/types/tool-context.type';
 import { Injectable, Logger } from '@nestjs/common';
 
 import {
@@ -5,7 +8,7 @@ import {
   hasToolCall,
   type LanguageModelUsage,
   NoOutputGeneratedError,
-  stepCountIs,
+  isStepCount,
   type StepResult,
   streamText,
   type SystemModelMessage,
@@ -46,7 +49,7 @@ import { AgentActorContextService } from 'src/engine/metadata-modules/ai/ai-agen
 import { finalizeDanglingToolParts } from 'src/engine/metadata-modules/ai/ai-agent-execution/utils/finalize-dangling-tool-parts.util';
 import { guideUncallableToolCallsToMetaTool } from 'src/engine/metadata-modules/ai/ai-agent-execution/utils/guide-uncallable-tool-calls-to-meta-tool.util';
 import { AGENT_CONFIG } from 'src/engine/metadata-modules/ai/ai-agent/constants/agent-config.const';
-import { BrowsingContextType } from 'src/engine/metadata-modules/ai/ai-agent/types/browsingContext.type';
+import { BrowsingContextType } from 'src/engine/metadata-modules/ai/ai-agent/types/browsing-context.type';
 import { repairToolCall } from 'src/engine/metadata-modules/ai/ai-agent/utils/repair-tool-call.util';
 import { AiBillingService } from 'src/engine/metadata-modules/ai/ai-billing/services/ai-billing.service';
 import { convertDollarsToCreditsMicro } from 'src/engine/metadata-modules/ai/ai-billing/utils/convert-dollars-to-credits-micro.util';
@@ -55,6 +58,7 @@ import {
   extractCacheCreationTokens,
   extractCacheCreationTokensFromSteps,
 } from 'src/engine/metadata-modules/ai/ai-billing/utils/extract-cache-creation-tokens.util';
+import { AI_CHAT_EXCLUDED_TOOL_NAMES } from 'src/engine/metadata-modules/ai/ai-chat/constants/ai-chat-excluded-tool-names.const';
 import { AI_CHAT_STREAM_FUNCTION_ID } from 'src/engine/metadata-modules/ai/ai-chat/constants/ai-chat-stream-function-id.constant';
 import { AI_CHAT_TOOL_NAMES_TO_PRELOAD } from 'src/engine/metadata-modules/ai/ai-chat/constants/ai-chat-tool-names-to-preload.const';
 import { AI_CHAT_WORKSPACE_SETUP_STREAM_FUNCTION_ID } from 'src/engine/metadata-modules/ai/ai-chat/constants/ai-chat-workspace-setup-stream-function-id.constant';
@@ -72,6 +76,7 @@ import { buildWorkspaceSetupChatThreadId } from 'src/engine/metadata-modules/ai/
 import { buildFullSystemPrompt } from 'src/engine/metadata-modules/ai/ai-chat/utils/build-full-system-prompt.util';
 import { hasNoAssistantMessage } from 'src/engine/metadata-modules/ai/ai-chat/utils/has-no-assistant-message.util';
 import { hasSucceededWorkspaceSetupCompletion } from 'src/engine/metadata-modules/ai/ai-chat/utils/has-succeeded-workspace-setup-completion.util';
+import { collectReferencedSkillIds } from 'src/engine/metadata-modules/ai/ai-chat/utils/collect-referenced-skill-ids.util';
 import { collectUploadedFileReferences } from 'src/engine/metadata-modules/ai/ai-chat/utils/collect-uploaded-file-references.util';
 import { extractCodeInterpreterFiles } from 'src/engine/metadata-modules/ai/ai-chat/utils/extract-code-interpreter-files.util';
 import { injectMessageTimestamps } from 'src/engine/metadata-modules/ai/ai-chat/utils/inject-message-timestamps.util';
@@ -83,6 +88,7 @@ import {
 import { replaceUnsupportedFileParts } from 'src/engine/metadata-modules/ai/ai-chat/utils/replace-unsupported-file-parts.util';
 import { tagAiChatKindScope } from 'src/engine/metadata-modules/ai/ai-chat/utils/tag-ai-chat-kind-scope.util';
 import { buildAiTelemetry } from 'src/engine/metadata-modules/ai/ai-models/utils/build-ai-telemetry.util';
+import { AiModelConfigService } from 'src/engine/metadata-modules/ai/ai-models/services/ai-model-config.service';
 import { AiModelRegistryService } from 'src/engine/metadata-modules/ai/ai-models/services/ai-model-registry.service';
 import { NativeToolBinderService } from 'src/engine/metadata-modules/ai/ai-models/services/native-tool-binder.service';
 import { type AiModelConfig } from 'src/engine/metadata-modules/ai/ai-models/types/ai-model-config.type';
@@ -92,6 +98,7 @@ import {
   AiExceptionCode,
 } from 'src/engine/metadata-modules/ai/ai.exception';
 import { SkillService } from 'src/engine/metadata-modules/skill/skill.service';
+import { getChatModelId } from 'src/engine/metadata-modules/ai/ai-models/utils/get-chat-model-id.util';
 
 export type ChatExecutionOptions = {
   workspace: WorkspaceEntity;
@@ -99,6 +106,7 @@ export type ChatExecutionOptions = {
   threadId?: string;
   streamId?: string;
   turnId?: string;
+  messageId?: string;
   messages: ExtendedUIMessage[];
   browsingContext: BrowsingContextType | null;
   onCodeExecutionUpdate?: CodeExecutionStreamEmitter;
@@ -122,6 +130,7 @@ export class ChatExecutionService {
     private readonly toolRegistry: ToolRegistryService,
     private readonly skillService: SkillService,
     private readonly aiModelRegistryService: AiModelRegistryService,
+    private readonly aiModelConfigService: AiModelConfigService,
     private readonly aiBillingService: AiBillingService,
     private readonly agentActorContextService: AgentActorContextService,
     private readonly workspaceDomainsService: WorkspaceDomainsService,
@@ -130,6 +139,7 @@ export class ChatExecutionService {
     private readonly nativeToolBinder: NativeToolBinderService,
     private readonly messagePruningService: MessagePruningService,
     private readonly metricsService: MetricsService,
+    private readonly chatActorService: AgentChatActorService,
   ) {}
 
   async streamChat({
@@ -138,6 +148,7 @@ export class ChatExecutionService {
     threadId,
     streamId,
     turnId,
+    messageId,
     messages,
     browsingContext,
     onCodeExecutionUpdate,
@@ -146,6 +157,31 @@ export class ChatExecutionService {
     abortSignal,
     conversationSizeTokens,
   }: ChatExecutionOptions): Promise<ChatExecutionResult> {
+    if (!isDefined(threadId)) {
+      throw new AiException(
+        'Chat thread identity required',
+        AiExceptionCode.THREAD_NOT_FOUND,
+      );
+    }
+    const { sender, authorization } = await this.chatActorService.authorizeJob({
+      workspaceId: workspace.id,
+      threadId,
+      messageId,
+      turnId,
+      userWorkspaceId,
+    });
+    const resolveExecutionContext = async (): Promise<ToolContext> => {
+      const authorization = await this.chatActorService.authorize({
+        workspaceId: workspace.id,
+        threadId,
+        sender,
+      });
+      return {
+        ...toolContext,
+        ...authorization,
+        resolveExecutionContext: undefined,
+      };
+    };
     const { actorContext, roleId, userId, userContext } =
       await this.agentActorContextService.buildUserAndAgentActorContext(
         userWorkspaceId,
@@ -154,21 +190,28 @@ export class ChatExecutionService {
 
     const locale = userContext.locale as keyof typeof APP_LOCALES;
 
-    const toolContext = {
+    const toolContext: ToolContext = {
       workspaceId: workspace.id,
-      roleId,
       actorContext,
       userId,
       userWorkspaceId,
       threadId,
       locale,
       onCodeExecutionUpdate,
+      ...authorization,
+      resolveExecutionContext,
     };
 
     const toolCatalog = await this.toolRegistry.buildToolIndex(
       workspace.id,
       roleId,
-      { userId, userWorkspaceId, locale },
+      {
+        userId,
+        userWorkspaceId,
+        locale,
+        excludeTools: AI_CHAT_EXCLUDED_TOOL_NAMES,
+        rolePermissionConfig: toolContext.rolePermissionConfig,
+      },
     );
 
     const skillCatalog = await this.skillService.findAllFlatSkills(
@@ -185,17 +228,18 @@ export class ChatExecutionService {
       { compactOutput: true, spillLargeOutput: true },
     );
 
-    const resolvedModelId = modelId ?? workspace.smartModel;
-
-    this.aiModelRegistryService.validateModelAvailability(
-      resolvedModelId,
+    const resolvedModelId = getChatModelId({
+      requestedModelId: modelId,
       workspace,
-    );
+    });
+
+    this.aiModelRegistryService.validateModelAvailability(resolvedModelId);
 
     const registeredModel =
-      await this.aiModelRegistryService.resolveModelForAgent({
-        modelId: resolvedModelId,
-      });
+      await this.aiModelRegistryService.resolveModelForAgent(
+        { modelId: resolvedModelId },
+        workspace,
+      );
 
     const modelConfig = this.aiModelRegistryService.getEffectiveModelConfig(
       registeredModel.modelId,
@@ -239,6 +283,9 @@ export class ChatExecutionService {
       ...(isWorkspaceSetupThread ? [COMPLETE_WORKSPACE_SETUP_TOOL_NAME] : []),
     ];
 
+    const isToolAllowed = (toolName: string) =>
+      !AI_CHAT_EXCLUDED_TOOL_NAMES.has(toolName);
+
     // ToolSet is constant for the entire conversation — no mutation.
     // learn_tools returns schemas as text; execute_tool dispatches via the registry.
     const activeTools: ToolSet = {
@@ -255,12 +302,19 @@ export class ChatExecutionService {
       [LEARN_TOOLS_TOOL_NAME]: createLearnToolsTool(
         this.toolRegistry,
         toolContext,
-        { spillLargeOutput: true },
+        {
+          spillLargeOutput: true,
+          isToolAllowed,
+        },
       ),
       [EXECUTE_TOOL_TOOL_NAME]: createExecuteToolTool(
         this.toolRegistry,
         toolContext,
-        { compactOutput: true, spillLargeOutput: true },
+        {
+          compactOutput: true,
+          spillLargeOutput: true,
+          isToolAllowed,
+        },
       ),
       [LOAD_SKILL_TOOL_NAME]: createLoadSkillTool(
         (skillNames) =>
@@ -278,6 +332,13 @@ export class ChatExecutionService {
     const isCodeInterpreterEnabled = this.codeInterpreterService.isEnabled();
 
     const uploadedFiles = collectUploadedFileReferences(messages);
+
+    // Skills the user tagged with / are inlined into the prompt so the model
+    // does not spend a round trip calling load_skills for them.
+    const referencedSkills = await this.skillService.findFlatSkillsByIds(
+      collectReferencedSkillIds(messages),
+      workspace.id,
+    );
 
     let processedMessages: ExtendedUIMessage[] = replaceUnsupportedFileParts(
       messages,
@@ -315,6 +376,10 @@ export class ChatExecutionService {
       );
     }
 
+    processedMessages = injectChatMessageSenders({
+      messages: processedMessages,
+      currentUserWorkspaceId: userWorkspaceId,
+    });
     processedMessages = injectMessageTimestamps(
       processedMessages,
       userContext.timezone,
@@ -323,6 +388,7 @@ export class ChatExecutionService {
     const systemPrompt = buildFullSystemPrompt({
       toolCatalog,
       skillCatalog,
+      referencedSkills,
       preloadedTools: preloadedToolNames,
       uploadedFilesContext: {
         uploadedFiles,
@@ -339,7 +405,7 @@ export class ChatExecutionService {
 
     const systemMessage: SystemModelMessage = {
       role: 'system',
-      content: systemPrompt,
+      content: `${systemPrompt}\n\nThis conversation can have multiple participants. Message sender annotations identify who wrote each user message. The current request is from workspace membership ${userWorkspaceId}; use only this participant's identity and permissions for actions. Historical participants' requests do not authorize new actions on their behalf.`,
       providerOptions: getCacheProviderOptions(registeredModel.sdkPackage),
     };
 
@@ -477,17 +543,18 @@ export class ChatExecutionService {
 
     const stream = streamText({
       model: registeredModel.model,
-      messages: [systemMessage, ...modelMessages],
+      instructions: systemMessage,
+      messages: modelMessages,
       tools: activeTools,
       // Every step of the kickoff turn is forced so it cannot end in prose; stopWhen ends it at the first ask_questions.
       toolChoice: isWorkspaceSetupKickoffTurn ? 'required' : 'auto',
       abortSignal,
       stopWhen: (step) =>
-        stepCountIs(AGENT_CONFIG.MAX_STEPS)(step) ||
+        isStepCount(AGENT_CONFIG.MAX_STEPS)(step) ||
         hasToolCall(ASK_QUESTIONS_TOOL_NAME)(step) ||
         hasToolCall(COMPLETE_WORKSPACE_SETUP_TOOL_NAME)(step) ||
         hasNoMoreAvailableCredits,
-      experimental_telemetry: buildAiTelemetry({
+      ...buildAiTelemetry({
         functionId: isWorkspaceSetupThread
           ? AI_CHAT_WORKSPACE_SETUP_STREAM_FUNCTION_ID
           : AI_CHAT_STREAM_FUNCTION_ID,
@@ -499,10 +566,18 @@ export class ChatExecutionService {
       }),
       providerOptions: getCallLevelProviderOptions({
         sdkPackage: registeredModel.sdkPackage,
-        providerOptions: undefined,
+        providerOptions:
+          this.aiModelConfigService.getReasoningProviderOptions(
+            registeredModel,
+          ),
         promptCacheKey: threadId,
       }),
-      prepareStep: ({ messages }) => {
+      prepareStep: async ({ messages }) => {
+        await this.chatActorService.authorize({
+          workspaceId: workspace.id,
+          threadId,
+          sender,
+        });
         stepStartedAt = performance.now();
 
         return {
@@ -530,10 +605,10 @@ export class ChatExecutionService {
           `Stream ${streamId} emitted an error: ${error instanceof Error ? error.message : String(error)}`,
         );
       },
-      experimental_onToolCallFinish: (event) => {
+      onToolExecutionEnd: (event) => {
         this.metricsService.recordHistogram({
           key: MetricsKeys.AiChatToolExecutionDurationMs,
-          value: event.durationMs,
+          value: event.toolExecutionMs,
           unit: 'ms',
           attributes: {
             model: registeredModel.modelId,
@@ -542,7 +617,7 @@ export class ChatExecutionService {
           bucketBoundaries: TOOL_EXECUTION_DURATION_MS_BUCKET_BOUNDARIES,
         });
       },
-      onStepFinish: async (step) => {
+      onStepEnd: async (step) => {
         this.metricsService.recordHistogram({
           key: MetricsKeys.AiChatStepLatencyMs,
           value: performance.now() - stepStartedAt,
@@ -618,7 +693,7 @@ export class ChatExecutionService {
       onAbort: async ({ steps }) => {
         await emitTurnUsageEvent(steps);
       },
-      experimental_repairToolCall: async ({
+      repairToolCall: async ({
         toolCall,
         tools: toolsForRepair,
         inputSchema,

@@ -1,3 +1,7 @@
+import { useLingui } from '@lingui/react/macro';
+import { currentWorkspaceMemberState } from '@/auth/states/currentWorkspaceMemberState';
+import { currentWorkspaceMembersState } from '@/auth/states/currentWorkspaceMembersState';
+import { useIsCurrentAiChatThreadReadOnly } from '@/ai/hooks/useIsCurrentAiChatThreadReadOnly';
 import { styled } from '@linaria/react';
 
 import { AgentChatFilePreview } from '@/ai/components/internal/AgentChatFilePreview';
@@ -13,7 +17,7 @@ import { useAtomStateValue } from '@/ui/utilities/state/jotai/hooks/useAtomState
 
 import { isExtendedFileUIPart } from 'twenty-shared/ai';
 import { isDefined } from 'twenty-shared/utils';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { themeCssVariables } from 'twenty-ui/theme';
 import { dateLocaleState } from '~/localization/states/dateLocaleState';
 import { beautifyPastDateRelativeToNow } from '~/utils/date-utils';
 
@@ -34,11 +38,8 @@ const StyledMessageText = styled.div<{ isUser?: boolean }>`
   background: ${({ isUser }) =>
     isUser ? themeCssVariables.background.tertiary : 'transparent'};
   border-radius: ${({ isUser }) =>
-    isUser ? themeCssVariables.border.radius.sm : '0'};
-  color: ${({ isUser }) =>
-    isUser
-      ? themeCssVariables.font.color.secondary
-      : themeCssVariables.font.color.primary};
+    isUser ? themeCssVariables.border.radius.lg : '0'};
+  color: ${themeCssVariables.font.color.primary};
   font-weight: ${({ isUser }) => (isUser ? 500 : 400)};
   line-height: 1.4em;
   max-width: 100%;
@@ -122,6 +123,12 @@ const StyledMessageFooter = styled.div`
   width: 100%;
 `;
 
+const StyledSender = styled.div`
+  color: ${themeCssVariables.font.color.secondary};
+  font-size: ${themeCssVariables.font.size.sm};
+  margin-bottom: ${themeCssVariables.spacing[1]};
+`;
+
 const StyledMessageTimestamp = styled.span`
   color: ${themeCssVariables.font.color.light};
 `;
@@ -153,6 +160,12 @@ export const AiChatMessage = ({
   error,
   onRetry,
 }: AiChatMessageProps) => {
+  const isReadOnly = useIsCurrentAiChatThreadReadOnly();
+  const { t } = useLingui();
+  const currentWorkspaceMember = useAtomStateValue(currentWorkspaceMemberState);
+  const currentWorkspaceMembers = useAtomStateValue(
+    currentWorkspaceMembersState,
+  );
   const agentChatMessage = useAtomComponentFamilySelectorValue(
     agentChatMessageComponentFamilySelector,
     { messageId },
@@ -164,6 +177,17 @@ export const AiChatMessage = ({
     return null;
   }
 
+  const senderId = agentChatMessage.metadata?.senderUserWorkspaceId;
+  const sender = currentWorkspaceMembers.find(
+    (member) => isDefined(senderId) && member.userWorkspaceId === senderId,
+  );
+  const senderLabel =
+    senderId === currentWorkspaceMember?.userWorkspaceId
+      ? t`You`
+      : isDefined(sender)
+        ? `${sender.name.firstName} ${sender.name.lastName}`.trim() ||
+          sender.userEmail
+        : t`Former member`;
   const isUser = agentChatMessage.role === AgentMessageRole.USER;
   const isLastAssistantMessage =
     agentChatMessage.role === AgentMessageRole.ASSISTANT;
@@ -173,6 +197,9 @@ export const AiChatMessage = ({
 
   return (
     <StyledMessageBubble isUser={isUser}>
+      {isUser && isDefined(senderId) && (
+        <StyledSender>{senderLabel}</StyledSender>
+      )}
       <StyledMessageContainer isUser={isUser}>
         <StyledMessageText isUser={isUser}>
           <AiChatAssistantMessageRenderer
@@ -189,7 +216,10 @@ export const AiChatMessage = ({
           </StyledFilesContainer>
         )}
         {shouldShowError && isDefined(error) && (
-          <AiChatErrorRenderer error={error} onRetry={onRetry} />
+          <AiChatErrorRenderer
+            error={error}
+            onRetry={isReadOnly ? undefined : onRetry}
+          />
         )}
       </StyledMessageContainer>
       {agentChatMessage.parts.length > 0 && (

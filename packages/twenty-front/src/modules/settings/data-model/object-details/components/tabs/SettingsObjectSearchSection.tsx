@@ -2,14 +2,14 @@ import { useUpdateOneFieldMetadataItem } from '@/object-metadata/hooks/useUpdate
 import { useUpdateOneObjectMetadataItem } from '@/object-metadata/hooks/useUpdateOneObjectMetadataItem';
 import { type EnrichedObjectMetadataItem } from '@/object-metadata/types/EnrichedObjectMetadataItem';
 import { SEARCH_VECTOR_FIELD_NAME } from '@/object-record/constants/SearchVectorFieldName';
-import { SettingsOptionCardContentToggle } from '@/settings/components/SettingsOptions/SettingsOptionCardContentToggle';
-import { SettingsObjectFieldDataType } from '@/settings/data-model/object-details/components/SettingsObjectFieldDataType';
+import { SettingsOptionCardContentSwitch } from '@/settings/components/SettingsOptions/SettingsOptionCardContentSwitch';
 import { canBeSearchable } from '@/settings/data-model/fields/forms/utils/canBeSearchable';
+import { SettingsObjectFieldDataType } from '@/settings/data-model/object-details/components/SettingsObjectFieldDataType';
 import { type SettingsFieldType } from '@/settings/data-model/types/SettingsFieldType';
-import { useSnackBar } from '@/ui/feedback/snack-bar-manager/hooks/useSnackBar';
+import { SelectOptionIcon } from '@/ui/input/components/SelectOptionIcon';
 import { SettingsTextInput } from '@/ui/input/components/SettingsTextInput';
 import { Dropdown } from '@/ui/layout/dropdown/components/Dropdown';
-import { DropdownContent } from '@/ui/layout/dropdown/components/DropdownContent';
+import { LegacyDropdownContent } from '@/ui/layout/dropdown/components/LegacyDropdownContent';
 import { DropdownMenuItemsContainer } from '@/ui/layout/dropdown/components/DropdownMenuItemsContainer';
 import { useCloseDropdown } from '@/ui/layout/dropdown/hooks/useCloseDropdown';
 import { Table } from '@/ui/layout/table/components/Table';
@@ -19,9 +19,8 @@ import { TableRow } from '@/ui/layout/table/components/TableRow';
 import { useIsFeatureEnabled } from '@/workspace/hooks/useIsFeatureEnabled';
 import { styled } from '@linaria/react';
 import { useLingui } from '@lingui/react/macro';
-import { useContext, useMemo, useState } from 'react';
-import { FeatureFlagKey } from '~/generated-metadata/graphql';
-
+import { useMemo, useState } from 'react';
+import { LightIconButton, useToast } from 'twenty-ui/components';
 import {
   IconEye,
   IconPlus,
@@ -29,10 +28,11 @@ import {
   IconTrash,
   useIcons,
 } from 'twenty-ui/icon';
-import { Button, LightIconButton } from 'twenty-ui/input';
-import { MenuItem } from 'twenty-ui/navigation';
-import { Card } from 'twenty-ui/surfaces';
-import { ThemeContext, themeCssVariables } from 'twenty-ui/theme-constants';
+import { Button } from 'twenty-ui/primitives/input';
+import { ListItem } from 'twenty-ui/primitives/navigation';
+import { Card } from 'twenty-ui/primitives/surfaces';
+import { useTheme, themeCssVariables } from 'twenty-ui/theme';
+import { FeatureFlagKey } from '~/generated-metadata/graphql';
 
 type SettingsObjectSearchSectionProps = {
   objectMetadataItem: EnrichedObjectMetadataItem;
@@ -107,11 +107,11 @@ export const SettingsObjectSearchSection = ({
 }: SettingsObjectSearchSectionProps) => {
   const { t } = useLingui();
   const { getIcon } = useIcons();
-  const { theme } = useContext(ThemeContext);
+  const theme = useTheme();
   const { updateOneObjectMetadataItem } = useUpdateOneObjectMetadataItem();
   const { updateOneFieldMetadataItem } = useUpdateOneFieldMetadataItem();
   const { closeDropdown } = useCloseDropdown();
-  const { enqueueSuccessSnackBar } = useSnackBar();
+  const { enqueueToast } = useToast();
 
   const isConfigurableSearchFieldsEnabled = useIsFeatureEnabled(
     FeatureFlagKey.IS_CONFIGURABLE_SEARCH_FIELDS_ENABLED,
@@ -173,8 +173,9 @@ export const SettingsObjectSearchSection = ({
     });
 
     if (result.status === 'successful') {
-      enqueueSuccessSnackBar({
-        message: value
+      enqueueToast({
+        variant: 'success',
+        children: value
           ? t`Field added to search`
           : t`Field removed from search`,
       });
@@ -184,8 +185,8 @@ export const SettingsObjectSearchSection = ({
   return (
     <StyledSearchSectionContent>
       {!isReadOnly && (
-        <Card rounded>
-          <SettingsOptionCardContentToggle
+        <Card.Root rounded>
+          <SettingsOptionCardContentSwitch
             Icon={IconEye}
             title={t`Global search`}
             description={t`Show this object's records in the command menu (⌘K).`}
@@ -193,7 +194,7 @@ export const SettingsObjectSearchSection = ({
             advancedMode
             onChange={handleToggleSearchable}
           />
-        </Card>
+        </Card.Root>
       )}
       {searchFields.length > 0 && (
         <>
@@ -235,12 +236,14 @@ export const SettingsObjectSearchSection = ({
                   <TableCell align="right">
                     {isEditable && !entry.isLabelIdentifier && (
                       <LightIconButton
-                        Icon={IconTrash}
-                        accent="tertiary"
+                        emphasis="subtle"
                         onClick={() =>
                           handleSetFieldSearchable(entry.id, false)
                         }
-                      />
+                        aria-label={t`Remove searchable field`}
+                      >
+                        <IconTrash />
+                      </LightIconButton>
                     )}
                   </TableCell>
                 </TableRow>
@@ -257,33 +260,33 @@ export const SettingsObjectSearchSection = ({
             dropdownOffset={{ x: 0, y: 8 }}
             clickableComponent={
               <Button
-                Icon={IconPlus}
-                title={t`Add field`}
-                size="small"
-                variant="secondary"
+                startIcon={<IconPlus />}
+                size="sm"
                 disabled={addableFields.length === 0}
-              />
+                variant="outline"
+              >{t`Add field`}</Button>
             }
             dropdownComponents={
-              <DropdownContent>
+              <LegacyDropdownContent>
                 <DropdownMenuItemsContainer hasMaxHeight>
                   {addableFields.map((field) => {
                     const FieldIcon = getIcon(field.icon);
 
                     return (
-                      <MenuItem
+                      <ListItem
                         key={field.id}
-                        LeftIcon={FieldIcon}
-                        text={field.label}
+                        startIcon={<SelectOptionIcon Icon={FieldIcon} />}
                         onClick={() => {
                           closeDropdown(ADD_SEARCH_FIELD_DROPDOWN_ID);
                           handleSetFieldSearchable(field.id, true);
                         }}
-                      />
+                      >
+                        {field.label}
+                      </ListItem>
                     );
                   })}
                 </DropdownMenuItemsContainer>
-              </DropdownContent>
+              </LegacyDropdownContent>
             }
           />
         </StyledButtonContainer>

@@ -3,11 +3,11 @@ import { useRecordIdentifierTitle } from '@/object-record/record-show/hooks/useR
 import { RecordTitleCell } from '@/object-record/record-title-cell/components/RecordTitleCell';
 import { RecordTitleCellContainerType } from '@/object-record/record-title-cell/types/RecordTitleCellContainerType';
 import { HeaderIdentifier } from '@/ui/layout/page/components/HeaderIdentifier';
+import { UndecoratedLink } from '@/ui/navigation/link/components/UndecoratedLink/UndecoratedLink';
 import { styled } from '@linaria/react';
 import { useRef, type ChangeEvent, type MouseEvent } from 'react';
 import { AppPath } from 'twenty-shared/types';
 import { getAppPath, isDefined } from 'twenty-shared/utils';
-import { UndecoratedLink } from 'twenty-ui/navigation';
 import { useNavigateApp } from '~/hooks/useNavigateApp';
 import { getAbsoluteImageUrl } from '~/utils/image/getAbsoluteImageUrl';
 
@@ -85,13 +85,13 @@ export const RecordIdentifierBarTitle = ({
       <HeaderIdentifier
         fontSize={isInSidePanel ? 'md' : 'lg'}
         avatar={{
-          avatarUrl: getAbsoluteImageUrl(recordIdentifier?.avatarUrl ?? ''),
+          src: getAbsoluteImageUrl(recordIdentifier?.avatarUrl ?? ''),
           onClick: isAvatarEditable
             ? () => inputFileRef.current?.click?.()
             : undefined,
-          placeholderColorSeed: objectRecordId,
-          placeholder: recordIdentifier?.name ?? '',
-          type: recordIdentifier?.avatarType ?? 'rounded',
+          colorSeed: objectRecordId,
+          name: recordIdentifier?.name ?? '',
+          shape: recordIdentifier?.avatarShape ?? 'circle',
         }}
         title={
           // A writable title has to stay click-to-edit, so only a read-only one

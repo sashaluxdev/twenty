@@ -1,8 +1,9 @@
 import { TerminalOutput } from '@/ai/components/TerminalOutput';
 import { styled } from '@linaria/react';
-import { useContext, useState } from 'react';
 import { useLingui } from '@lingui/react/macro';
-import { Tag } from 'twenty-ui/data-display';
+import { useState } from 'react';
+import { LightIconButton } from 'twenty-ui/components';
+import { CodeEditor } from 'twenty-ui/components/code-editor';
 import {
   IconChevronDown,
   IconChevronUp,
@@ -11,9 +12,9 @@ import {
   IconDownload,
   IconFile,
 } from 'twenty-ui/icon';
-import { CodeEditor, LightIconButton } from 'twenty-ui/input';
-import { AnimatedExpandableContainer } from 'twenty-ui/layout';
-import { ThemeContext, themeCssVariables } from 'twenty-ui/theme-constants';
+import { Tag } from 'twenty-ui/primitives/data-display';
+import { AnimatedExpandableContainer } from 'twenty-ui/primitives/layout';
+import { useTheme, themeCssVariables } from 'twenty-ui/theme';
 import { useCopyToClipboard } from '~/hooks/useCopyToClipboard';
 
 const StyledContainer = styled.div`
@@ -175,7 +176,7 @@ export const CodeExecutionDisplay = ({
   files = [],
   isRunning = false,
 }: CodeExecutionDisplayProps) => {
-  const { theme } = useContext(ThemeContext);
+  const theme = useTheme();
   const { t } = useLingui();
   const { copyToClipboard } = useCopyToClipboard();
   const [isCodeExpanded, setIsCodeExpanded] = useState(false);
@@ -213,10 +214,11 @@ export const CodeExecutionDisplay = ({
                   ? 'red'
                   : 'gray'
             }
-            text={statusText}
             weight="medium"
             preventShrink
-          />
+          >
+            {statusText}
+          </Tag>
         </StyledHeaderRight>
       </StyledHeader>
 
@@ -228,15 +230,17 @@ export const CodeExecutionDisplay = ({
           </StyledSectionHeaderLeft>
           <StyledHeaderRight>
             <LightIconButton
-              Icon={IconCopy}
               onClick={(e) => {
                 e.stopPropagation();
                 copyToClipboard(code);
               }}
               title={t`Copy code`}
-              size="small"
-              accent="tertiary"
-            />
+              size="sm"
+              emphasis="subtle"
+              aria-label={t`Copy code`}
+            >
+              <IconCopy />
+            </LightIconButton>
             {isCodeExpanded ? (
               <IconChevronUp size={theme.icon.size.sm} />
             ) : (

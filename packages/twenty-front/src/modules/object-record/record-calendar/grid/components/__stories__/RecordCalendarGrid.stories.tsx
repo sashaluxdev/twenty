@@ -19,16 +19,17 @@ import { type RecordField } from '@/object-record/record-field/types/RecordField
 import { useRecordIndexFieldMetadataDerivedStates } from '@/object-record/record-index/hooks/useRecordIndexFieldMetadataDerivedStates';
 import { jotaiStore } from '@/ui/utilities/state/jotai/jotaiStore';
 import { ViewBarFilterDropdownIds } from '@/views/constants/ViewBarFilterDropdownIds';
-import { ComponentDecorator, RouterDecorator } from 'twenty-ui/testing';
+import { ComponentDecorator } from 'twenty-ui/testing';
 import { ContextStoreDecorator } from '~/testing/decorators/ContextStoreDecorator';
 import { IconsProviderDecorator } from '~/testing/decorators/IconsProviderDecorator';
 import { ObjectMetadataItemsDecorator } from '~/testing/decorators/ObjectMetadataItemsDecorator';
-import { SnackBarDecorator } from '~/testing/decorators/SnackBarDecorator';
+import { ToastDecorator } from '~/testing/decorators/ToastDecorator';
 import { mockedViews } from '~/testing/mock-data/generated/metadata/views/mock-views-data';
 import { getTestEnrichedObjectMetadataItemsMock } from '~/testing/utils/getTestEnrichedObjectMetadataItemsMock';
 import { setTestViewsInMetadataStore } from '~/testing/utils/setTestViewsInMetadataStore';
 
 import { ViewCalendarLayout } from '~/generated-metadata/graphql';
+import { MemoryRouterDecorator } from '~/testing/decorators/MemoryRouterDecorator';
 
 const meta: Meta<typeof RecordCalendarGrid> = {
   title: 'Modules/ObjectRecord/RecordCalendar/Grid',
@@ -155,10 +156,10 @@ const meta: Meta<typeof RecordCalendarGrid> = {
     },
     ContextStoreDecorator,
     ObjectMetadataItemsDecorator,
-    SnackBarDecorator,
+    ToastDecorator,
     ComponentDecorator,
     IconsProviderDecorator,
-    RouterDecorator,
+    MemoryRouterDecorator,
   ],
 };
 

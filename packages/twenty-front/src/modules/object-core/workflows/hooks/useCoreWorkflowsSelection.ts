@@ -1,87 +1,59 @@
-import { useState } from 'react';
-import { isDefined } from 'twenty-shared/utils';
+import { useEffect } from 'react';
 
 import { coreWorkflowsFilterSettingsState } from '@/object-core/workflows/states/coreWorkflowsFilterSettingsState';
-import { type FilterSettings } from '@/workflow/workflow-steps/filters/types/FilterSettings';
+import {
+  EMPTY_CORE_WORKFLOWS_SELECTION,
+  coreWorkflowsSelectionState,
+} from '@/object-core/workflows/states/coreWorkflowsSelectionState';
 import { type CoreWorkflow } from '@/object-core/workflows/types/CoreWorkflow';
-import { getDeletableSelectedCoreWorkflows } from '@/object-core/workflows/utils/getDeletableSelectedCoreWorkflows';
+import { getSelectedCoreWorkflowRowIds } from '@/object-core/workflows/utils/getSelectedCoreWorkflowRowIds';
 import { toggleRowIdInSelection } from '@/object-core/utils/toggleRowIdInSelection';
+import { useAtomState } from '@/ui/utilities/state/jotai/hooks/useAtomState';
 import { useAtomStateValue } from '@/ui/utilities/state/jotai/hooks/useAtomStateValue';
 
 export const useCoreWorkflowsSelection = <
-  TCoreWorkflow extends Pick<CoreWorkflow, 'id' | 'workspaceWorkflowId'>,
+  TCoreWorkflow extends Pick<CoreWorkflow, 'id'>,
 >({
   coreWorkflows,
 }: {
   coreWorkflows: TCoreWorkflow[];
 }) => {
-  const [selection, setSelection] = useState<{
-    filterSettings: FilterSettings;
-    rowIds: string[];
-  }>({ filterSettings: {}, rowIds: [] });
-
-  const [deletedCoreWorkflowIds, setDeletedCoreWorkflowIds] = useState<
-    string[]
-  >([]);
+  const [coreWorkflowsSelection, setCoreWorkflowsSelection] = useAtomState(
+    coreWorkflowsSelectionState,
+  );
 
   const coreWorkflowsFilterSettings = useAtomStateValue(
     coreWorkflowsFilterSettingsState,
   );
 
-  const selectedRowIds =
-    selection.filterSettings === coreWorkflowsFilterSettings
-      ? selection.rowIds
-      : [];
+  useEffect(
+    () => () => setCoreWorkflowsSelection(EMPTY_CORE_WORKFLOWS_SELECTION),
+    [setCoreWorkflowsSelection],
+  );
+
+  const selectionRowIds = getSelectedCoreWorkflowRowIds({
+    selection: coreWorkflowsSelection,
+    currentFilterSettings: coreWorkflowsFilterSettings,
+  });
+  const selectedRowIds = selectionRowIds.filter((id) =>
+    coreWorkflows.some((workflow) => workflow.id === id),
+  );
 
   const selectRows = (rowIds: string[]) =>
-    setSelection({ filterSettings: coreWorkflowsFilterSettings, rowIds });
-
-  const displayedCoreWorkflows = coreWorkflows.filter(
-    (coreWorkflow) => !deletedCoreWorkflowIds.includes(coreWorkflow.id),
-  );
-
-  const deletableSelectedCoreWorkflows = getDeletableSelectedCoreWorkflows({
-    coreWorkflows: displayedCoreWorkflows,
-    selectedRowIds,
-  });
-
-  const selectedWorkspaceWorkflowIds = deletableSelectedCoreWorkflows.map(
-    (deletableCoreWorkflow) => deletableCoreWorkflow.workspaceWorkflowId,
-  );
+    setCoreWorkflowsSelection({
+      filterSettings: coreWorkflowsFilterSettings,
+      rowIds,
+    });
 
   const toggleRow = (rowId: string) =>
-    selectRows(toggleRowIdInSelection({ selectedRowIds, rowId }));
-
-  const forgetDeletedWorkspaceWorkflows = (
-    deletedWorkspaceWorkflowIds: string[],
-  ) => {
-    const coreWorkflowIdsToForget = coreWorkflows
-      .filter(
-        (coreWorkflow) =>
-          isDefined(coreWorkflow.workspaceWorkflowId) &&
-          deletedWorkspaceWorkflowIds.includes(
-            coreWorkflow.workspaceWorkflowId,
-          ),
-      )
-      .map((coreWorkflow) => coreWorkflow.id);
-
-    if (coreWorkflowIdsToForget.length === 0) {
-      return;
-    }
-
-    setDeletedCoreWorkflowIds((previousDeletedCoreWorkflowIds) => [
-      ...previousDeletedCoreWorkflowIds,
-      ...coreWorkflowIdsToForget,
-    ]);
-    selectRows([]);
-  };
+    selectRows(
+      toggleRowIdInSelection({ selectedRowIds: selectionRowIds, rowId }),
+    );
 
   return {
-    displayedCoreWorkflows,
+    displayedCoreWorkflows: coreWorkflows,
     selectedRowIds,
-    selectedWorkspaceWorkflowIds,
     toggleRow,
     selectRows,
-    forgetDeletedWorkspaceWorkflows,
   };
 };

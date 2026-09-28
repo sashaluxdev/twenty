@@ -3,6 +3,10 @@ import { Provider as JotaiProvider } from 'jotai';
 
 import { useCoreWorkflowsSelection } from '@/object-core/workflows/hooks/useCoreWorkflowsSelection';
 import { coreWorkflowsFilterSettingsState } from '@/object-core/workflows/states/coreWorkflowsFilterSettingsState';
+import {
+  EMPTY_CORE_WORKFLOWS_SELECTION,
+  coreWorkflowsSelectionState,
+} from '@/object-core/workflows/states/coreWorkflowsSelectionState';
 import { type CoreWorkflow } from '@/object-core/workflows/types/CoreWorkflow';
 import { jotaiStore } from '@/ui/utilities/state/jotai/jotaiStore';
 
@@ -26,82 +30,66 @@ const renderSelection = () =>
   );
 
 describe('useCoreWorkflowsSelection', () => {
-  it('should map selected rows to the workspace workflows the command menu targets', () => {
+  beforeEach(() => {
+    jotaiStore.set(
+      coreWorkflowsSelectionState.atom,
+      EMPTY_CORE_WORKFLOWS_SELECTION,
+    );
+    jotaiStore.set(coreWorkflowsFilterSettingsState.atom, {});
+  });
+
+  it('should expose the selected rows through the shared selection state', () => {
     const { result } = renderSelection();
 
     act(() => {
       result.current.toggleRow('core-1');
     });
 
-    expect(result.current.selectedWorkspaceWorkflowIds).toEqual([
-      'workspace-1',
+    expect(result.current.selectedRowIds).toEqual(['core-1']);
+    expect(jotaiStore.get(coreWorkflowsSelectionState.atom).rowIds).toEqual([
+      'core-1',
     ]);
   });
 
-  it('should not target a workflow that has no workspace record', () => {
-    const { result } = renderSelection();
+  it('should reset the selection when the page unmounts', () => {
+    const { result, unmount } = renderSelection();
 
     act(() => {
-      result.current.toggleRow('core-3');
+      result.current.toggleRow('core-1');
     });
 
+    unmount();
+
+    expect(jotaiStore.get(coreWorkflowsSelectionState.atom)).toEqual(
+      EMPTY_CORE_WORKFLOWS_SELECTION,
+    );
+  });
+
+  it('selects a core workflow without a workspace mirror ID', () => {
+    const { result } = renderSelection();
+    act(() => result.current.toggleRow('core-3'));
     expect(result.current.selectedRowIds).toEqual(['core-3']);
-    expect(result.current.selectedWorkspaceWorkflowIds).toEqual([]);
   });
 
-  it('should drop the deleted rows and clear the selection when a deletion is reported', () => {
-    const { result } = renderSelection();
-
-    act(() => {
-      result.current.toggleRow('core-1');
-    });
-
-    act(() => {
-      result.current.forgetDeletedWorkspaceWorkflows(['workspace-1']);
-    });
-
-    expect(
-      result.current.displayedCoreWorkflows.map(
-        (coreWorkflow) => coreWorkflow.id,
-      ),
-    ).toEqual(['core-2', 'core-3']);
-    expect(result.current.selectedRowIds).toEqual([]);
-  });
-
-  it('should ignore a deletion that targets rows it is not showing', () => {
-    const { result } = renderSelection();
-
-    act(() => {
-      result.current.toggleRow('core-1');
-    });
-
-    act(() => {
-      result.current.forgetDeletedWorkspaceWorkflows(['workspace-elsewhere']);
-    });
-
-    expect(result.current.displayedCoreWorkflows).toHaveLength(3);
-    expect(result.current.selectedRowIds).toEqual(['core-1']);
-  });
-
-  it('should keep a deleted workflow hidden once the mirror drops its workspace record', () => {
+  it('preserves selected records that are not in the currently loaded page', () => {
     const { result, rerender } = renderSelection();
+    act(() => result.current.toggleRow('core-1'));
+    rerender({ coreWorkflows: coreWorkflows.slice(1) });
+    expect(result.current.selectedRowIds).toEqual([]);
+    expect(jotaiStore.get(coreWorkflowsSelectionState.atom).rowIds).toEqual([
+      'core-1',
+    ]);
 
-    act(() => {
-      result.current.forgetDeletedWorkspaceWorkflows(['workspace-1']);
-    });
+    act(() => result.current.toggleRow('core-2'));
 
-    rerender({
-      coreWorkflows: [
-        { id: 'core-1', workspaceWorkflowId: null },
-        { id: 'core-2', workspaceWorkflowId: 'workspace-2' },
-      ],
-    });
-
-    expect(
-      result.current.displayedCoreWorkflows.map(
-        (coreWorkflow) => coreWorkflow.id,
-      ),
-    ).toEqual(['core-2']);
+    expect(jotaiStore.get(coreWorkflowsSelectionState.atom).rowIds).toEqual([
+      'core-1',
+      'core-2',
+    ]);
+    expect(result.current.displayedCoreWorkflows.map(({ id }) => id)).toEqual([
+      'core-2',
+      'core-3',
+    ]);
   });
 
   it('should drop the selection when the filter settings change', () => {
@@ -120,7 +108,6 @@ describe('useCoreWorkflowsSelection', () => {
     });
 
     expect(result.current.selectedRowIds).toEqual([]);
-    expect(result.current.selectedWorkspaceWorkflowIds).toEqual([]);
   });
 
   it('should deselect a row that is toggled twice', () => {

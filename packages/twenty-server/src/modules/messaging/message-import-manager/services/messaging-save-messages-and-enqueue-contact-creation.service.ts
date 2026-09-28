@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import {
   FieldActorSource,
   MessageChannelContactAutoCreationPolicy,
+  MessageChannelType,
   MessageParticipantRole,
 } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
@@ -25,7 +26,7 @@ import {
 import { MessagingMessageFolderAssociationService } from 'src/modules/messaging/message-import-manager/services/messaging-message-folder-association.service';
 import { MessagingMessageService } from 'src/modules/messaging/message-import-manager/services/messaging-message.service';
 import { type MessageChannelMessageAssociationFolderAssociation } from 'src/modules/messaging/message-import-manager/types/message-channel-message-association-folder-association.type';
-import { type MessageWithParticipants } from 'src/modules/messaging/message-import-manager/types/message';
+import { type MessageWithParticipants } from 'src/modules/messaging/message-import-manager/types/message.type';
 import { isGroupEmail } from 'src/modules/messaging/message-import-manager/utils/is-group-email';
 import { MessagingMessageParticipantService } from 'src/modules/messaging/message-participant-manager/services/messaging-message-participant.service';
 import { isWorkEmail } from 'src/utils/is-work-email';
@@ -197,16 +198,26 @@ export class MessagingSaveMessagesAndEnqueueContactCreationService {
       return undefined;
     }
 
+    const messageIds = [
+      ...new Set(
+        savedMessagesResult.participantsWithMessageId.map(
+          ({ messageId }) => messageId,
+        ),
+      ),
+    ];
+
+    // The matcher resolves a participant by looking its handle up as an email
+    // address. On a channel whose handles are not email addresses that finds
+    // nothing and writes personId back to null, discarding the identities the
+    // caller supplied at save time, so those channels only reconcile targets.
     await this.messageParticipantService.matchMessageParticipants({
       participants: savedMessagesResult.savedMessageParticipants,
-      messageIds: [
-        ...new Set(
-          savedMessagesResult.participantsWithMessageId.map(
-            ({ messageId }) => messageId,
-          ),
-        ),
-      ],
+      messageIds,
       workspaceId,
+      matchWith:
+        messageChannel.type === MessageChannelType.APP
+          ? 'targetsOnly'
+          : 'workspaceMemberAndPerson',
     });
 
     return {

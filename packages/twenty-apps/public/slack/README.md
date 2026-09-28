@@ -6,6 +6,8 @@
 
 - **A CRM assistant in Slack**: `@twenty how many open opportunities do we have?` It answers as whoever tagged it
 - **Slack steps for your workflows**: post, update or delete messages, send ephemerals, add reactions, list channels
+- **Open by default, restrict when you want**: in the Settings tab, limit the assistant to Slack accounts linked to a workspace member
+- **Per-channel rules**: open a channel to anyone, restrict it to linked members, or silence the assistant there
 
 ## 💳 Billing
 
@@ -14,3 +16,5 @@
 ## 📌 Getting started
 
 Open the Slack app in Twenty, click **Add connection**, and complete the Slack sign-in. You're all set.
+
+**Self-hosting?** Your admin creates the Slack app and sets its credentials first: see the [self-hosting setup guide](https://github.com/twentyhq/twenty/blob/main/packages/twenty-apps/public/slack/SETUP.md).

@@ -41,14 +41,15 @@ jest.mock(
   '@/side-panel/pages/page-layout/components/record-table-settings/RecordTableLayoutDropdownContent',
   () => ({ RecordTableLayoutDropdownContent: () => null }),
 );
-jest.mock('@/ui/layout/dropdown/components/DropdownContent', () => ({
-  DropdownContent: ({ children }: { children: React.ReactNode }) => children,
+jest.mock('@/ui/layout/dropdown/components/LegacyDropdownContent', () => ({
+  LegacyDropdownContent: ({ children }: { children: React.ReactNode }) =>
+    children,
 }));
 jest.mock('@/ui/layout/selectable-list/components/SelectableListItem', () => ({
   SelectableListItem: ({ children }: { children: React.ReactNode }) => children,
 }));
-jest.mock('@/command-menu/components/CommandMenuItemToggle', () => ({
-  CommandMenuItemToggle: () => null,
+jest.mock('@/command-menu/components/CommandMenuItemSwitch', () => ({
+  CommandMenuItemSwitch: () => null,
 }));
 jest.mock('@/command-menu/components/CommandMenuItemDropdown', () => ({
   CommandMenuItemDropdown: ({

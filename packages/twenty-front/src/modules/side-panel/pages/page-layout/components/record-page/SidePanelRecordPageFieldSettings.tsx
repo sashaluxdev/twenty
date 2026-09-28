@@ -1,6 +1,6 @@
 import { CommandMenuItem } from '@/command-menu/components/CommandMenuItem';
 import { CommandMenuItemDropdown } from '@/command-menu/components/CommandMenuItemDropdown';
-import { CommandMenuItemToggle } from '@/command-menu/components/CommandMenuItemToggle';
+import { CommandMenuItemSwitch } from '@/command-menu/components/CommandMenuItemSwitch';
 import { useFieldMetadataItemById } from '@/object-metadata/hooks/useFieldMetadataItemById';
 import { useObjectMetadataItems } from '@/object-metadata/hooks/useObjectMetadataItems';
 import { type FieldConfiguration } from '@/page-layout/types/FieldConfiguration';
@@ -29,7 +29,7 @@ import { useWidgetInEditMode } from '@/side-panel/pages/page-layout/hooks/useWid
 import { useWidgetSettingsPlacementSelectableItemIds } from '@/side-panel/pages/page-layout/hooks/useWidgetSettingsPlacementSelectableItemIds';
 import { getWidgetViewLayoutSettingsItemIds } from '@/side-panel/pages/page-layout/utils/getWidgetViewLayoutSettingsItemIds';
 import { SidePanelSubPages } from '@/side-panel/types/SidePanelSubPages';
-import { DropdownContent } from '@/ui/layout/dropdown/components/DropdownContent';
+import { LegacyDropdownContent } from '@/ui/layout/dropdown/components/LegacyDropdownContent';
 import { SelectableListItem } from '@/ui/layout/selectable-list/components/SelectableListItem';
 import { styled } from '@linaria/react';
 import { useLingui } from '@lingui/react/macro';
@@ -217,9 +217,9 @@ export const SidePanelRecordPageFieldSettings = () => {
                 Icon={IconListDetails}
                 dropdownId="field"
                 dropdownComponents={
-                  <DropdownContent>
+                  <LegacyDropdownContent>
                     <FieldWidgetFieldDropdownContent />
-                  </DropdownContent>
+                  </LegacyDropdownContent>
                 }
                 dropdownPlacement="bottom-end"
                 description={fieldLabel}
@@ -233,9 +233,9 @@ export const SidePanelRecordPageFieldSettings = () => {
                 Icon={layoutRowIcon}
                 dropdownId="layout"
                 dropdownComponents={
-                  <DropdownContent>
+                  <LegacyDropdownContent>
                     <FieldWidgetLayoutDropdownContent />
-                  </DropdownContent>
+                  </LegacyDropdownContent>
                 }
                 dropdownPlacement="bottom-end"
                 description={layoutLabel}
@@ -271,12 +271,12 @@ export const SidePanelRecordPageFieldSettings = () => {
             )}
             {isTableDisplayMode && isWidgetContentEditingSupported && (
               <SelectableListItem itemId="field-allow-editing">
-                <CommandMenuItemToggle
+                <CommandMenuItemSwitch
                   LeftIcon={IconPencil}
                   text={t`Allow editing`}
                   id="field-allow-editing"
-                  toggled={isUIEditable}
-                  onToggleChange={handleIsUIEditableChange}
+                  checked={isUIEditable}
+                  onCheckedChange={handleIsUIEditableChange}
                 />
               </SelectableListItem>
             )}

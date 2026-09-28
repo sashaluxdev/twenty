@@ -1,5 +1,5 @@
 import { CommandMenuItemDropdown } from '@/command-menu/components/CommandMenuItemDropdown';
-import { CommandMenuItemToggle } from '@/command-menu/components/CommandMenuItemToggle';
+import { CommandMenuItemSwitch } from '@/command-menu/components/CommandMenuItemSwitch';
 import { useObjectMetadataItems } from '@/object-metadata/hooks/useObjectMetadataItems';
 import { useRecordTableWidgetLayoutCallbacks } from '@/page-layout/widgets/record-table/hooks/useRecordTableWidgetLayoutCallbacks';
 import { useRecordTableWidgetViewForDisplay } from '@/page-layout/widgets/record-table/hooks/useRecordTableWidgetViewForDisplay';
@@ -11,7 +11,7 @@ import { RecordTableCalendarFieldDropdownContent } from '@/side-panel/pages/page
 import { RecordTableCalendarLayoutDropdownContent } from '@/side-panel/pages/page-layout/components/record-table-settings/RecordTableCalendarLayoutDropdownContent';
 import { RecordTableGroupByDropdownContent } from '@/side-panel/pages/page-layout/components/record-table-settings/RecordTableGroupByDropdownContent';
 import { RecordTableLayoutDropdownContent } from '@/side-panel/pages/page-layout/components/record-table-settings/RecordTableLayoutDropdownContent';
-import { DropdownContent } from '@/ui/layout/dropdown/components/DropdownContent';
+import { LegacyDropdownContent } from '@/ui/layout/dropdown/components/LegacyDropdownContent';
 import { SelectableListItem } from '@/ui/layout/selectable-list/components/SelectableListItem';
 import { useLingui } from '@lingui/react/macro';
 import { isDefined } from 'twenty-shared/utils';
@@ -115,14 +115,14 @@ export const WidgetViewLayoutSettingsRows = ({
             id="object-view-layout"
             dropdownId="object-view-layout"
             dropdownComponents={
-              <DropdownContent>
+              <LegacyDropdownContent>
                 <RecordTableLayoutDropdownContent
                   pageLayoutId={pageLayoutId}
                   widgetId={widgetId}
                   objectMetadataId={objectMetadataId}
                   currentLayoutViewType={currentLayoutViewType}
                 />
-              </DropdownContent>
+              </LegacyDropdownContent>
             }
             dropdownPlacement="bottom-end"
             hasSubMenu
@@ -139,14 +139,14 @@ export const WidgetViewLayoutSettingsRows = ({
             id="record-table-calendar-field"
             dropdownId="record-table-calendar-field"
             dropdownComponents={
-              <DropdownContent>
+              <LegacyDropdownContent>
                 <RecordTableCalendarFieldDropdownContent
                   pageLayoutId={pageLayoutId}
                   widgetId={widgetId}
                   objectMetadataId={objectMetadataId}
                   currentCalendarFieldMetadataId={calendarFieldMetadataId}
                 />
-              </DropdownContent>
+              </LegacyDropdownContent>
             }
             dropdownPlacement="bottom-end"
             hasSubMenu
@@ -163,13 +163,13 @@ export const WidgetViewLayoutSettingsRows = ({
             id="record-table-calendar-layout"
             dropdownId="record-table-calendar-layout"
             dropdownComponents={
-              <DropdownContent>
+              <LegacyDropdownContent>
                 <RecordTableCalendarLayoutDropdownContent
                   pageLayoutId={pageLayoutId}
                   widgetId={widgetId}
                   currentCalendarLayout={currentCalendarLayout}
                 />
-              </DropdownContent>
+              </LegacyDropdownContent>
             }
             dropdownPlacement="bottom-end"
             hasSubMenu
@@ -186,7 +186,7 @@ export const WidgetViewLayoutSettingsRows = ({
             id="record-table-group-by"
             dropdownId="record-table-group-by"
             dropdownComponents={
-              <DropdownContent>
+              <LegacyDropdownContent>
                 <RecordTableGroupByDropdownContent
                   pageLayoutId={pageLayoutId}
                   widgetId={widgetId}
@@ -194,7 +194,7 @@ export const WidgetViewLayoutSettingsRows = ({
                   currentMainGroupByFieldMetadataId={mainGroupByFieldMetadataId}
                   isClearable={!isKanbanLayout}
                 />
-              </DropdownContent>
+              </LegacyDropdownContent>
             }
             dropdownPlacement="bottom-end"
             hasSubMenu
@@ -205,12 +205,12 @@ export const WidgetViewLayoutSettingsRows = ({
       )}
       {!isCalendarLayout && hasGroupBy && (
         <SelectableListItem itemId="record-table-hide-empty-groups">
-          <CommandMenuItemToggle
+          <CommandMenuItemSwitch
             LeftIcon={IconEyeOff}
             text={t`Hide empty groups`}
             id="record-table-hide-empty-groups"
-            toggled={shouldHideEmptyGroups}
-            onToggleChange={handleShouldHideEmptyGroupsChange}
+            checked={shouldHideEmptyGroups}
+            onCheckedChange={handleShouldHideEmptyGroupsChange}
           />
         </SelectableListItem>
       )}

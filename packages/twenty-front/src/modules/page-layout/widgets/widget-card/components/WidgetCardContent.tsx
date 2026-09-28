@@ -1,7 +1,7 @@
 import { type WidgetContentPadding } from '@/page-layout/widgets/utils/getWidgetContentPadding';
 import { isWidgetCardFlushInViewMode } from '@/page-layout/widgets/utils/isWidgetCardFlushInViewMode';
 import { styled } from '@linaria/react';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { themeCssVariables } from 'twenty-ui/theme';
 import { type WidgetCardVariant } from '~/modules/page-layout/widgets/types/WidgetCardVariant';
 
 const VERTICAL_LIST_IFRAME_HEIGHT = '40rem';
@@ -43,6 +43,10 @@ const StyledWidgetCardContent = styled.div<WidgetCardContentStyledProps>`
   &:empty {
     margin-top: 0;
     padding: 0;
+    padding-bottom: ${({ hasHeader, variant }) =>
+      hasHeader && variant === 'flush'
+        ? 'var(--widget-card-title-padding-top)'
+        : '0'};
   }
 `;
 

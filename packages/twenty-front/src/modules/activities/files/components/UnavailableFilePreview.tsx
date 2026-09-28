@@ -3,8 +3,8 @@ import { styled } from '@linaria/react';
 import { Trans, useLingui } from '@lingui/react/macro';
 import { type ReactNode } from 'react';
 import { IconDownload } from 'twenty-ui/icon';
-import { Button } from 'twenty-ui/input';
-import { themeCssVariables } from 'twenty-ui/theme-constants';
+import { Button } from 'twenty-ui/primitives/input';
+import { themeCssVariables } from 'twenty-ui/theme';
 
 const StyledContainer = styled.div`
   align-items: center;
@@ -49,11 +49,10 @@ export const UnavailableFilePreview = ({
       </StyledTitle>
       <StyledMessage>{message}</StyledMessage>
       <Button
-        Icon={IconDownload}
-        title={t`Download File`}
+        startIcon={<IconDownload />}
         onClick={() => downloadFile(fileUrl, fileName)}
-        variant="secondary"
-      />
+        variant="outline"
+      >{t`Download File`}</Button>
     </StyledContainer>
   );
 };

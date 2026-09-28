@@ -1,13 +1,13 @@
+import { useApolloFactory } from '@/apollo/hooks/useApolloFactory';
+import { clearSessionGeneration } from '@/auth/utils/clearSessionGeneration';
+import { getSessionGeneration } from '@/auth/utils/getSessionGeneration';
+import { rotateSessionGeneration } from '@/auth/utils/rotateSessionGeneration';
 import { gql } from '@apollo/client';
 import { CombinedGraphQLErrors } from '@apollo/client/errors';
 import { act, renderHook } from '@testing-library/react';
 import fetchMock, { enableFetchMocks } from 'jest-fetch-mock';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { SnackBarComponentInstanceContext } from '@/ui/feedback/snack-bar-manager/contexts/SnackBarComponentInstanceContext';
-import { useApolloFactory } from '@/apollo/hooks/useApolloFactory';
-import { clearSessionGeneration } from '@/auth/utils/clearSessionGeneration';
-import { getSessionGeneration } from '@/auth/utils/getSessionGeneration';
-import { rotateSessionGeneration } from '@/auth/utils/rotateSessionGeneration';
+import { ToastProvider } from 'twenty-ui/components';
 
 enableFetchMocks();
 
@@ -27,11 +27,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
     initialEntries={['/welcome', '/verify', '/opportunities']}
     initialIndex={2}
   >
-    <SnackBarComponentInstanceContext.Provider
-      value={{ instanceId: 'test-instance-id' }}
-    >
-      {children}
-    </SnackBarComponentInstanceContext.Provider>
+    <ToastProvider>{children}</ToastProvider>
   </MemoryRouter>
 );
 

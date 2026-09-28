@@ -1,17 +1,10 @@
 import { styled } from '@linaria/react';
 import { t } from '@lingui/core/macro';
-import {
-  type ChangeEvent,
-  useCallback,
-  useContext,
-  useId,
-  useMemo,
-  useState,
-} from 'react';
+import { type ChangeEvent, useCallback, useId, useMemo, useState } from 'react';
 import { CoreObjectNameSingular } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
 import { IconChevronDown, IconUserCircle } from 'twenty-ui/icon';
-import { ThemeContext, themeCssVariables } from 'twenty-ui/theme-constants';
+import { useTheme, themeCssVariables } from 'twenty-ui/theme';
 import { type JsonValue } from 'type-fest';
 
 import { MAX_WORKSPACE_MEMBERS_TO_DISPLAY } from '@/object-record/object-filter-dropdown/components/ObjectFilterDropdownActorSelect';
@@ -29,7 +22,7 @@ import {
 } from '@/object-record/record-field/ui/form-types/utils/parseWorkspaceMemberFilterValue';
 import { useRecordsForSelect } from '@/object-record/select/hooks/useRecordsForSelect';
 import { type SelectableItem } from '@/object-record/select/types/SelectableItem';
-import { Field } from 'twenty-ui/input';
+import { Field } from 'twenty-ui/primitives/input';
 import { Dropdown } from '@/ui/layout/dropdown/components/Dropdown';
 import { isStandaloneVariableString } from 'twenty-shared/workflow';
 
@@ -62,7 +55,7 @@ export const FormWorkspaceMemberFilterValueInput = ({
   readonly,
   VariablePicker,
 }: FormWorkspaceMemberFilterValueInputProps) => {
-  const { theme } = useContext(ThemeContext);
+  const theme = useTheme();
 
   const componentId = useId();
   const dropdownId = `form-workspace-member-filter-picker-${componentId}`;

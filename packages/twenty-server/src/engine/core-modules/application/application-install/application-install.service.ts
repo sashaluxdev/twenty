@@ -4,12 +4,16 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { promises as fs } from 'fs';
 import { isAbsolute, relative, resolve } from 'path';
 
-import { Manifest } from 'twenty-shared/application';
+import {
+  type ApplicationCapability,
+  Manifest,
+} from 'twenty-shared/application';
 import { FileFolder } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
 import { Repository } from 'typeorm';
 
 import { buildApplicationFileList } from 'src/engine/core-modules/application/application-install/utils/build-application-file-list.util';
+import { toApplicationCapabilities } from 'src/engine/core-modules/application/utils/to-application-capabilities.util';
 import { ApplicationManifestApplyService } from 'src/engine/core-modules/application/application-manifest/application-manifest-apply.service';
 import { ApplicationSyncService } from 'src/engine/core-modules/application/application-manifest/application-sync.service';
 import {
@@ -37,9 +41,15 @@ import { FileStorageService } from 'src/engine/core-modules/file-storage/service
 import { LogicFunctionExecutorService } from 'src/engine/core-modules/logic-function/logic-function-executor/logic-function-executor.service';
 import { LOGIC_FUNCTION_QUEUE_RETRY_BACKOFF } from 'src/engine/core-modules/logic-function/logic-function-trigger/constants/logic-function-queue-retry-backoff.constant';
 import {
-  LogicFunctionTriggerJob,
-  type LogicFunctionTriggerJobData,
-} from 'src/engine/core-modules/logic-function/logic-function-trigger/jobs/logic-function-trigger.job';
+  ApplicationLifecycleHookJob,
+  type ApplicationLifecycleHookJobData,
+} from 'src/engine/core-modules/logic-function/logic-function-trigger/jobs/application-lifecycle-hook.job';
+import {
+  WARM_UP_APPLICATION_LOGIC_FUNCTIONS_JOB_NAME,
+  WARM_UP_APPLICATION_LOGIC_FUNCTIONS_JOB_OPTIONS,
+  type WarmUpApplicationLogicFunctionsJobData,
+} from 'src/engine/core-modules/logic-function/logic-function-prebuilt-warm-up/jobs/warm-up-application-logic-functions.job-constants';
+import { findLogicFunctionUniversalIdentifiersToWarmUp } from 'src/engine/core-modules/logic-function/logic-function-prebuilt-warm-up/utils/find-logic-function-universal-identifiers-to-warm-up.util';
 import { InjectMessageQueue } from 'src/engine/core-modules/message-queue/decorators/message-queue.decorator';
 import { MessageQueue } from 'src/engine/core-modules/message-queue/message-queue.constants';
 import { MessageQueueService } from 'src/engine/core-modules/message-queue/services/message-queue.service';
@@ -62,8 +72,10 @@ export class ApplicationInstallService {
     private readonly fileStorageService: FileStorageService,
     private readonly logicFunctionExecutorService: LogicFunctionExecutorService,
     private readonly cacheLockService: CacheLockService,
-    @InjectMessageQueue(MessageQueue.logicFunctionQueue)
+    @InjectMessageQueue(MessageQueue.applicationLifecycleHookQueue)
     private readonly messageQueueService: MessageQueueService,
+    @InjectMessageQueue(MessageQueue.workspaceQueue)
+    private readonly workspaceQueueService: MessageQueueService,
     private readonly workspaceCacheService: WorkspaceCacheService,
     private readonly metricsService: MetricsService,
   ) {}
@@ -73,6 +85,7 @@ export class ApplicationInstallService {
     version?: string;
     workspaceId: string;
     skipWorkspaceCompatibilityCheck?: boolean;
+    hasUserApprovedCapabilities?: boolean;
   }): Promise<boolean> {
     const appRegistration = await this.appRegistrationRepository.findOne({
       where: { id: params.appRegistrationId },
@@ -113,6 +126,7 @@ export class ApplicationInstallService {
           workspaceId: params.workspaceId,
           skipWorkspaceCompatibilityCheck:
             params.skipWorkspaceCompatibilityCheck,
+          hasUserApprovedCapabilities: params.hasUserApprovedCapabilities,
         }),
       buildApplicationLifecycleLockKey({
         workspaceId: params.workspaceId,
@@ -128,6 +142,7 @@ export class ApplicationInstallService {
       version?: string;
       workspaceId: string;
       skipWorkspaceCompatibilityCheck?: boolean;
+      hasUserApprovedCapabilities?: boolean;
     },
   ): Promise<boolean> {
     // Re-read inside the lock so a concurrent tarball upload cannot make us
@@ -184,6 +199,7 @@ export class ApplicationInstallService {
       version?: string;
       workspaceId: string;
       skipWorkspaceCompatibilityCheck?: boolean;
+      hasUserApprovedCapabilities?: boolean;
     };
     resolvedPackage: ResolvedPackage;
     existingApplication: ApplicationEntity | null;
@@ -242,6 +258,7 @@ export class ApplicationInstallService {
       version?: string;
       workspaceId: string;
       skipWorkspaceCompatibilityCheck?: boolean;
+      hasUserApprovedCapabilities?: boolean;
     };
     resolvedPackage: ResolvedPackage;
     existingApplication: ApplicationEntity | null;
@@ -286,10 +303,20 @@ export class ApplicationInstallService {
       );
     }
 
+    const approvedCapabilities = toApplicationCapabilities(
+      appRegistration.manifest?.application?.requestedCapabilities,
+    );
+    const grantedCapabilities = toApplicationCapabilities(
+      resolvedPackage.manifest.application.requestedCapabilities,
+    ).filter((capability) => approvedCapabilities.includes(capability));
+    const shouldApplyApprovedCapabilities =
+      params.hasUserApprovedCapabilities && isDefined(appRegistration.manifest);
+
     const application = await this.ensureApplicationExists({
       existingApplication,
       universalIdentifier,
       name: resolvedPackage.manifest.application.displayName,
+      grantedCapabilities,
       logo:
         resolvedPackage.manifest.application.logo ??
         resolvedPackage.manifest.application.logoUrl ??
@@ -328,6 +355,13 @@ export class ApplicationInstallService {
         }
       }
 
+      if (isVersionUpgrade && shouldApplyApprovedCapabilities) {
+        await this.applicationService.update(application.id, {
+          grantedCapabilities,
+          workspaceId: params.workspaceId,
+        });
+      }
+
       await this.writeFilesToStorage(
         resolvedPackage.extractedDir,
         resolvedPackage.manifest,
@@ -359,14 +393,15 @@ export class ApplicationInstallService {
         universalIdentifier,
       });
 
-      await this.applicationManifestApplyService.applyManifestToWorkspace({
-        workspaceId: params.workspaceId,
-        manifest: resolvedPackage.manifest,
-        applicationRegistrationId: appRegistration.id,
-        application,
-        forceSdkClientGeneration: true,
-        persistVersion: false,
-      });
+      const { workspaceMigration } =
+        await this.applicationManifestApplyService.applyManifestToWorkspace({
+          workspaceId: params.workspaceId,
+          manifest: resolvedPackage.manifest,
+          applicationRegistrationId: appRegistration.id,
+          application,
+          forceSdkClientGeneration: true,
+          persistVersion: false,
+        });
 
       const isPostInstallHookSynchronous =
         resolvedPackage.manifest.application.postInstallLogicFunction
@@ -405,6 +440,13 @@ export class ApplicationInstallService {
           preventVersionDowngrade: true,
         },
       );
+
+      await this.enqueueLogicFunctionWarmUp({
+        workspaceId: params.workspaceId,
+        applicationId: application.id,
+        logicFunctionUniversalIdentifiers:
+          findLogicFunctionUniversalIdentifiersToWarmUp(workspaceMigration),
+      });
 
       this.logger.log(
         `Successfully installed app ${universalIdentifier} v${resolvedPackage.packageJson.version ?? 'unknown'}`,
@@ -517,6 +559,28 @@ export class ApplicationInstallService {
     }
   }
 
+  private async enqueueLogicFunctionWarmUp(
+    data: WarmUpApplicationLogicFunctionsJobData,
+  ): Promise<void> {
+    if (data.logicFunctionUniversalIdentifiers.length === 0) {
+      return;
+    }
+
+    try {
+      await this.workspaceQueueService.add<WarmUpApplicationLogicFunctionsJobData>(
+        WARM_UP_APPLICATION_LOGIC_FUNCTIONS_JOB_NAME,
+        data,
+        WARM_UP_APPLICATION_LOGIC_FUNCTIONS_JOB_OPTIONS,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to enqueue prebuilt warm-up for application ${data.applicationId} in workspace ${data.workspaceId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
   private async markInstallCompleted({
     applicationId,
     version,
@@ -592,8 +656,8 @@ export class ApplicationInstallService {
     );
 
     if (!shouldRunSynchronously) {
-      await this.messageQueueService.add<LogicFunctionTriggerJobData>(
-        LogicFunctionTriggerJob.name,
+      await this.messageQueueService.add<ApplicationLifecycleHookJobData>(
+        ApplicationLifecycleHookJob.name,
         {
           logicFunctionId: flatLogicFunction.id,
           workspaceId,
@@ -747,27 +811,38 @@ export class ApplicationInstallService {
     return file.id;
   }
 
-  private async ensureApplicationExists(params: {
+  private async ensureApplicationExists({
+    existingApplication,
+    universalIdentifier,
+    name,
+    grantedCapabilities,
+    logo,
+    workspaceId,
+    applicationRegistrationId,
+    sourceType,
+  }: {
     existingApplication: ApplicationEntity | null;
     universalIdentifier: string;
     name: string;
+    grantedCapabilities: ApplicationCapability[];
     logo: string | null;
     workspaceId: string;
     applicationRegistrationId: string;
     sourceType: ApplicationRegistrationSourceType;
   }): Promise<ApplicationEntity> {
-    if (isDefined(params.existingApplication)) {
-      return params.existingApplication;
+    if (isDefined(existingApplication)) {
+      return existingApplication;
     }
 
     return await this.applicationService.create({
-      universalIdentifier: params.universalIdentifier,
-      name: params.name,
-      logo: params.logo,
-      sourcePath: params.universalIdentifier,
-      sourceType: params.sourceType,
-      applicationRegistrationId: params.applicationRegistrationId,
-      workspaceId: params.workspaceId,
+      universalIdentifier,
+      name,
+      grantedCapabilities,
+      logo,
+      sourcePath: universalIdentifier,
+      sourceType,
+      applicationRegistrationId,
+      workspaceId,
     });
   }
 }

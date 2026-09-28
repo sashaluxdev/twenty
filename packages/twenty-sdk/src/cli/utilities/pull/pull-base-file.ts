@@ -5,8 +5,8 @@ import {
   writeJson,
 } from '@/cli/utilities/file/fs-utils';
 import { dirname, join } from 'node:path';
-import { type Manifest } from 'twenty-shared/application';
-import { isDefined } from 'twenty-shared/utils';
+import { type Manifest, type RoleManifest } from 'twenty-shared/application';
+import { isDefined, isPlainObject } from 'twenty-shared/utils';
 
 export const PULL_BASE_FILE_PATH = '.twenty/pull-base.json';
 
@@ -24,6 +24,9 @@ const hasUniversalIdentifier = (value: unknown): boolean =>
   typeof (value as { universalIdentifier?: unknown }).universalIdentifier ===
     'string';
 
+const isEntityList = (value: unknown): boolean =>
+  Array.isArray(value) && value.every(hasUniversalIdentifier);
+
 const isEntityListWithFields = (value: unknown): boolean =>
   Array.isArray(value) &&
   value.every(
@@ -32,22 +35,59 @@ const isEntityListWithFields = (value: unknown): boolean =>
       Array.isArray((entry as { fields?: unknown }).fields),
   );
 
+const isOptionalObjectList = (value: unknown): boolean =>
+  !isDefined(value) || (Array.isArray(value) && value.every(isPlainObject));
+
+const isRoleList = (value: unknown): boolean =>
+  isEntityList(value) &&
+  (value as Partial<RoleManifest>[]).every(
+    ({ objectPermissions, fieldPermissions }) =>
+      isOptionalObjectList(objectPermissions) &&
+      isOptionalObjectList(fieldPermissions),
+  );
+
 const isUsableBaseManifest = (manifest: unknown): manifest is Manifest => {
   if (!isDefined(manifest) || typeof manifest !== 'object') {
     return false;
   }
 
-  const { application, objects, fields, indexes } =
-    manifest as Partial<Manifest>;
+  const {
+    application,
+    objects,
+    fields,
+    indexes,
+    permissionFlags,
+    roles,
+    views,
+    viewFields,
+    pageLayouts,
+    pageLayoutTabs,
+    pageLayoutWidgets,
+    navigationMenuItems,
+  } = manifest as Partial<Manifest>;
 
   return (
     hasUniversalIdentifier(application) &&
     isEntityListWithFields(objects) &&
     Array.isArray(fields) &&
     fields.every(hasUniversalIdentifier) &&
-    (!isDefined(indexes) || isEntityListWithFields(indexes))
+    (!isDefined(indexes) || isEntityListWithFields(indexes)) &&
+    (!isDefined(permissionFlags) || isEntityList(permissionFlags)) &&
+    (!isDefined(roles) || isRoleList(roles)) &&
+    (!isDefined(views) || isEntityList(views)) &&
+    (!isDefined(viewFields) || isEntityList(viewFields)) &&
+    (!isDefined(pageLayouts) || isEntityList(pageLayouts)) &&
+    (!isDefined(pageLayoutTabs) || isEntityList(pageLayoutTabs)) &&
+    (!isDefined(pageLayoutWidgets) || isEntityList(pageLayoutWidgets)) &&
+    (!isDefined(navigationMenuItems) || isEntityList(navigationMenuItems))
   );
 };
+
+export const hasPullBaseFile = async ({
+  appPath,
+}: {
+  appPath: string;
+}): Promise<boolean> => pathExists(join(appPath, PULL_BASE_FILE_PATH));
 
 export const readPullBaseManifest = async ({
   appPath,

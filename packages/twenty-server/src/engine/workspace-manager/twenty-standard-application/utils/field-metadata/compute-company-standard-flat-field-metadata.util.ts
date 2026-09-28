@@ -32,9 +32,9 @@ export const buildCompanyStandardFlatFieldMetadatas = ({
     context: {
       fieldName: 'id',
       type: FieldMetadataType.UUID,
-      label: i18nLabel(msg({ message: `Id`, context: 'fieldMetadata.label' })),
+      label: i18nLabel(msg({ message: `ID`, context: 'fieldMetadata.label' })),
       description: i18nLabel(
-        msg({ message: `Id`, context: 'fieldMetadata.description' }),
+        msg({ message: `ID`, context: 'fieldMetadata.description' }),
       ),
       icon: 'Icon123',
       isSystem: true,
@@ -473,6 +473,39 @@ export const buildCompanyStandardFlatFieldMetadatas = ({
         .icon,
       isNullable: true,
       targetObjectName: 'noteTarget',
+      targetFieldName: 'targetCompany',
+      settings: {
+        relationType: RelationType.ONE_TO_MANY,
+      },
+    },
+    standardObjectMetadataRelatedEntityIds,
+    dependencyFlatEntityMaps,
+    twentyStandardApplicationId,
+    now,
+  }),
+  agentChatThreadTargets: createStandardRelationFieldFlatMetadata({
+    objectName,
+    workspaceId,
+    context: {
+      type: FieldMetadataType.RELATION,
+      morphId: null,
+      fieldName: 'agentChatThreadTargets',
+      isSystemSideEffect: true,
+      label: i18nLabel(
+        STANDARD_RELATION_FIELD_PROPERTIES_BY_RELATION_OBJECT
+          .agentChatThreadTarget.label,
+      ),
+      description: i18nLabel(
+        msg({
+          message: `Chats tied to the company`,
+          context: 'fieldMetadata.description',
+        }),
+      ),
+      icon: STANDARD_RELATION_FIELD_PROPERTIES_BY_RELATION_OBJECT
+        .agentChatThreadTarget.icon,
+      isUIEditable: false,
+      isNullable: true,
+      targetObjectName: 'agentChatThreadTarget',
       targetFieldName: 'targetCompany',
       settings: {
         relationType: RelationType.ONE_TO_MANY,

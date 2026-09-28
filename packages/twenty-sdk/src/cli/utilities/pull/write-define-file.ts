@@ -3,15 +3,31 @@ import {
   printTypescriptValue,
 } from '@/cli/utilities/pull/print-typescript-value';
 import {
+  AggregateOperations,
   DateDisplayFormat,
   FieldMetadataType,
   IndexType,
   MetadataWritability,
+  NavigationMenuItemType,
   NumberDataType,
   ObjectOpenRecordIn,
+  ObjectRecordGroupByDateGranularity,
+  PageLayoutTabLayoutMode,
+  PageLayoutType,
   RelationOnDeleteAction,
   RelationType,
+  RowLevelPermissionPredicateGroupLogicalOperator,
+  RowLevelPermissionPredicateOperand,
+  ViewCalendarLayout,
+  ViewFilterGroupLogicalOperator,
+  ViewFilterOperand,
+  ViewOpenRecordIn,
+  ViewSortDirection,
+  ViewType,
+  ViewVisibility,
+  WidgetType,
 } from 'twenty-shared/types';
+import { SystemPermissionFlag } from 'twenty-shared/constants';
 import { isDefined } from 'twenty-shared/utils';
 
 const MAX_IMPORT_LINE_LENGTH = 80;
@@ -73,6 +89,117 @@ export const OBJECT_ENUM_BINDINGS: EnumBinding[] = [
 
 export const INDEX_ENUM_BINDINGS: EnumBinding[] = [
   { path: ['indexType'], symbol: 'IndexType', members: IndexType },
+];
+
+export const ROLE_ENUM_BINDINGS: EnumBinding[] = [
+  {
+    path: ['rowLevelPermissionPredicateGroups', '[]', 'logicalOperator'],
+    symbol: 'RowLevelPermissionPredicateGroupLogicalOperator',
+    members: RowLevelPermissionPredicateGroupLogicalOperator,
+  },
+  {
+    path: ['rowLevelPermissionPredicates', '[]', 'operand'],
+    symbol: 'RowLevelPermissionPredicateOperand',
+    members: RowLevelPermissionPredicateOperand,
+  },
+  {
+    path: ['permissionFlagUniversalIdentifiers', '[]'],
+    symbol: 'SystemPermissionFlag',
+    members: SystemPermissionFlag,
+  },
+];
+
+const buildAggregateOperationBinding = (path: string[]): EnumBinding => ({
+  path,
+  symbol: 'AggregateOperations',
+  members: AggregateOperations,
+});
+
+export const VIEW_FIELD_ENUM_BINDINGS: EnumBinding[] = [
+  buildAggregateOperationBinding(['aggregateOperation']),
+];
+
+export const VIEW_ENUM_BINDINGS: EnumBinding[] = [
+  { path: ['type'], symbol: 'ViewType', members: ViewType },
+  { path: ['visibility'], symbol: 'ViewVisibility', members: ViewVisibility },
+  {
+    path: ['openRecordIn'],
+    symbol: 'ViewOpenRecordIn',
+    members: ViewOpenRecordIn,
+  },
+  buildAggregateOperationBinding(['kanbanAggregateOperation']),
+  {
+    path: ['calendarLayout'],
+    symbol: 'ViewCalendarLayout',
+    members: ViewCalendarLayout,
+  },
+  buildAggregateOperationBinding(['fields', '[]', 'aggregateOperation']),
+  {
+    path: ['filters', '[]', 'operand'],
+    symbol: 'ViewFilterOperand',
+    members: ViewFilterOperand,
+  },
+  {
+    path: ['filterGroups', '[]', 'logicalOperator'],
+    symbol: 'ViewFilterGroupLogicalOperator',
+    members: ViewFilterGroupLogicalOperator,
+  },
+  {
+    path: ['sorts', '[]', 'direction'],
+    symbol: 'ViewSortDirection',
+    members: ViewSortDirection,
+  },
+];
+
+const buildPageLayoutWidgetEnumBindings = (prefix: string[]): EnumBinding[] => [
+  { path: [...prefix, 'type'], symbol: 'WidgetType', members: WidgetType },
+  {
+    path: [...prefix, 'position', 'layoutMode'],
+    symbol: 'PageLayoutTabLayoutMode',
+    members: PageLayoutTabLayoutMode,
+  },
+  buildAggregateOperationBinding([
+    ...prefix,
+    'configuration',
+    'aggregateOperation',
+  ]),
+  ...[
+    'dateGranularity',
+    'primaryAxisDateGranularity',
+    'secondaryAxisGroupByDateGranularity',
+  ].map((key) => ({
+    path: [...prefix, 'configuration', key],
+    symbol: 'ObjectRecordGroupByDateGranularity',
+    members: ObjectRecordGroupByDateGranularity,
+  })),
+];
+
+const buildPageLayoutTabEnumBindings = (prefix: string[]): EnumBinding[] => [
+  {
+    path: [...prefix, 'layoutMode'],
+    symbol: 'PageLayoutTabLayoutMode',
+    members: PageLayoutTabLayoutMode,
+  },
+  ...buildPageLayoutWidgetEnumBindings([...prefix, 'widgets', '[]']),
+];
+
+export const PAGE_LAYOUT_WIDGET_ENUM_BINDINGS: EnumBinding[] =
+  buildPageLayoutWidgetEnumBindings([]);
+
+export const PAGE_LAYOUT_TAB_ENUM_BINDINGS: EnumBinding[] =
+  buildPageLayoutTabEnumBindings([]);
+
+export const NAVIGATION_MENU_ITEM_ENUM_BINDINGS: EnumBinding[] = [
+  {
+    path: ['type'],
+    symbol: 'NavigationMenuItemType',
+    members: NavigationMenuItemType,
+  },
+];
+
+export const PAGE_LAYOUT_ENUM_BINDINGS: EnumBinding[] = [
+  { path: ['type'], symbol: 'PageLayoutType', members: PageLayoutType },
+  ...buildPageLayoutTabEnumBindings(['tabs', '[]']),
 ];
 
 const isSamePath = (left: string[], right: string[]): boolean =>

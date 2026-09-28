@@ -45,13 +45,29 @@ import {
   RULE_NAME as noHardcodedColorsName,
 } from './rules/no-hardcoded-colors';
 import {
+  rule as noIcuEscapingApostrophe,
+  RULE_NAME as noIcuEscapingApostropheName,
+} from './rules/no-icu-escaping-apostrophe';
+import {
   rule as noJotaiStoreInSelector,
   RULE_NAME as noJotaiStoreInSelectorName,
 } from './rules/no-jotai-store-in-selector';
 import {
+  rule as noMiscasedAcronymInIdentifier,
+  RULE_NAME as noMiscasedAcronymInIdentifierName,
+} from './rules/no-miscased-acronym-in-identifier';
+import {
+  rule as noMiscasedAcronymInMessage,
+  RULE_NAME as noMiscasedAcronymInMessageName,
+} from './rules/no-miscased-acronym-in-message';
+import {
   rule as noNavigatePreferLink,
   RULE_NAME as noNavigatePreferLinkName,
 } from './rules/no-navigate-prefer-link';
+import {
+  rule as noRuntimeImportFromUpgradeCommand,
+  RULE_NAME as noRuntimeImportFromUpgradeCommandName,
+} from './rules/no-runtime-import-from-upgrade-command';
 import {
   rule as noStateUseref,
   RULE_NAME as noStateUserefName,
@@ -77,6 +93,10 @@ import {
   RULE_NAME as styledComponentsPrefixedWithStyledName,
 } from './rules/styled-components-prefixed-with-styled';
 import {
+  rule as typesFolderFilename,
+  RULE_NAME as typesFolderFilenameName,
+} from './rules/types-folder-filename';
+import {
   rule as upgradeCommandFilename,
   RULE_NAME as upgradeCommandFilenameName,
 } from './rules/upgrade-command-filename';
@@ -96,8 +116,12 @@ export default definePlugin({
       noDataMutationInFastInstanceCommand,
     [noDirectAtomFamilyInSelectorName]: noDirectAtomFamilyInSelector,
     [noHardcodedColorsName]: noHardcodedColors,
+    [noIcuEscapingApostropheName]: noIcuEscapingApostrophe,
     [noJotaiStoreInSelectorName]: noJotaiStoreInSelector,
+    [noMiscasedAcronymInIdentifierName]: noMiscasedAcronymInIdentifier,
+    [noMiscasedAcronymInMessageName]: noMiscasedAcronymInMessage,
     [noNavigatePreferLinkName]: noNavigatePreferLink,
+    [noRuntimeImportFromUpgradeCommandName]: noRuntimeImportFromUpgradeCommand,
     [noStateUserefName]: noStateUseref,
     [noStorybookA11yDisableName]: noStorybookA11yDisable,
     [preferWorkspaceScopedRepositoryName]: preferWorkspaceScopedRepository,
@@ -105,6 +129,7 @@ export default definePlugin({
     [sortCssPropertiesAlphabeticallyName]: sortCssPropertiesAlphabetically,
     [styledComponentsPrefixedWithStyledName]:
       styledComponentsPrefixedWithStyled,
+    [typesFolderFilenameName]: typesFolderFilename,
     [upgradeCommandFilenameName]: upgradeCommandFilename,
   },
 });

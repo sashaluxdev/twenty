@@ -16,7 +16,7 @@ export { AppBasePath } from './AppBasePath';
 export { AppPath } from './AppPath';
 export type { Arrayable } from './Arrayable';
 export type { ArraySortDirection } from './ArraySortDirection';
-export type { AssertUnreachable } from './AssertUnreachable.type';
+export type { AssertUnreachable } from './AssertUnreachable';
 export { BlocklistScope } from './BlocklistScope';
 export { CalendarChannelContactAutoCreationPolicy } from './CalendarChannelContactAutoCreationPolicy';
 export { CalendarChannelSyncStage } from './CalendarChannelSyncStage';
@@ -69,12 +69,15 @@ export {
 export type { CompositeFieldSubFieldName } from './CompositeFieldSubFieldNameType';
 export type { ConfigVariableValue } from './ConfigVariableValue';
 export type { ConfirmationModalCaller } from './ConfirmationModalCaller';
+export type { ConnectedAccountEmailFields } from './ConnectedAccountEmailFields';
 export { ConnectedAccountProvider } from './ConnectedAccountProvider';
 export { ContextStorePageType } from './ContextStorePageType';
 export { CoreObjectNameSingular } from './CoreObjectNameSingular';
 export { CrudOperationType } from './CrudOperationType';
 export type { EmailAttachment } from './EmailAttachment';
-export type { EmptyObject } from './EmptyObject.type';
+export type { EmailConnectionParameters } from './EmailConnectionParameters';
+export { EmailOperation } from './EmailOperation';
+export type { EmptyObject } from './EmptyObject';
 export type {
   SnackBarVariant,
   EnqueueSnackbarParams,
@@ -84,7 +87,7 @@ export { EventLogTable } from './EventLogTable';
 export type { ExcludeFunctions } from './ExcludeFunctions';
 export type { ExtractPropertiesThatEndsWithId } from './ExtractPropertiesThatEndsWithId';
 export type { ExtractPropertiesThatEndsWithIds } from './ExtractPropertiesThatEndsWithIds';
-export type { ExtractSerializedRelationProperties } from './ExtractSerializedRelationProperties.type';
+export type { ExtractSerializedRelationProperties } from './ExtractSerializedRelationProperties';
 export { FeatureFlagKey } from './FeatureFlagKey';
 export type {
   FieldMetadataDefaultValueFunctionNames,
@@ -111,7 +114,6 @@ export {
 export type { FieldMetadataMultiItemSettings } from './FieldMetadataMultiItemSettings';
 export { FieldMetadataSettingsOnClickAction } from './FieldMetadataMultiItemSettings';
 export type {
-  TagColor,
   FieldMetadataOptionForAnyType,
   FieldMetadataOptions,
 } from './FieldMetadataOptions';
@@ -144,17 +146,17 @@ export type {
 } from './FilterableFieldType';
 export { FILTERABLE_FIELD_TYPES } from './FilterableFieldType';
 export { FirstDayOfTheWeek } from './FirstDayOfTheWeek';
-export type { FormatRecordSerializedRelationProperties } from './FormatRecordSerializedRelationProperties.type';
+export type { FormatRecordSerializedRelationProperties } from './FormatRecordSerializedRelationProperties';
 export type { FromTo } from './FromToType';
 export { HTTPMethod } from './HttpMethod';
-export type { IndexOf } from './IndexOf.type';
+export type { IndexOf } from './IndexOf';
 export { IndexType } from './IndexType';
-export type { IsEmptyObject } from './IsEmptyObject.type';
-export type { IsEmptyRecord } from './IsEmptyRecord.type';
+export type { IsEmptyObject } from './IsEmptyObject';
+export type { IsEmptyRecord } from './IsEmptyRecord';
 export type { IsExactly } from './IsExactly';
-export type { IsGreaterOrEqual } from './IsGreaterOrEqual.type';
-export type { IsNever } from './IsNever.type';
-export type { IsSerializedRelation } from './IsSerializedRelation.type';
+export type { IsGreaterOrEqual } from './IsGreaterOrEqual';
+export type { IsNever } from './IsNever';
+export type { IsSerializedRelation } from './IsSerializedRelation';
 export type { LogicFunctionEvent } from './LogicFunctionEvent';
 export type { LogicFunctionHttpResponse } from './LogicFunctionResponse';
 export {
@@ -246,6 +248,7 @@ export type { PageLayoutWidgetUniversalConfiguration } from './page-layout/page-
 export { PageLayoutTabLayoutMode } from './page-layout/PageLayoutTabLayoutMode';
 export { PageLayoutType } from './page-layout/PageLayoutType';
 export type { PageLayoutWidgetConditionalDisplay } from './page-layout/PageLayoutWidgetConditionalDisplay';
+export { PageLayoutWidgetVerticalListHeightBehavior } from './page-layout/PageLayoutWidgetVerticalListHeightBehavior';
 export type { RatioAggregateConfig } from './page-layout/ratio-aggregate-config.type';
 export { WidgetType } from './page-layout/WidgetType';
 export type { PartialFieldMetadataItem } from './PartialFieldMetadataItem';
@@ -297,10 +300,10 @@ export { RecordSharePrincipalType } from './RecordSharePrincipalType';
 export { RecordShareRowCause } from './RecordShareRowCause';
 export type { RelationAndMorphRelationFieldMetadataType } from './RelationAndMorphRelationFieldMetadataType';
 export type { RelationCreationPayload } from './RelationCreationPayload';
-export { RelationOnDeleteAction } from './RelationOnDeleteAction.type';
+export { RelationOnDeleteAction } from './RelationOnDeleteAction';
 export { RelationType } from './RelationType';
 export type { RelationUpdatePayload } from './RelationUpdatePayload';
-export type { RemoveSuffix } from './RemoveSuffix.type';
+export type { RemoveSuffix } from './RemoveSuffix';
 export type { RestrictedFieldPermissions } from './RestrictedFieldPermissions';
 export type { RestrictedFieldsPermissions } from './RestrictedFieldsPermissions';
 export type { RowLevelPermissionPredicate } from './RowLevelPermissionPredicate';
@@ -311,8 +314,8 @@ export type {
   RelationPredicateValue,
   RowLevelPermissionPredicateValue,
 } from './RowLevelPermissionPredicateValue';
-export type { SerializedRelation } from './SerializedRelation.type';
-export { SERIALIZED_RELATION_BRAND } from './SerializedRelation.type';
+export type { SerializedRelation } from './SerializedRelation';
+export { SERIALIZED_RELATION_BRAND } from './SerializedRelation';
 export { ServerFileFolder } from './ServerFileFolder';
 export { SettingsPath } from './SettingsPath';
 export { SidePanelPages } from './SidePanelPages';
@@ -323,6 +326,8 @@ export type {
   StepFilterWithPotentiallyDeprecatedOperand,
 } from './StepFilters';
 export { StepLogicalOperator } from './StepFilters';
+export type { SupportedViewGroupLoadLimit } from './SupportedViewGroupLoadLimit';
+export type { TagColor } from './TagColor';
 export { TwoFactorAuthenticationStrategy } from './TwoFactorAuthenticationStrategy';
 export { UpgradeHealthEnum } from './UpgradeHealthEnum';
 export { IsValidGraphQLEnumName } from './validators/is-valid-graphql-enum-name.validator';
@@ -337,3 +342,4 @@ export { ViewType } from './ViewType';
 export { ViewVisibility } from './ViewVisibility';
 export { WebhookSubscriptionChannelType } from './WebhookSubscriptionChannelType';
 export { WebhookSubscriptionStatus } from './WebhookSubscriptionStatus';
+export { WorkflowVisibility } from './WorkflowVisibility';

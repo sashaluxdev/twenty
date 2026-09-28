@@ -1,5 +1,8 @@
+import { SelectOptionIcon } from '@/ui/input/components/SelectOptionIcon';
 import { useState } from 'react';
+import { OverflowingTextWithTooltip } from 'twenty-ui/primitives/typography';
 
+import { useObjectMetadataItems } from '@/object-metadata/hooks/useObjectMetadataItems';
 import { ChartManualSortSubMenuContent } from '@/side-panel/pages/page-layout/components/dropdown-content/ChartManualSortSubMenuContent';
 import { X_SORT_BY_OPTIONS } from '@/side-panel/pages/page-layout/constants/XSortByOptions';
 import { useGraphXSortOptionLabels } from '@/side-panel/pages/page-layout/hooks/useGraphXSortOptionLabels';
@@ -10,7 +13,6 @@ import { filterSortOptionsByFieldType } from '@/side-panel/pages/page-layout/uti
 import { getDefaultManualSortOrder } from '@/side-panel/pages/page-layout/utils/getDefaultManualSortOrder';
 import { getSortIconForFieldType } from '@/side-panel/pages/page-layout/utils/getSortIconForFieldType';
 import { isWidgetConfigurationOfType } from '@/side-panel/pages/page-layout/utils/isWidgetConfigurationOfType';
-import { useObjectMetadataItems } from '@/object-metadata/hooks/useObjectMetadataItems';
 import { DropdownMenuItemsContainer } from '@/ui/layout/dropdown/components/DropdownMenuItemsContainer';
 import { DropdownComponentInstanceContext } from '@/ui/layout/dropdown/contexts/DropdownComponentInstanceContext';
 import { useCloseDropdown } from '@/ui/layout/dropdown/hooks/useCloseDropdown';
@@ -19,10 +21,9 @@ import { SelectableListItem } from '@/ui/layout/selectable-list/components/Selec
 import { selectedItemIdComponentState } from '@/ui/layout/selectable-list/states/selectedItemIdComponentState';
 import { useAvailableComponentInstanceIdOrThrow } from '@/ui/utilities/state/component-state/hooks/useAvailableComponentInstanceIdOrThrow';
 import { useAtomComponentStateValue } from '@/ui/utilities/state/jotai/hooks/useAtomComponentStateValue';
-import { useWorkspaceSurfaceScopedComponentInstanceId } from '@/ui/layout/hooks/useWorkspaceSurfaceScopedComponentInstanceId';
 import { type CompositeFieldSubFieldName } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
-import { MenuItemSelect } from 'twenty-ui/navigation';
+import { ListItem } from 'twenty-ui/primitives/navigation';
 import {
   type BarChartConfiguration,
   GraphOrderBy,
@@ -42,12 +43,9 @@ export const ChartSortBySelectionDropdownContent = () => {
     DropdownComponentInstanceContext,
   );
 
-  const scopedDropdownId =
-    useWorkspaceSurfaceScopedComponentInstanceId(dropdownId);
-
   const selectedItemId = useAtomComponentStateValue(
     selectedItemIdComponentState,
-    scopedDropdownId,
+    dropdownId,
   );
 
   const configuration = widgetInEditMode?.configuration;
@@ -186,32 +184,42 @@ export const ChartSortBySelectionDropdownContent = () => {
                 handleSelect(sortOption.value);
               }}
             >
-              <MenuItemSelect
-                text={getXSortOptionLabel({
-                  graphOrderBy: sortOption.value,
-                  groupByFieldMetadataIdX: groupByFieldMetadataId ?? '',
-                  groupBySubFieldNameX: groupBySubFieldName as
-                    | CompositeFieldSubFieldName
-                    | undefined,
-                  aggregateFieldMetadataId:
-                    configuration.aggregateFieldMetadataId ?? undefined,
-                  aggregateOperation:
-                    configuration.aggregateOperation ?? undefined,
-                })}
-                selected={currentOrderBy === sortOption.value}
+              <ListItem
                 focused={selectedItemId === sortOption.value}
-                LeftIcon={
-                  sortOption.icon ??
-                  getSortIconForFieldType({
-                    fieldType: primaryAxisField?.type,
-                    orderBy: sortOption.value,
-                  })
-                }
-                hasSubMenu={isManualOption}
                 onClick={() => {
                   handleSelect(sortOption.value);
                 }}
-              />
+                role="option"
+                aria-selected={currentOrderBy === sortOption.value}
+                selected={currentOrderBy === sortOption.value}
+                indicator="check"
+                hasSubmenu={isManualOption}
+                startIcon={
+                  <SelectOptionIcon
+                    Icon={
+                      sortOption.icon ??
+                      getSortIconForFieldType({
+                        fieldType: primaryAxisField?.type,
+                        orderBy: sortOption.value,
+                      })
+                    }
+                  />
+                }
+              >
+                <OverflowingTextWithTooltip
+                  text={getXSortOptionLabel({
+                    graphOrderBy: sortOption.value,
+                    groupByFieldMetadataIdX: groupByFieldMetadataId ?? '',
+                    groupBySubFieldNameX: groupBySubFieldName as
+                      | CompositeFieldSubFieldName
+                      | undefined,
+                    aggregateFieldMetadataId:
+                      configuration.aggregateFieldMetadataId ?? undefined,
+                    aggregateOperation:
+                      configuration.aggregateOperation ?? undefined,
+                  })}
+                />
+              </ListItem>
             </SelectableListItem>
           );
         })}
