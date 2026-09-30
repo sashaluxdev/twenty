@@ -390,6 +390,7 @@ describe('cleanupFormulaTimelineNoise', () => {
       deleted: 0,
       stripped: 0,
       kept: 0,
+      failed: 0,
       truncated: false,
     });
     expect(timelineQuery(client)).toBeUndefined();
@@ -439,7 +440,7 @@ describe('cleanupFormulaTimelineNoise', () => {
     ]);
 
     // Fail only the FIRST delete (non-retryable plain error), so the run must
-    // keep that row and still process the second.
+    // leave that row live and still process the second.
     const realMutation = client.mutation.bind(client);
     let firstDeleteSeen = false;
     client.mutation = vi.fn(async (selection: any) => {
@@ -454,10 +455,53 @@ describe('cleanupFormulaTimelineNoise', () => {
 
     expect(counts.scanned).toBe(2);
     expect(counts.deleted).toBe(1);
-    expect(counts.kept).toBe(1);
+    // A failed delete is its own outcome: counting it as kept would make a
+    // run whose writes were all rejected read as finished.
+    expect(counts.failed).toBe(1);
+    expect(counts.kept).toBe(0);
     // t1 (first, failed) survives; t2 was deleted.
     expect(client.get('timelineActivity', 't1')).toBeDefined();
     expect(client.get('timelineActivity', 't2')).toBeUndefined();
+  });
+
+  it('counts a rate-limited strip as failed, not kept, and leaves the row untouched', async () => {
+    seedDefinition(client);
+    client.seed('timelineActivity', [
+      {
+        id: 't1',
+        timelineActivityTypeId: RECORD_UPDATED_TYPE_ID,
+        timelineActivityTypeSnapshot: recordUpdatedSnapshot(),
+        targetCompanyId: 'c1',
+        properties: {
+          diff: {
+            revenue: { before: 1, after: 2 },
+            name: { before: 'Acme', after: 'Acme Inc' },
+          },
+        },
+        happensAt: recentIso(),
+      },
+    ]);
+    // The shape `execute` throws once the script transport's retries run out.
+    client.mutation = vi.fn(async () => {
+      throw new Error('Rate limit exceeded for apiKey: 100 requests per 60s.');
+    });
+
+    const counts = await cleanupFormulaTimelineNoise(client);
+
+    expect(counts).toEqual({
+      scanned: 1,
+      deleted: 0,
+      stripped: 0,
+      kept: 0,
+      failed: 1,
+      truncated: false,
+    });
+    expect(client.get('timelineActivity', 't1')!.properties).toEqual({
+      diff: {
+        revenue: { before: 1, after: 2 },
+        name: { before: 'Acme', after: 'Acme Inc' },
+      },
+    });
   });
 });
 
@@ -671,6 +715,7 @@ describe('cleanupFormulaTimelineNoise — typed contract gates (G2/G3)', () => {
       deleted: 0,
       stripped: 0,
       kept: 0,
+      failed: 0,
       truncated: false,
     });
     expect(timelineQuery(client)).toBeUndefined();
@@ -1326,6 +1371,7 @@ describe('cleanupFormulaTimelineNoise — dry run (spec F4)', () => {
       deleted: 2,
       stripped: 1,
       kept: 0,
+      failed: 0,
       truncated: false,
     });
     expect(dryCounts).toEqual(wetCounts);
@@ -1371,6 +1417,7 @@ describe('timeline-cleanup cron (default export handler)', () => {
     expect(result.scanned).toBe(1);
     expect(result.deleted).toBe(1);
     expect(result.kept).toBe(0);
+    expect(result.failed).toBe(0);
     expect(client.get('timelineActivity', 't1')).toBeUndefined();
     // The cron contract this file exists to pin.
     expect(timelineCleanupFunction.config.cronTriggerSettings?.pattern).toBe(

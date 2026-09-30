@@ -36,6 +36,11 @@ export type TimelineCleanupCounts = {
   deleted: number;
   stripped: number;
   kept: number;
+  // Rows the classifier chose to delete or strip whose mutation threw after
+  // every retry. The row is still live, so a later run retries it; folding
+  // these into `kept` would make a run whose writes were rejected read as
+  // finished.
+  failed: number;
   // true when the maxPages cap was hit with more rows remaining — the next cron
   // run picks up the rest (already-deleted rows drop out of later queries). Never
   // silent: surfaced here so callers can log it.
@@ -112,7 +117,7 @@ const capitalize = (value: string): string =>
 export const parentRecordIdSelectionFor = (objectNameSingular: string): string =>
   `target${capitalize(objectNameSingular)}Id`;
 
-type RowOutcome = 'deleted' | 'stripped' | 'kept';
+type RowOutcome = 'deleted' | 'stripped' | 'kept' | 'failed';
 
 type TimelineRow = {
   id: string;
@@ -365,8 +370,8 @@ const resolveParentIsVariation = async (
   }
 };
 
-// Soft-deletes one row. A failure is contained (counted as kept) so one bad row
-// cannot abort the sweep — same posture as recomputeAllRecords.
+// Soft-deletes one row. A failure is contained (counted as failed) so one bad
+// row cannot abort the sweep — same posture as recomputeAllRecords.
 const deleteRow = async (
   client: FormulaClient,
   row: TimelineRow,
@@ -383,7 +388,7 @@ const deleteRow = async (
     );
     return 'deleted';
   } catch {
-    return 'kept';
+    return 'failed';
   }
 };
 
@@ -425,7 +430,7 @@ const planStrip = (
   };
 };
 
-// Applies a strip plan. A failed write is contained (counted as kept).
+// Applies a strip plan. A failed write is contained (counted as failed).
 const stripKeysFromRow = async (
   client: FormulaClient,
   row: TimelineRow,
@@ -446,7 +451,7 @@ const stripKeysFromRow = async (
     return 'stripped';
   }
   // Only the mutation is contained here: planStrip already ran outside the try,
-  // over plain-object reads that cannot throw, so a `kept` from this catch
+  // over plain-object reads that cannot throw, so a `failed` from this catch
   // always means a failed WRITE — never a misread row.
   try {
     await withRetry(() =>
@@ -459,7 +464,7 @@ const stripKeysFromRow = async (
     );
     return 'stripped';
   } catch {
-    return 'kept';
+    return 'failed';
   }
 };
 
@@ -709,6 +714,7 @@ export const cleanupFormulaTimelineNoise = async (
     deleted: 0,
     stripped: 0,
     kept: 0,
+    failed: 0,
     truncated: false,
   };
 
@@ -811,6 +817,8 @@ export const cleanupFormulaTimelineNoise = async (
         counts.deleted += 1;
       } else if (outcome === 'stripped') {
         counts.stripped += 1;
+      } else if (outcome === 'failed') {
+        counts.failed += 1;
       } else {
         counts.kept += 1;
       }
