@@ -3,36 +3,29 @@ import * as os from 'os';
 import * as path from 'path';
 import { beforeAll } from 'vitest';
 
-// Integration-test setup. Reads the configured local remote from
-// ~/.twenty/config.json (written by `twenty remote:add` or manually — see the
-// context.md runbook), verifies the server is reachable, and exposes the URL + API
-// key to the SDK clients via env vars. It also writes config.test.json so the
-// CLI operations (appBuild/appDeploy/appInstall) can run in test mode without
-// disturbing the developer's default config.
+import { resolveTestRemote } from 'src/__tests__/resolve-test-remote';
+
+// Integration-test setup. Resolves the server from TWENTY_API_URL +
+// TWENTY_API_KEY (both set), else from the defaultRemote in
+// ~/.twenty/config.json, and refuses any non-loopback host (see
+// resolve-test-remote.ts). It then verifies the server is reachable, exposes
+// the URL + API key to the SDK clients via env vars, and writes
+// config.test.json so the CLI operations (appBuild/appDeploy/appInstall) can
+// run in test mode without disturbing the developer's default config.
 
 const CONFIG_DIR = path.join(os.homedir(), '.twenty');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 const TEST_CONFIG_PATH = path.join(CONFIG_DIR, 'config.test.json');
 
+// Resolved at module load rather than in beforeAll: setup files load before
+// the test file's own imports, so a refusal lands before any network call,
+// env mutation or config.test.json write.
+const { apiUrl, apiKey } = resolveTestRemote({
+  env: process.env,
+  configPath: CONFIG_PATH,
+});
+
 beforeAll(async () => {
-  let apiUrl = process.env.TWENTY_API_URL;
-  let apiKey = process.env.TWENTY_API_KEY;
-
-  // Fall back to the default remote in config.json when env vars are unset.
-  if ((!apiUrl || !apiKey) && fs.existsSync(CONFIG_PATH)) {
-    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    const remote = config.remotes?.[config.defaultRemote ?? 'local'];
-    apiUrl = apiUrl || remote?.apiUrl;
-    apiKey = apiKey || remote?.apiKey;
-  }
-
-  if (!apiUrl || !apiKey) {
-    throw new Error(
-      'TWENTY_API_URL and TWENTY_API_KEY must be set (or a local remote must ' +
-        'exist in ~/.twenty/config.json). See the context.md runbook.',
-    );
-  }
-
   let response: Response;
   try {
     response = await fetch(`${apiUrl}/healthz`);
