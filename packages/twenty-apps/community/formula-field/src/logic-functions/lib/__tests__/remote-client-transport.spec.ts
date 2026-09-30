@@ -25,7 +25,21 @@ const stubFetch = (payload: unknown): ReturnType<typeof vi.fn> => {
   return fetchMock;
 };
 
-const send = (transport: Transport): Promise<unknown> =>
+// Answers each call with the next response in order, repeating the last one.
+const stubFetchSequence = (
+  responses: Array<{ status: number; body: string }>,
+): ReturnType<typeof vi.fn> => {
+  let call = 0;
+  const fetchMock = vi.fn(async () => {
+    const response = responses[Math.min(call, responses.length - 1)];
+    call += 1;
+    return { status: response.status, text: async () => response.body };
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+};
+
+const send = (transport: Transport) =>
   transport.executeGraphqlRequestWithOptionalRefresh({
     operation: { query: '{ __typename }' },
   });
@@ -77,6 +91,76 @@ describe('createThrottledFetchTransport', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(payload).toEqual(limited);
   });
+
+  // Cloud's API speed limit answers at HTTP 200 with this errors[] message
+  // (usage-limit-speed.service.ts); the legacy throttler says "Limit reached".
+  it.each([
+    'Rate limit exceeded for apiKey: 100 requests per 60s.',
+    'RATE LIMIT EXCEEDED for application: 500 requests per 60s.',
+    'limit reached (100 tokens per 60000 ms)',
+  ])('backs off on "%s" until the limit clears', async (message) => {
+    const fetchMock = stubFetchSequence([
+      {
+        status: 200,
+        body: JSON.stringify({
+          data: { deleteTimelineActivity: null },
+          errors: [{ message, extensions: { code: 'RATE_LIMITED' } }],
+        }),
+      },
+      { status: 200, body: JSON.stringify({ data: { ok: true } }) },
+    ]);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const transport = createThrottledFetchTransport(REMOTE, {
+      rateLimitBackoffMs: 1,
+    });
+
+    const payload = await send(transport);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(payload).toEqual({ data: { ok: true } });
+  });
+
+  it.each([
+    ['an HTML page', '<html><body>429 Too Many Requests</body></html>'],
+    [
+      'a JSON body with no errors[]',
+      JSON.stringify({ statusCode: 429, message: 'Too Many Requests' }),
+    ],
+  ])(
+    'backs off on HTTP 429 with %s, then hands back a GraphQL error rather than an empty answer',
+    async (_description, body) => {
+      const fetchMock = stubFetchSequence([{ status: 429, body }]);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const transport = createThrottledFetchTransport(REMOTE, {
+        rateLimitBackoffMs: 1,
+        maxRateLimitRetries: 2,
+      });
+
+      const payload = await send(transport);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // An errors[] is what makes `execute` throw; a payload without one would
+      // read as a successful mutation.
+      expect(payload.errors?.[0]?.message).toContain('HTTP 429');
+    },
+  );
+
+  it.each([
+    'Usage limit reached for apiKey',
+    'record limit reached for this workspace',
+  ])(
+    'does not wait out "%s", which no 60s backoff can clear',
+    async (message) => {
+      const fetchMock = stubFetch({ errors: [{ message }] });
+
+      const payload = await send(
+        createThrottledFetchTransport(REMOTE, { rateLimitBackoffMs: 1 }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(payload).toEqual({ errors: [{ message }] });
+    },
+  );
 
   it('throws on a valid-JSON body that is not a GraphQL response object', async () => {
     // Coercing this to `{}` would surface as a run that scanned 0 rows and

@@ -21,14 +21,23 @@ export type Remote = { name: string; apiUrl: string; apiKey: string };
 
 const CONFIG_PATH = path.join(os.homedir(), '.twenty', 'config.json');
 
-// Cloud rate-limits at 100 requests / 60s and answers a breach with a GraphQL
-// error whose message starts "Limit reached". 90 leaves headroom for the
-// requests this process makes outside the window (the single MetadataApiClient
-// type-id lookup) and for a clock that disagrees with the server's.
-const MAX_REQUESTS_PER_WINDOW = 90;
+// Cloud rate-limits at 100 requests / 60s per API key. 90 leaves headroom for
+// the requests this process makes outside the window (the single
+// MetadataApiClient type-id lookup) and for a clock that disagrees with the
+// server's.
+export const MAX_REQUESTS_PER_WINDOW = 90;
 const WINDOW_MS = 60_000;
 const RATE_LIMIT_BACKOFF_MS = 60_000;
 const MAX_RATE_LIMIT_RETRIES = 5;
+
+// The server's API speed limit answers a breach at HTTP 200 with an errors[]
+// message "Rate limit exceeded for <spender>: ..." (usage-limit-speed.service);
+// the legacy throttler's reads "Limit reached (...)". Anchored: quota and
+// storage exhaustion read "Usage limit reached ..." / "... limit reached for
+// this workspace", which no 60s wait clears. The server never answers /graphql
+// with 429, but a proxy in front of it can.
+const RATE_LIMIT_MESSAGE = /^(rate limit exceeded|limit reached)/i;
+const HTTP_TOO_MANY_REQUESTS = 429;
 
 type GraphqlPayload = {
   data?: Record<string, unknown> | null;
@@ -103,16 +112,19 @@ export const loadRemote = (remoteName: string, usage: string): Remote => {
   return { name: remoteName, apiUrl, apiKey };
 };
 
-const isRateLimited = (payload: GraphqlPayload): boolean =>
+type TransportResponse = { status: number; payload: GraphqlPayload };
+
+const isRateLimited = ({ status, payload }: TransportResponse): boolean =>
+  status === HTTP_TOO_MANY_REQUESTS ||
   (payload.errors ?? []).some((error) =>
-    (error?.message ?? '').startsWith('Limit reached'),
+    RATE_LIMIT_MESSAGE.test(error?.message ?? ''),
   );
 
 // Token-authed raw /graphql transport with the rate-limit protection the rest
 // of the stack does not provide: `execute` (dynamic-client.ts) collapses a
 // GraphQL errors[] into a plain `Error(message)`, and `withRetry` only retries
 // on `extensions.code`/`subCode` or network-error message regexes — so a
-// "Limit reached" error never looks retryable to it. This transport is the only
+// rate-limit error never looks retryable to it. This transport is the only
 // place a purge is held back from tripping the limit.
 export const createThrottledFetchTransport = (
   remote: Remote,
@@ -153,7 +165,7 @@ export const createThrottledFetchTransport = (
   const post = async (operation: {
     query: string;
     variables?: Record<string, unknown>;
-  }): Promise<GraphqlPayload> => {
+  }): Promise<TransportResponse> => {
     await takeSlot();
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -173,6 +185,16 @@ export const createThrottledFetchTransport = (
     const notGraphql = (): Error =>
       new Error(`HTTP ${response.status} from ${endpoint}: ${body.slice(0, 200)}`);
 
+    // Whatever the body, a 429 must reach the backoff loop, and once retries
+    // run out it must surface as an errors[] so `execute` throws: a bare JSON
+    // body would otherwise read as a mutation that succeeded.
+    if (response.status === HTTP_TOO_MANY_REQUESTS) {
+      return {
+        status: response.status,
+        payload: { errors: [{ message: notGraphql().message }] },
+      };
+    }
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(body);
@@ -187,15 +209,15 @@ export const createThrottledFetchTransport = (
     if (!isPlainObject(parsed)) {
       throw notGraphql();
     }
-    return parsed as GraphqlPayload;
+    return { status: response.status, payload: parsed as GraphqlPayload };
   };
 
   return {
     executeGraphqlRequestWithOptionalRefresh: async ({ operation }) => {
-      let payload = await post(operation);
+      let response = await post(operation);
       for (
         let retry = 1;
-        retry <= maxRateLimitRetries && isRateLimited(payload);
+        retry <= maxRateLimitRetries && isRateLimited(response);
         retry += 1
       ) {
         console.warn(
@@ -204,11 +226,11 @@ export const createThrottledFetchTransport = (
           )}s (retry ${retry}/${maxRateLimitRetries})`,
         );
         await sleep(rateLimitBackoffMs);
-        payload = await post(operation);
+        response = await post(operation);
       }
-      // Still limited after the last retry: hand the response back unchanged so
-      // the caller's own error handling (a thrown Error, a kept row) applies.
-      return payload;
+      // Still limited after the last retry: hand the payload back unchanged so
+      // the caller's own error handling (a thrown Error, a failed row) applies.
+      return response.payload;
     },
   };
 };
