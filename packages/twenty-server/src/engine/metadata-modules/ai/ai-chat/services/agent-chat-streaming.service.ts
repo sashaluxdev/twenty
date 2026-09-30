@@ -32,7 +32,7 @@ import {
 } from 'src/engine/metadata-modules/ai/ai-agent-execution/entities/agent-message.entity';
 import { mapDBPartsToUIMessageParts } from 'src/engine/metadata-modules/ai/ai-agent-execution/utils/mapDBPartsToUIMessageParts';
 import { type BrowsingContextType } from 'src/engine/metadata-modules/ai/ai-agent/types/browsing-context.type';
-import { AgentChatThreadEntity } from 'src/engine/metadata-modules/ai/ai-chat/entities/agent-chat-thread.entity';
+import { AgentChatThreadWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-chat-thread.workspace-entity';
 import { type AgentChatThreadLastStreamError } from 'src/engine/metadata-modules/ai/ai-chat/types/agent-chat-thread-last-stream-error.type';
 import { STREAM_AGENT_CHAT_JOB_NAME } from 'src/engine/metadata-modules/ai/ai-chat/jobs/stream-agent-chat-job-name.constant';
 import { type StreamAgentChatJobData } from 'src/engine/metadata-modules/ai/ai-chat/jobs/stream-agent-chat-job.types';
@@ -40,6 +40,7 @@ import { AgentChatEventPublisherService } from 'src/engine/metadata-modules/ai/a
 import { AgentChatStreamHeartbeatService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-stream-heartbeat.service';
 import { AgentChatService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat.service';
 import { AiChatFileAttachment } from 'src/engine/metadata-modules/ai/ai-chat/types/ai-chat-file-attachment.type';
+import { hasQuestionAnswerContent } from 'src/engine/metadata-modules/ai/ai-chat/utils/has-question-answer-content.util';
 import { mapErrorToStreamError } from 'src/engine/metadata-modules/ai/ai-chat/utils/map-error-to-stream-error.util';
 import {
   AiException,
@@ -50,6 +51,7 @@ import { WorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scope
 type StreamAgentChatOptions = {
   threadId: string;
   userWorkspaceId: string;
+  workspaceMemberId: string;
   workspace: WorkspaceEntity;
   text: string;
   browsingContext: BrowsingContextType | null;
@@ -64,7 +66,7 @@ export class AgentChatStreamingService {
 
   constructor(
     @InjectAgentHistoryRepository('agentChatThread')
-    private readonly threadRepository: AgentHistoryRepository<AgentChatThreadEntity>,
+    private readonly threadRepository: AgentHistoryRepository<AgentChatThreadWorkspaceEntity>,
     @InjectWorkspaceScopedRepository(FileEntity)
     private readonly fileRepository: WorkspaceScopedRepository<FileEntity>,
     @InjectMessageQueue(MessageQueue.aiStreamQueue)
@@ -82,7 +84,7 @@ export class AgentChatStreamingService {
     thread,
     workspaceId,
   }: {
-    thread: Pick<AgentChatThreadEntity, 'id' | 'activeStreamId'>;
+    thread: Pick<AgentChatThreadWorkspaceEntity, 'id' | 'activeStreamId'>;
     workspaceId: string;
   }): Promise<AgentChatThreadLastStreamError | null> {
     return this.streamRecoveryService.reapDeadStream({
@@ -100,7 +102,7 @@ export class AgentChatStreamingService {
     threadId: string;
     workspaceId: string;
     streamId: string;
-    where: FindOptionsWhere<AgentChatThreadEntity>;
+    where: FindOptionsWhere<AgentChatThreadWorkspaceEntity>;
   }): Promise<boolean> {
     await this.streamHeartbeatService.markClaimed(streamId);
 
@@ -122,6 +124,7 @@ export class AgentChatStreamingService {
   async streamAgentChat({
     threadId,
     userWorkspaceId,
+    workspaceMemberId,
     workspace,
     text,
     browsingContext,
@@ -139,7 +142,7 @@ export class AgentChatStreamingService {
   > {
     const thread = await this.agentChatService.getWritableThread({
       threadId,
-      userWorkspaceId,
+      workspaceMemberId,
       workspaceId: workspace.id,
     });
 
@@ -167,6 +170,7 @@ export class AgentChatStreamingService {
         fileAttachments,
         workspaceId: workspace.id,
         userWorkspaceId,
+        workspaceMemberId,
       });
 
       if (hasQueuedBacklog) {
@@ -210,7 +214,7 @@ export class AgentChatStreamingService {
 
       await this.agentChatService.notifyThreadActivityUpdated({
         threadId,
-        userWorkspaceId,
+        workspaceMemberId,
         workspaceId: workspace.id,
       });
 
@@ -218,6 +222,7 @@ export class AgentChatStreamingService {
         threadId,
         userWorkspaceId,
         workspace.id,
+        workspaceMemberId,
       );
 
       await this.messageQueueService.add<StreamAgentChatJobData>(
@@ -264,12 +269,14 @@ export class AgentChatStreamingService {
   async startHiddenKickoffStream({
     thread,
     userWorkspaceId,
+    workspaceMemberId,
     workspace,
     text,
     modelId,
   }: {
-    thread: AgentChatThreadEntity;
+    thread: AgentChatThreadWorkspaceEntity;
     userWorkspaceId: string;
+    workspaceMemberId: string;
     workspace: WorkspaceEntity;
     text: string;
     modelId: string;
@@ -318,6 +325,7 @@ export class AgentChatStreamingService {
         threadId,
         userWorkspaceId,
         workspace.id,
+        workspaceMemberId,
       );
 
       const kickoffMessage = messages[messages.length - 1];
@@ -368,23 +376,25 @@ export class AgentChatStreamingService {
   async retryLastFailedTurn({
     threadId,
     userWorkspaceId,
+    workspaceMemberId,
     workspace,
     modelId,
   }: {
     threadId: string;
     userWorkspaceId: string;
+    workspaceMemberId: string;
     workspace: WorkspaceEntity;
     modelId?: string;
   }): Promise<{ streamId: string; messageId: string; turnId: string }> {
     const thread = await this.agentChatService.getWritableThread({
       threadId,
-      userWorkspaceId,
+      workspaceMemberId,
       workspaceId: workspace.id,
     });
 
     if (
       !isDefined(thread.lastStreamError) ||
-      isDefined(thread.activeStreamId)
+      isNonEmptyString(thread.activeStreamId)
     ) {
       throw new AiException(
         'There is no failed turn to retry on this thread',
@@ -458,6 +468,7 @@ export class AgentChatStreamingService {
         threadId,
         userWorkspaceId,
         workspace.id,
+        workspaceMemberId,
       );
 
       const retriedMessage = messages[messages.length - 1];
@@ -520,6 +531,7 @@ export class AgentChatStreamingService {
     messageId,
     answers,
     userWorkspaceId,
+    workspaceMemberId,
     workspace,
     modelId,
     fileAttachments,
@@ -528,21 +540,18 @@ export class AgentChatStreamingService {
     messageId: string;
     answers: AskQuestionAnswer[];
     userWorkspaceId: string;
+    workspaceMemberId: string;
     workspace: WorkspaceEntity;
     modelId?: string;
     fileAttachments?: AiChatFileAttachment[];
   }): Promise<{ streamId: string; turnId: string | null }> {
     const thread = await this.agentChatService.getWritableThread({
       threadId,
-      userWorkspaceId,
+      workspaceMemberId,
       workspaceId: workspace.id,
     });
     if (
-      !answers.some(
-        (answer) =>
-          isNonEmptyString(answer.freeText?.trim()) ||
-          isNonEmptyArray(answer.selectedOptionIndices),
-      ) &&
+      !hasQuestionAnswerContent(answers) &&
       !isNonEmptyArray(fileAttachments)
     ) {
       throw new AiException(
@@ -561,11 +570,9 @@ export class AgentChatStreamingService {
 
     await this.streamHeartbeatService.markClaimed(streamId);
 
-    let resolved: {
-      answerText: string;
-      turnId: string | null;
-      rollback: { partId: string; previousOutput: Record<string, unknown> };
-    };
+    let resolved: Awaited<
+      ReturnType<AgentChatService['resolvePendingQuestion']>
+    >;
 
     try {
       resolved = await this.agentChatService.resolvePendingQuestion({
@@ -609,6 +616,7 @@ export class AgentChatStreamingService {
       await this.enqueueResumeStream({
         threadId,
         userWorkspaceId,
+        workspaceMemberId,
         workspace,
         turnId: resolved.turnId,
         streamId,
@@ -649,6 +657,7 @@ export class AgentChatStreamingService {
   private async enqueueResumeStream({
     threadId,
     userWorkspaceId,
+    workspaceMemberId,
     workspace,
     turnId,
     streamId,
@@ -658,6 +667,7 @@ export class AgentChatStreamingService {
     messageId: string;
     threadId: string;
     userWorkspaceId: string;
+    workspaceMemberId: string;
     workspace: WorkspaceEntity;
     turnId: string | null;
     streamId: string;
@@ -671,6 +681,7 @@ export class AgentChatStreamingService {
       threadId,
       userWorkspaceId,
       workspace.id,
+      workspaceMemberId,
     );
 
     await this.messageQueueService.add<StreamAgentChatJobData>(
@@ -703,10 +714,10 @@ export class AgentChatStreamingService {
   }): Promise<void> {
     const threadStatus = await this.threadRepository.findOne(workspaceId, {
       where: { id: threadId },
-      select: ['id', 'deletedAt', 'pendingQuestionMessageId'],
+      select: ['id', 'archivedAt', 'pendingQuestionMessageId'],
     });
 
-    if (!threadStatus || threadStatus.deletedAt) {
+    if (!threadStatus || threadStatus.archivedAt) {
       return;
     }
 
@@ -721,6 +732,7 @@ export class AgentChatStreamingService {
 
     let nextQueued: (typeof queuedMessages)[number] | undefined;
     let userWorkspaceId: string | undefined;
+    let workspaceMemberId: string | undefined;
     for (const candidate of queuedMessages) {
       try {
         const { sender } = await this.actorService.resolveMessage({
@@ -728,7 +740,12 @@ export class AgentChatStreamingService {
           threadId,
           messageId: candidate.id,
         });
-        await this.actorService.authorize({ workspaceId, threadId, sender });
+        const authorization = await this.actorService.authorize({
+          workspaceId,
+          threadId,
+          sender,
+        });
+        workspaceMemberId = authorization.authContext.workspaceMemberId;
         nextQueued = candidate;
         userWorkspaceId = sender.userWorkspaceId;
         break;
@@ -763,7 +780,11 @@ export class AgentChatStreamingService {
         });
       }
     }
-    if (!isDefined(nextQueued) || !isDefined(userWorkspaceId)) {
+    if (
+      !isDefined(nextQueued) ||
+      !isDefined(userWorkspaceId) ||
+      !isDefined(workspaceMemberId)
+    ) {
       return;
     }
 
@@ -821,7 +842,12 @@ export class AgentChatStreamingService {
       });
 
       const [uiMessages, thread] = await Promise.all([
-        this.loadMessagesFromDB(threadId, userWorkspaceId, workspaceId),
+        this.loadMessagesFromDB(
+          threadId,
+          userWorkspaceId,
+          workspaceId,
+          workspaceMemberId,
+        ),
         this.threadRepository.findOneOrFail(workspaceId, {
           where: { id: threadId },
         }),
@@ -884,10 +910,11 @@ export class AgentChatStreamingService {
     threadId: string,
     userWorkspaceId: string,
     workspaceId: string,
+    workspaceMemberId: string,
   ) {
     const allMessages = await this.agentChatService.getMessagesForThread({
       threadId,
-      userWorkspaceId,
+      workspaceMemberId,
       workspaceId,
       includeHidden: true,
     });
@@ -904,8 +931,9 @@ export class AgentChatStreamingService {
         message.status !== AgentMessageStatus.QUEUED &&
         (!message.isHidden ||
           (isNonEmptyArray(message.parts) &&
-            (message.senderUserWorkspaceId ?? thread?.userWorkspaceId) ===
-              userWorkspaceId)),
+            (isDefined(message.senderUserWorkspaceId)
+              ? message.senderUserWorkspaceId === userWorkspaceId
+              : thread?.workspaceMemberId === workspaceMemberId))),
     );
 
     return Promise.all(
@@ -936,7 +964,7 @@ export class AgentChatStreamingService {
           ? {}
           : {
               metadata: {
-                createdAt: message.createdAt.toISOString(),
+                createdAt: new Date(message.createdAt).toISOString(),
                 senderUserWorkspaceId: message.senderUserWorkspaceId,
               },
             }),

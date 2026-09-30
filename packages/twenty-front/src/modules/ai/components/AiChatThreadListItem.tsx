@@ -1,18 +1,20 @@
 import { styled } from '@linaria/react';
 import { useLingui } from '@lingui/react/macro';
 import { Key } from 'ts-key-enum';
+import { isDefined } from 'twenty-shared/utils';
 import { IconArchive, IconSparkles } from 'twenty-ui/icon';
 import { useTheme, themeCssVariables } from 'twenty-ui/theme';
 
 import { AiChatThreadItemMenu } from '@/ai/components/AiChatThreadItemMenu';
 import { AI_CHAT_THREAD_ACTIONS_SURFACE } from '@/ai/constants/AiChatThreadActionsSurface';
+import { type AgentChatThreadRecord } from '@/ai/types/AgentChatThreadRecord';
+import { type AiChatThreadActionsSurface } from '@/ai/types/AiChatThreadActionsSurface';
 import { useAiChatThreadClick } from '@/ai/hooks/useAiChatThreadClick';
 import { useAiChatThreadRename } from '@/ai/hooks/useAiChatThreadRename';
 import { getAiChatThreadItemMenuDropdownId } from '@/ai/utils/getAiChatThreadItemMenuDropdownId';
 import { TextInput } from '@/ui/input/components/TextInput';
 import { isDropdownOpenComponentState } from '@/ui/layout/dropdown/states/isDropdownOpenComponentState';
 import { useAtomComponentStateValue } from '@/ui/utilities/state/jotai/hooks/useAtomComponentStateValue';
-import { type AgentChatThread } from '~/generated-metadata/graphql';
 
 const StyledThreadItem = styled.div`
   align-items: center;
@@ -80,10 +82,19 @@ const StyledMenuTrigger = styled.div<{ $isDropdownOpen: boolean }>`
 `;
 
 type AiChatThreadListItemProps = {
-  thread: AgentChatThread;
+  thread: AgentChatThreadRecord;
+  surface?: AiChatThreadActionsSurface;
+  onDetach?: () => void;
 };
 
-export const AiChatThreadListItem = ({ thread }: AiChatThreadListItemProps) => {
+// The surface keys the row's dropdown state, so rows for one thread on two
+// surfaces do not share it. Every record page uses RECORD_PAGE, including one
+// open in the side panel, so two record pages on screen at once still do.
+export const AiChatThreadListItem = ({
+  thread,
+  surface = AI_CHAT_THREAD_ACTIONS_SURFACE.SIDE_PANEL,
+  onDetach,
+}: AiChatThreadListItemProps) => {
   const theme = useTheme();
   const { t } = useLingui();
   const { handleThreadClick } = useAiChatThreadClick();
@@ -96,15 +107,16 @@ export const AiChatThreadListItem = ({ thread }: AiChatThreadListItemProps) => {
     commitRename,
   } = useAiChatThreadRename(thread);
 
-  const isArchived = Boolean(thread.deletedAt);
+  const isArchived = isDefined(thread.archivedAt);
   const ThreadIcon = isArchived ? IconArchive : IconSparkles;
   const displayTitle = thread.title ?? t`Untitled`;
+  const itemMenuDropdownId = getAiChatThreadItemMenuDropdownId({
+    threadId: thread.id,
+    surface,
+  });
   const isDropdownOpen = useAtomComponentStateValue(
     isDropdownOpenComponentState,
-    getAiChatThreadItemMenuDropdownId({
-      threadId: thread.id,
-      surface: AI_CHAT_THREAD_ACTIONS_SURFACE.SIDE_PANEL,
-    }),
+    itemMenuDropdownId,
   );
   return (
     <StyledThreadItem
@@ -154,8 +166,9 @@ export const AiChatThreadListItem = ({ thread }: AiChatThreadListItemProps) => {
           threadId={thread.id}
           threadTitle={displayTitle}
           isArchived={isArchived}
-          surface={AI_CHAT_THREAD_ACTIONS_SURFACE.SIDE_PANEL}
+          surface={surface}
           onRenameRequested={startRename}
+          onDetach={onDetach}
         />
       </StyledMenuTrigger>
     </StyledThreadItem>
