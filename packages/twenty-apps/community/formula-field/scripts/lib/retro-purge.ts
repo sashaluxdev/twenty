@@ -13,8 +13,8 @@ export const RETRO_PURGE_USAGE =
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LOOKBACK_MS = 10 * 365 * DAY_MS;
-// Cloud allows 100 requests / 60s per API key; the metadata type-id lookup
-// runs outside the throttled transport, so a --rate of 100 could trip it.
+// Cloud's 100 record requests / 60s is shared by every API key in the
+// workspace, so the ceiling stays below it to leave room for other clients.
 const MAX_REQUESTS_PER_MINUTE = 95;
 
 export type RetroPurgeArguments = {

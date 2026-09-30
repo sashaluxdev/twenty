@@ -58,8 +58,10 @@ actual backlog this ADR exists to clear is the `formulaDefinition`/`variationCon
 bookkeeping stream ADR 0022 quieted and this break re-opened -- roughly 350 rows
 per 48h, compounding since 2026-08-23.
 
-Cloud's read API is rate-limited to 100 requests/60s, which shapes the script
-throttle design in Decision below.
+Cloud's record API (reads and writes alike; /metadata is not counted) is
+rate-limited to 100 requests/60s per workspace, shared by every API key in it,
+and in practice the Supabase webhook echo makes each write cost ~2 requests.
+That shapes the script throttle design in Decision below.
 
 ## Decision
 
@@ -152,23 +154,27 @@ identical read and classification path and shares the exact verdict computation
 with the wet path (a pure `planStrip` helper returns `kept`/`deleted`/`stripped`
 before either branch decides whether to mutate), skipping only the two mutation
 call sites. Reported counts are "would apply", since a dry run cannot observe a
-mutation failure the way a wet run's `kept`-on-write-failure downgrade can.
+mutation failure the way a wet run does (a write that still fails after its
+retries is counted as `failed`, never as `kept`).
 
 **Retro-purge runnable, gated on `--yes`.** `scripts/retro-purge-timeline.ts`
-now takes `[--dry-run] [--lookback-days N] [--yes]`; any unrecognized argument
+now takes `[--dry-run] [--lookback-days N] [--rate N] [--yes]` (`--rate`: the
+transport's requests per minute, whole number 1-95, default 90); any unrecognized argument
 exits 1 with usage (so a mistyped flag can never silently start writing); wet
 mode without `--yes` exits 2 after printing what it would have done. This is a
 **behavior change**: `yarn retro-purge <remote>` used to write directly and now
 requires `--yes`. `scripts/lib/remote-client.ts` centralizes remote config
 loading (`loadRemote`) and a throttled fetch transport
-(`createThrottledFetchTransport`, 90 requests/60s sliding window -- below
-cloud's 100/60s limit, leaving headroom for the one metadata request per run
-that runs outside this transport's window, see Consequences). On a `Limit
-reached` GraphQL error the transport sleeps 60s and retries, up to 5 consecutive
+(`createThrottledFetchTransport`, 90 requests/60s sliding window by default --
+below cloud's 100/60s workspace limit, leaving room for the workspace's other
+API clients). On a GraphQL error whose message starts `Rate limit exceeded` or
+`Limit reached` (case-insensitive, anchored), or on HTTP 429, the transport
+sleeps 60s and retries, up to 5 consecutive
 times, then returns the payload as-is so the caller's own handling applies -- this is the *only* rate-limit protection in these scripts, because `execute` in
 `dynamic-client.ts` drops GraphQL `extensions` before `withRetry` sees them, so
-`withRetry` never recognizes a `LIMIT_REACHED` code (a pre-existing defect,
-deferred -- see Not in scope). A dry run is exactly one pass and cannot page
+`withRetry` never recognizes the `RATE_LIMITED` code -- and `with-retry.ts`
+does not list `RATE_LIMITED` either (a pre-existing defect, deferred -- see
+Not in scope). A dry run is exactly one pass and cannot page
 past `maxPages` (50 pages × 100 rows): nothing is deleted, so a second pass
 would re-scan the identical rows.
 
@@ -188,29 +194,25 @@ would re-scan the identical rows.
   columns this filter narrows on; without the type-id AND, those rows would
   compete for the same fixed page budget as genuine app noise and could starve
   it on a busy workspace.
-- **Fixing `withRetry` to see GraphQL `extensions.code`** so a `LIMIT_REACHED`
-  subCode is recognized directly, instead of relying solely on the transport's
+- **Fixing `withRetry` to see GraphQL `extensions.code`** so a `RATE_LIMITED`
+  code is recognized directly (which also means adding `RATE_LIMITED` to its
+  retryable codes), instead of relying solely on the transport's
   own throttle. Correct fix, but pre-existing and orthogonal to this port
   (`execute`'s extensions-dropping is unrelated to the `name` → typed-contract
   migration); deferred, tracked in Not in scope.
 
 ## Consequences
 
-- **One metadata request per run sits outside the script transport's throttle
-  window.** `resolveRecordUpdatedTypeId` goes through the SDK's `MetadataApiClient`
-  directly, not through `createThrottledFetchTransport` -- this is why the
-  transport's window is 90 requests/60s and not the full 100: headroom is
-  reserved for that one unthrottled request per run (and, for
-  `audit-strict-gate.ts`, its own per-formula metadata reads, which share the
-  same shape).
+- **The metadata type-id request bypasses the script transport, harmlessly.**
+  `resolveRecordUpdatedTypeId` goes through the SDK's `MetadataApiClient`
+  directly, not through `createThrottledFetchTransport`; /metadata requests
+  are not counted by the rate limiter, so it needs no headroom in the window.
 - **`scripts/audit-strict-gate.ts` did not merely move onto the same helpers
   with behavior unchanged.** Before this branch it threw `"CoreApiClient was
   not generated"` in this workspace, so this port also makes it runnable
   again for the first time, and newly throttles its core reads through the
-  same 90-requests/60s transport; its own per-formula metadata reads still sit
-  outside that window (previous bullet), so a large-formula-count audit run
-  inside an otherwise-saturated minute could still approach the platform's
-  100/60s limit.
+  same 90-requests/60s transport; its per-formula metadata reads bypass that
+  window but are not rate-limited.
 - **The in-process gate is mandatory, not optional insurance** -- it is the
   second half of a two-layer check (server filter + snapshot re-check), not a
   redundant belt-and-braces that could safely be dropped. See the routed-rows
@@ -257,8 +259,9 @@ would re-scan the identical rows.
   mint one in Settings > API & Webhooks and register it with `twenty
   remote:add --as cloud --url <cloud url> --api-key <key>` if missing → deploy
   the app (`app:publish --private -r cloud`, then `app:install -r cloud`) →
-  `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run` → review the
-  printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud --yes`. The
+  `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run --rate 30` → review
+  the printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud --yes
+  --rate 30`, re-run while it exits 4. The
   cloud retro purge was dropped at the user's request on 2026-08-10 (the
   untracked scratch script was deleted; the committed
   `scripts/retro-purge-timeline.ts` stayed); this ADR revives that committed
@@ -268,7 +271,15 @@ would re-scan the identical rows.
 - **Exit codes** (`scripts/retro-purge-timeline.ts`): 1 for bad/unrecognized
   arguments, 2 for wet mode (no `--dry-run`) without `--yes`, 3 when a pass
   scans 0 rows (nothing to purge, or the candidate filter cannot see
-  anything -- see the printed warning for which).
+  anything -- see the printed warning for which), 4 when at least one
+  delete/strip mutation failed after its retries (those rows are still live;
+  re-running is safe, the purge is soft-delete-only and restartable).
+- **Known limits of the wet loop.** Each pass rescans from the first row
+  with at most 50 pages (5,000 rows), so stripped and kept rows (K) pile up
+  at the front of the window; passes converge only while K is well under
+  5,000 (measured K on 2026-09-30: ~505). Follow-up: an unbounded page count
+  for wet runs. Exit 3 can also come from a transient type-id lookup failure,
+  not only from nothing being left to purge.
 
 ## Not in scope (backlog)
 
@@ -282,7 +293,8 @@ would re-scan the identical rows.
 - Actually running the cloud retro purge -- mechanism ready, not yet executed.
 - Fixing `withRetry`/`execute` to see GraphQL `extensions.code` so rate-limit
   detection does not depend solely on the script transport's own sliding
-  window -- pre-existing, deferred.
+  window -- pre-existing, deferred. The platform's code is `RATE_LIMITED`,
+  which `with-retry.ts` does not list, so that fix must add it.
 - Quieting the scanned-0 warn's per-cron-cycle noise on an otherwise healthy
   workspace (fold into counts, or gate on consecutive zero runs).
 - A per-object "scanned 0 for object X" signal, to close the residual

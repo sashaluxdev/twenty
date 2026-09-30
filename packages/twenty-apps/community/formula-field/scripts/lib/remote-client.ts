@@ -21,9 +21,9 @@ export type Remote = { name: string; apiUrl: string; apiKey: string };
 
 const CONFIG_PATH = path.join(os.homedir(), '.twenty', 'config.json');
 
-// Cloud rate-limits at 100 requests / 60s per API key. 90 leaves headroom for
-// the requests this process makes outside the window (the single
-// MetadataApiClient type-id lookup) and for a clock that disagrees with the
+// Cloud allows 100 record requests / 60s per workspace, shared by every API
+// key in it (/metadata is not counted). 90 leaves headroom for the
+// workspace's other API clients and for a clock that disagrees with the
 // server's.
 export const MAX_REQUESTS_PER_WINDOW = 90;
 const WINDOW_MS = 60_000;
