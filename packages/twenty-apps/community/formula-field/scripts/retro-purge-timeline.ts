@@ -3,70 +3,38 @@
 // a pass reports no truncation. Soft-delete only — same fail-safe classifier
 // the cron uses.
 //
-// Usage: npx tsx scripts/retro-purge-timeline.ts <remoteName> [--dry-run] [--lookback-days N] [--yes]
+// Usage: npx tsx scripts/retro-purge-timeline.ts <remoteName> [--dry-run] [--lookback-days N] [--rate N] [--yes]
 // Reads apiUrl + apiKey for <remoteName> from ~/.twenty/config.json via the
 // shared scripts/lib/remote-client.ts (same source the integration setup uses
 // — src/__tests__/setup-test.ts). Writing requires the literal --yes flag.
+// --rate caps requests per minute through the throttled transport (1-95,
+// default 90).
 // Exit codes: 1 bad/unrecognized arguments, 2 wet mode (no --dry-run) without
 // --yes, 3 a pass scanned 0 rows (nothing to purge, or the candidate filter
-// couldn't see anything -- see the printed warning above for which).
+// couldn't see anything -- see the printed warning above for which), 4 at
+// least one delete/strip mutation failed after its retries (those rows are
+// still live; re-running is safe and retries them).
+import {
+  DAY_MS,
+  RETRO_PURGE_USAGE,
+  parseRetroPurgeArguments,
+  runWetPurgePasses,
+} from './lib/retro-purge';
 import {
   createThrottledFetchTransport,
   loadRemote,
 } from './lib/remote-client';
 
-const USAGE =
-  'Usage: npx tsx scripts/retro-purge-timeline.ts <remoteName> [--dry-run] [--lookback-days N] [--yes]';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_LOOKBACK_MS = 10 * 365 * DAY_MS;
 const MAX_PAGES = 50;
 
-type Arguments = {
-  dryRun: boolean;
-  confirmed: boolean;
-  lookbackMs: number;
-};
-
-const parseArguments = (argv: string[]): Arguments => {
-  let dryRun = false;
-  let confirmed = false;
-  let lookbackMs = DEFAULT_LOOKBACK_MS;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === '--dry-run') {
-      dryRun = true;
-      continue;
-    }
-    if (argument === '--yes') {
-      confirmed = true;
-      continue;
-    }
-    if (argument === '--lookback-days') {
-      const days = Number(argv[index + 1]);
-      if (!Number.isFinite(days) || days <= 0) {
-        console.error(`--lookback-days needs a positive number of days\n${USAGE}`);
-        process.exit(1);
-      }
-      lookbackMs = days * DAY_MS;
-      index += 1;
-      continue;
-    }
-    // Never ignore an unrecognized argument: a mistyped --dry-run would
-    // otherwise silently start writing.
-    console.error(`Unknown argument "${argument}"\n${USAGE}`);
+const run = async () => {
+  const parsedArguments = parseRetroPurgeArguments(process.argv.slice(3));
+  if ('error' in parsedArguments) {
+    console.error(`${parsedArguments.error}\n${RETRO_PURGE_USAGE}`);
     process.exit(1);
   }
-
-  return { dryRun, confirmed, lookbackMs };
-};
-
-const run = async () => {
-  const { dryRun, confirmed, lookbackMs } = parseArguments(
-    process.argv.slice(3),
-  );
-  const remote = loadRemote(process.argv[2], USAGE);
+  const { dryRun, confirmed, lookbackMs, requestsPerMinute } = parsedArguments;
+  const remote = loadRemote(process.argv[2], RETRO_PURGE_USAGE);
 
   // Announced before any request: which workspace is about to be swept must
   // never be a guess. Host only — the key is never printed.
@@ -77,6 +45,7 @@ const run = async () => {
   console.log(
     `lookback: ${Math.round(lookbackMs / DAY_MS)} days, up to ${MAX_PAGES} pages per pass`,
   );
+  console.log(`rate:     ${requestsPerMinute} requests per minute`);
 
   if (!dryRun && !confirmed) {
     console.error(
@@ -94,7 +63,9 @@ const run = async () => {
     '../src/logic-functions/lib/timeline-cleanup'
   );
   const client = createDynamicCoreClient(
-    createThrottledFetchTransport(remote),
+    createThrottledFetchTransport(remote, {
+      maxRequestsPerWindow: requestsPerMinute,
+    }),
   );
 
   // A first pass that scans nothing is worth calling out loudly rather than
@@ -130,24 +101,21 @@ const run = async () => {
     return;
   }
 
-  let pass = 0;
-  for (;;) {
-    pass += 1;
-    const counts = await cleanupFormulaTimelineNoise(client, {
+  const { scannedNothing, failed } = await runWetPurgePasses(() =>
+    cleanupFormulaTimelineNoise(client, {
       lookbackMs,
       maxPages: MAX_PAGES,
-    });
-    console.log(`pass ${pass}:`, counts);
-    if (pass === 1 && counts.scanned === 0) {
-      reportScannedNothing();
-    }
-    // No-progress guard: KEPT rows (genuine human/third-party writes the
-    // classifier correctly leaves alone) can outnumber maxPages * PAGE_SIZE
-    // over a 10-year lookback, so every pass would re-scan the same kept rows,
-    // delete/strip nothing, and still report truncated:true — looping forever.
-    // Soft-delete-only makes that harmless but it never terminates, so also
-    // stop once a pass makes no progress.
-    if (!counts.truncated || counts.deleted + counts.stripped === 0) break;
+    }),
+  );
+  if (scannedNothing) {
+    reportScannedNothing();
+  }
+  if (failed > 0) {
+    console.error(
+      `\n${failed} delete/strip mutation(s) failed after their retries; those rows are still live. ` +
+        'Re-run the same command to retry them: the purge is soft-delete-only and restartable.',
+    );
+    process.exit(4);
   }
   console.log('Retro purge complete.');
 };

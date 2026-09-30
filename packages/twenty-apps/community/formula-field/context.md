@@ -993,11 +993,23 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   drops GraphQL `extensions` before `withRetry` ever sees a `LIMIT_REACHED`
   code, a pre-existing defect, deferred, unrelated to this port beyond sharing
   a file. `scripts/retro-purge-timeline.ts` now takes `[--dry-run]
-  [--lookback-days N] [--yes]`; an unrecognized argument exits 1 with usage;
+  [--lookback-days N] [--rate N] [--yes]`; an unrecognized argument exits 1
+  with usage;
   wet mode without `--yes` exits 2 -- **`yarn retro-purge <remote>` now
   requires `--yes` to write**, a behavior change from before; a pass that
   scans 0 rows now prints an explicit "nothing was purged" line and exits 3,
-  in both the dry-run and wet paths. `--dry-run` is
+  in both the dry-run and wet paths. **2026-09-30 fix
+  (`fix/formula-field-purge-rate-limit`)**: cloud's limit error actually
+  reads `Rate limit exceeded for apiKey: 100 requests per 60s.` (HTTP 200,
+  `errors[]`), which the `Limit reached` match missed, so the transport never
+  backed off; it now matches both messages case-insensitively (anchored at
+  the start, so quota/storage "limit reached" errors are not waited on) plus
+  HTTP 429. A delete/strip mutation that still fails is counted in a new
+  `failed` counter (previously folded into `kept`, which made a rate-limited
+  run look finished); the wet run prints the total and **exits 4** when any
+  mutation failed -- re-run the same command, it is soft-delete-only and
+  restartable. `--rate N` sets the transport's requests per minute (whole
+  number 1-95, default 90; anything else exits 1). `--dry-run` is
   exactly one pass and cannot page past its cap (50 pages × 100 rows) because
   nothing is deleted between passes, so a truncated dry run cannot show the
   full picture in one shot. `scripts/audit-strict-gate.ts` was folded onto the
@@ -1021,9 +1033,11 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   mint one in Settings > API & Webhooks and register it with `twenty
   remote:add --as cloud --url <cloud url> --api-key <key>` if missing) →
   deploy the app (`app:publish --private -r cloud` then `app:install -r
-  cloud`) → `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run` →
-  review the printed counts → `npx tsx scripts/retro-purge-timeline.ts cloud
-  --yes`. None
+  cloud`) → `npx tsx scripts/retro-purge-timeline.ts cloud --dry-run --rate
+  30` → review the printed counts → `npx tsx scripts/retro-purge-timeline.ts
+  cloud --yes --rate 30`, re-running it while it exits 4 (exit codes: 1 bad
+  arguments, 2 wet mode without `--yes`, 3 first pass scanned 0 rows, 4 a
+  mutation failed after its retries). None
   of these steps have been run. The cloud retro purge was dropped at the
   user's request on 2026-08-10 (the untracked scratch script was deleted; the
   committed scripts/retro-purge-timeline.ts stayed); this arc revives that
