@@ -6,7 +6,9 @@ the build-pipeline roadmap completed (TODAY() ADR 0012 + drag-to-reorder ADR
 0013 landed, whole-branch audit clean); updated 2026-07-07 after pre-deploy
 fixes, STRING LITERALS and FIELD MIRRORING features (both live-verified), and
 editor UX fixes all landed. SDD ledger for that arc: `.superpowers/sdd/progress.md`
-(git-ignored scratch — survives until a clean).
+(git-ignored scratch — survives until a clean). Updated 2026-09-30: arc entries
+for v0.5.0, v0.5.1 (and the 2026-08-13 cloud uninstall + reinstall) and v0.6.x
+added, and the cloud deploy state corrected to v0.6.0 from a live read.
 
 ## What this is
 
@@ -885,6 +887,55 @@ Architecture rationale + decisions: `docs/adr/*.md` (read these).
   server actually APPLYING `isUIEditable: false` on create have no unit coverage
   (no React test rig; the pre-existing `true` in both payloads proves the client
   transmits the flag, not that the server honors it) and must be live-verified.
+  (Superseded deploy state: v0.4.0 never shipped to cloud on its own; its
+  content reached cloud inside v0.6.0 — see the deploy paragraph under "What
+  is NOT done".)
+
+- **2026-08-12 ARC (SELECT output; ADR 0029, ships v0.5.0, `62fdd76bb`)**: a
+  formula can drive a real SELECT column — the wizard's 9th output format, with
+  a one-time options editor (option values auto-derived from labels, shown
+  read-only). The formula must infer `text`; a static option-membership gate
+  (`static-text-outputs.ts`) checks every closed-set literal against the
+  option **values** at save and once per pass, and a per-record check
+  (`NOT_AN_OPTION`) covers open sets. Option drift freezes the definition
+  write-avoidantly and self-heals within the 60s metadata TTL. Deployed SELECT
+  mirrors became one-term engine formulas. Cleanup wave in the same line:
+  diacritic folding in both name derivers (`156c3afab`), label-only settings
+  for mirror-kind targets (`68ef0a7e4`), MonoText expression editor
+  (`c5dd4593e`).
+
+- **2026-08-13 ARC (fix wave, ships v0.5.1, `48208a1ba`; cloud uninstall +
+  reinstall)**: blank-TEXT convergence (ADR 0030, finding F3, `eacce3aee`) —
+  `null` and `''` compare equal for TEXT targets only, ending the every-sweep
+  rewrite of blank-computing rows; per-object destroy grant for "Delete
+  completely" (`782df2ed1`); integration-suite deploy version derived from
+  package.json (`312702f07`). **Cloud incident, same day**: the cloud app was
+  uninstalled, which dropped every `formulaDefinition` / `formulaOverride` /
+  `variationConfig` row (wizard-created value fields survived, frozen). It was
+  reinstalled the same day — the app objects carry `createdAt
+  2026-08-13T05:12Z`. Records were rebuilt from the Supabase `activity_log`
+  ledger (bundle: `S-Drive/Twenty/recovery/formula-app-2026-08-13/` in
+  `Luxurique/lux-monorepo`): 19 of the bundle's 25 definitions are live with
+  their original ids (read 2026-09-30). The reinstall exposed a platform
+  gotcha: runtime Formulas/Variations tabs belong to the workspace's Custom
+  application and hard-snapshot the front-component id, so they rendered blank
+  after the reinstall minted new ids (3 tabs, live). Fixed by `986ba1654` +
+  `ae0dae7a3`: the tab-ensure helpers repair only widgets that point at no live
+  component, and recreate a lost widget.
+
+- **2026-09-03 → 2026-09-04 ARC (Overrides marker field; ADR 0031, ships
+  v0.6.0, `ac86fff8f`; v0.6.1 docs-only, `342a0da16`)**: one app-managed,
+  view-only TEXT field per object, `fxOverrides` (label `Overrides`), listing
+  the names of the formulas overridden on each record; blank when none. Created
+  when an object gets its first override-allowed formula, never on an
+  all-locked object. Written by the widget toggle, the event lane, definition
+  lifecycle (disable / trash / destroy), and an hourly budget-bounded sweep
+  with an epoch-hour start rotation (`7dc59c526`, `45610a5a0`). Excluded from
+  variation sync, counted as formula-managed by timeline cleanup. Also: all
+  override toggles gated while one is in flight (`f6c58e71e`). v0.6.1 changes
+  docs only: the About-tab `README.md` became a short STE overview and the
+  full reference moved to `docs/reference.md`. **v0.6.0 is on cloud** — see the
+  deploy paragraph under "What is NOT done".
 
 ## What is NOT done (next work)
 
@@ -1046,11 +1097,22 @@ Then:
    from the app dir: bump `version` in package.json, then
    `... cli.cjs app:publish --private -r cloud` (server rejects a
    non-incremented version) followed by `... cli.cjs app:install -r cloud`.
-   Currently deployed to cloud: **v0.3.0** (string values + `&` concatenation
+   Currently deployed to cloud: **v0.6.0** (live `findManyApplications` read
+   on `/metadata`, 2026-09-30). It was on cloud by 2026-09-04 07:00 UTC, when
+   the hourly sweep created `opportunity.fxOverrides`; the exact install time
+   is not recorded. Live state on 2026-09-30: 29 definitions, all on
+   `opportunity` (25 enabled, 4 disabled; 10 locked, one SELECT target), 340
+   override rows, 1 variation config (`activity`). v0.6.1 is docs-only and not
+   published. Open on cloud: the 10-minute timeline-cleanup cron has thrown on
+   every run since platform commit `2f27360df3` (2026-08-23) removed
+   `timelineActivity.name`; the fix (ADR 0032) is on branch
+   `feat/formula-field-timeline-cleanup-schema`, not deployed. Before v0.6.0 the
+   cloud app was uninstalled and reinstalled on 2026-08-13 (arc entry above).
+   Predecessor **v0.3.0** (string values + `&` concatenation
    and strict kind typing, ADR 0026 + 0027; 2026-08-07 — zero schema changes;
    the held v0.2.0 line deployed straight through as v0.3.0 per the user
-   ruling; see the 2026-08-04 → 2026-08-07 arc entry above). v0.4.0 is built
-   but NOT deployed — it gets stamped here at deploy time, not before.
+   ruling; see the 2026-08-04 → 2026-08-07 arc entry above). v0.4.0 and v0.5.x
+   never shipped to cloud as their own releases.
    Predecessor **v0.1.11** (recompute scan efficiency arc, ADR
    0025; 2026-07-24 — platform on the 2.23 line (v2.23.2), npm twenty-sdk@2.23.0
    scratch build, `plan` preview 1 add (scanCursor TEXT field) / 21 change (16
